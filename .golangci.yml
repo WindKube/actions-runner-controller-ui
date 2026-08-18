@@ -1,10 +1,3 @@
-# golangci-lint v2 configuration.
-#
-# Kept deliberately in step with the arc-ui project this repository was extracted
-# from, so that dropping the full application in does not also mean re-litigating
-# the linter set. `default: none` plus an explicit enable list is the only way to
-# keep that stable — golangci-lint's own defaults shift between releases, which
-# turns a version bump into a pile of unrelated findings.
 version: "2"
 
 run:
@@ -33,14 +26,10 @@ linters:
       rules:
         - name: var-naming
         - name: package-comments
-        # Handlers and interface implementations legitimately ignore parameters
-        # they have no use for; renaming each to `_` is churn, not clarity.
         - name: unused-parameter
           disabled: true
     gocritic:
       disabled-checks:
-        # if/else chains over a small set of cases read fine and are often
-        # clearer than a switch when the conditions are not on one variable.
         - ifElseChain
     misspell:
       ignore-rules:
@@ -50,34 +39,26 @@ linters:
 
   exclusions:
     rules:
-      # Tests legitimately ignore Close errors on responses they are about to
-      # discard, and build URLs from a test server's address.
+      # contextcheck follows calls into templ's generated components and asks
+      # why they do not take a context. They cannot: a templ component is a
+      # constructor returning templ.Component, and the context arrives later at
+      # Render(ctx, w) — which internal/web does pass correctly. Every finding
+      # here is the linter walking into generated code from its call site.
+      - path: internal/web/
+        linters:
+          - contextcheck
+
+      # Test files legitimately ignore Close errors on responses they are about
+      # to discard, and build URLs from a test server's address.
       - path: _test\.go
         linters:
           - bodyclose
           - errcheck
           - gosec
 
-      # ---------------------------------------------------------------------
-      # PRE-STAGED for the arc-ui application code, which is not in this
-      # repository yet. These paths do not exist today; the rules are here so
-      # the import lands green instead of drowning the first PR in findings
-      # against generated files nobody can edit. Delete any that turn out to be
-      # unnecessary once the code is in.
-      # ---------------------------------------------------------------------
-
-      # contextcheck follows calls into templ's generated components and asks why
-      # they do not take a context. They cannot: a templ component is a
-      # constructor returning templ.Component, and the context arrives later at
-      # Render(ctx, w).
-      - path: internal/web/
-        linters:
-          - contextcheck
-
       # Generated code. templ emits long, deliberately un-idiomatic functions and
       # ent emits thousands of lines of builders; linting either produces noise
-      # nobody can act on, because the only available fix is to edit the
-      # generator.
+      # nobody can act on, because the fix would be to edit the generator.
       - path: _templ\.go
         linters:
           - revive

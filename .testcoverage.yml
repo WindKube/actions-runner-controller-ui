@@ -6,9 +6,16 @@ profile: coverage.out
 # Ratchet floors, not targets. They sit just under today's numbers so that a
 # regression trips them, and they are meant to be raised as real code lands.
 #
-# Current state (scaffolding only): total 61.9%, cmd/arc-ui 56.8%,
-# internal/version 100%. cmd/arc-ui trails permanently because main() calls
-# os.Exit and cli() parses global flags, so neither is reachable from a test.
+# STALE — these were baselined against the scaffolding, and the real application
+# has since landed. Measured now: total 66.1% (passes), but the file and package
+# floors of 50 FAIL on ten files and five packages. cmd/arc-ui is 20.9% and will
+# never be much more — main.go is the composition root, so most of it is only
+# reachable with a live cluster and a real listener endpoint. internal/config,
+# internal/history, internal/logging and internal/telemetry are at 0% because
+# they have no test files yet.
+#
+# Re-baseline deliberately rather than by lowering these until they go green:
+# decide per package whether the answer is tests or an `override:` entry.
 threshold:
   file: 50
   package: 50

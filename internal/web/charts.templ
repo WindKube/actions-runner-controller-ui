@@ -1,0 +1,182 @@
+package web
+
+import (
+	"fmt"
+
+	"arc-ui/internal/chart"
+)
+
+// gridLines draws the horizontal y-axis rules inside a chart's SVG. Each rule
+// carries its own right-hand end, so the rules span the width their geometry
+// was computed for rather than whatever this template happens to assume. The
+// labels that go with them are HTML, not SVG, and live in GridLabels.
+templ gridLines(lines []chart.GridLine) {
+	for _, g := range lines {
+		<line
+			x1="0"
+			y1={ g.Y }
+			x2={ g.X2 }
+			y2={ g.Y }
+			stroke="#21262d"
+			stroke-width="1"
+			vector-effect="non-scaling-stroke"
+		></line>
+	}
+}
+
+// AreaChartView is the stacked runner-count chart with its capacity ceiling.
+//
+// The viewBox width comes from the view model because that is the width the
+// geometry was computed against. Every chart below draws its width the same
+// way. The height is the package constant, and here it has to equal the pixel
+// height this template's own class pins, or the HTML-layer grid labels —
+// positioned in those pixels — part company with the rules they name. That
+// second constraint binds this chart and the line chart, the two with labels
+// beside them; the bar and churn heights are coordinate units only.
+templ AreaChartView(c AreaChart) {
+	if c.Empty {
+		@Empty("no history yet — charts fill in as samples are collected")
+	} else {
+		<div class="relative pr-14">
+			<svg
+				class="w-full h-[200px] block overflow-visible"
+				viewBox={ fmt.Sprintf("0 0 %.0f %.0f", c.Width, historyH) }
+				preserveAspectRatio="none"
+				role="img"
+				aria-label="runners over time"
+			>
+				@gridLines(c.Grid)
+				for _, a := range c.Areas {
+					<polygon points={ a.Points } fill={ a.Fill } stroke={ a.Stroke } stroke-width="1.5" vector-effect="non-scaling-stroke"></polygon>
+				}
+				if c.Cap != "" {
+					<polyline
+						points={ c.Cap }
+						fill="none"
+						stroke="#f85149"
+						stroke-width="1.5"
+						stroke-dasharray="6 4"
+						vector-effect="non-scaling-stroke"
+					></polyline>
+				}
+			</svg>
+			@GridLabels(c.Grid)
+			if c.Cap != "" {
+				<span
+					class="absolute right-0 -translate-y-1/2 text-[10px] font-mono text-danger bg-raised pl-1"
+					style={ "top:" + c.CapTopPx + "px" }
+				>{ c.CapLabel }</span>
+			}
+		</div>
+		@Ticks(c.Ticks)
+	}
+	@Legend(c.Legend)
+}
+
+// LineChartView is a single series with optional flat reference lines.
+//
+// The reference lines share the series' scale, which is the point of the
+// panel: drawn on independent scales, a fleet using a tenth of what it
+// reserves would look fully utilised.
+templ LineChartView(c LineChart) {
+	if c.Empty {
+		@Empty("no samples in this window")
+	} else {
+		<div class="relative pr-14">
+			<svg
+				class="w-full h-[120px] block overflow-visible"
+				viewBox={ fmt.Sprintf("0 0 %.0f %.0f", c.Width, lineH) }
+				preserveAspectRatio="none"
+				role="img"
+				aria-label={ c.Title }
+			>
+				@gridLines(c.Grid)
+				if c.Line.Area != "" {
+					<polygon points={ c.Line.Area } fill={ c.Line.Fill } stroke="none"></polygon>
+				}
+				for _, r := range c.Refs {
+					<polyline
+						points={ r.Points }
+						fill="none"
+						stroke={ r.Stroke }
+						stroke-width="1"
+						stroke-dasharray="4 4"
+						vector-effect="non-scaling-stroke"
+					></polyline>
+				}
+				if c.Line.Points != "" {
+					<polyline
+						points={ c.Line.Points }
+						fill="none"
+						stroke={ c.Line.Stroke }
+						stroke-width="1.75"
+						stroke-linejoin="round"
+						vector-effect="non-scaling-stroke"
+					></polyline>
+				}
+			</svg>
+			@GridLabels(c.Grid)
+		</div>
+		@Ticks(c.Ticks)
+	}
+	@Legend(c.Legend)
+}
+
+// BarChartView is the throughput chart: completed jobs with failures stacked
+// on top, so the column height is total attempts.
+templ BarChartView(c BarChart) {
+	if c.Empty {
+		@Empty("no job activity recorded in this window")
+	} else {
+		<svg
+			class="w-full h-[120px] block"
+			viewBox={ fmt.Sprintf("0 0 %.0f %.0f", c.Width, barH) }
+			preserveAspectRatio="none"
+			role="img"
+			aria-label="job throughput"
+		>
+			for _, b := range c.Bars {
+				<rect x={ b.X } y={ b.LowerY } width={ b.W } height={ b.LowerH } fill="#3fb950" rx="1"></rect>
+				<rect x={ b.X } y={ b.UpperY } width={ b.W } height={ b.UpperH } fill="#f85149" rx="1"></rect>
+			}
+		</svg>
+		@Ticks(c.Ticks)
+	}
+	@Legend(c.Legend)
+}
+
+// ChurnChartView mirrors runner creations above the centre line and
+// terminations below it, which is what makes a set thrashing on short-lived
+// runners obvious at a glance.
+//
+// The centre line is part of that geometry, so it spans the width the bars were
+// laid out across rather than a width of this template's own choosing.
+templ ChurnChartView(c ChurnChart) {
+	if c.Empty {
+		@Empty("no runner churn recorded in this window")
+	} else {
+		<svg
+			class="w-full h-[140px] block"
+			viewBox={ fmt.Sprintf("0 0 %.0f %.0f", c.Width, churnH) }
+			preserveAspectRatio="none"
+			role="img"
+			aria-label="runner churn"
+		>
+			<line
+				x1="0"
+				y1={ c.Centre }
+				x2={ fmt.Sprintf("%.0f", c.Width) }
+				y2={ c.Centre }
+				stroke="#21262d"
+				stroke-width="1"
+				vector-effect="non-scaling-stroke"
+			></line>
+			for _, b := range c.Bars {
+				<rect x={ b.X } y={ b.UpY } width={ b.W } height={ b.UpH } fill="#3fb950" rx="1"></rect>
+				<rect x={ b.X } y={ b.DownY } width={ b.W } height={ b.DownH } fill="#6e7681" rx="1"></rect>
+			}
+		</svg>
+		@Ticks(c.Ticks)
+	}
+	@Legend(c.Legend)
+}

@@ -1,0 +1,178 @@
+package web
+
+import (
+	"fmt"
+
+	"arc-ui/internal/chart"
+	"arc-ui/internal/fleet"
+)
+
+// Card is the bordered panel every chart and table sits in.
+//
+// The id is not decoration: it is the SSE patch target. Datastar replaces the
+// element whose id matches the incoming fragment's, so every region the stream
+// refreshes has to own a stable one.
+templ Card(id, title, subtitle string) {
+	<section id={ id } class="rounded-md border border-default bg-raised">
+		if title != "" {
+			<header class="flex items-baseline justify-between gap-3 px-3.5 py-2.5 border-b border-default">
+				<h2 class="text-[12.5px] font-semibold text-fg tracking-[0.1px]">{ title }</h2>
+				if subtitle != "" {
+					<span class="text-[11px] text-fg-subtle font-mono">{ subtitle }</span>
+				}
+			</header>
+		}
+		<div class="p-3.5">
+			{ children... }
+		</div>
+	</section>
+}
+
+// Dot is the small status circle beside a name.
+templ Dot(t Tone) {
+	<span class={ "inline-block w-[7px] h-[7px] rounded-full shrink-0", t.Dot() } aria-hidden="true"></span>
+}
+
+// Pill is an uppercase status badge.
+templ Pill(t Tone, label string) {
+	<span class={ t.Pill() }>{ label }</span>
+}
+
+// StatePill renders a runner state in its own colour.
+templ StatePill(s fleet.State) {
+	@Pill(StateTone(s), string(s))
+}
+
+// MicroBar is the thin proportional bar under a tile or beside a table cell.
+templ MicroBar(t Tone, used, total float64) {
+	<div class="h-[3px] rounded-sm bg-inset overflow-hidden mt-1.5">
+		<div class={ "h-full rounded-sm", t.Bar() } style={ BarWidth(used, total) }></div>
+	</div>
+}
+
+// CapacityBar is the segmented bar in the runnersets table: busy, idle and
+// pending stacked left to right against the set's ceiling, with any queued
+// work on the end.
+//
+// shrink-0 on every segment is load-bearing. Each width is one count over the
+// shared denominator, clamped to 0..100 but never normalised against the other
+// three, so the four sum past 100% whenever busy + idle + pending + queued
+// exceeds that denominator and no single count covers it on its own — a set
+// whose runners fill its ceiling with work still queued behind them does it.
+// These are flex children, and a flex child is shrinkable by default: faced
+// with an overfull line the browser scales *all four* down proportionally, and
+// every segment then shows something other than its true fraction of the
+// ceiling — a lie told exactly when an operator is watching a fleet under
+// pressure. Pinned at shrink-0 each segment keeps the width it was given, and
+// whatever extends past the right edge of the track is clipped by the
+// container's overflow-hidden.
+//
+// Known limitation: that clipping is silent. Nothing marks the bar as
+// truncated, so a saturated set with a small queue and one with an enormous
+// queue look identical. The counts are in the title attribute.
+templ CapacityBar(r SetRow) {
+	<div class="h-[6px] rounded-sm bg-inset overflow-hidden flex" title={ capacityTitle(r) }>
+		<div class="h-full shrink-0 bg-success" style={ "width:" + r.Busy + "%" }></div>
+		<div class="h-full shrink-0 bg-accent" style={ "width:" + r.Idle + "%" }></div>
+		<div class="h-full shrink-0 bg-attention" style={ "width:" + r.Pending + "%" }></div>
+		if r.Queued != "" {
+			<div class="h-full shrink-0 bg-queued" style={ "width:" + r.Queued + "%" }></div>
+		}
+	</div>
+}
+
+func capacityTitle(r SetRow) string {
+	s := fmt.Sprintf("%d busy · %d idle · %d pending of %s",
+		r.Totals.Busy, r.Totals.Idle, r.Totals.Pending, r.Bounds)
+	if r.Set.QueuedKnown {
+		s += fmt.Sprintf(" · %d queued", r.Set.Queued)
+	}
+	return s
+}
+
+// KVRow is one label/value line in a config or facts panel.
+templ KVRow(kv KV) {
+	<div class="flex items-baseline justify-between gap-4 py-1.5 border-b border-muted last:border-0">
+		<span class="text-[11px] text-fg-subtle shrink-0">{ kv.Label }</span>
+		<span
+			class={ "text-[11.5px] text-right break-all",
+				templ.KV("font-mono", kv.Mono),
+				templ.KV("text-fg-body", kv.Tone == ""),
+				kvTone(kv) }
+		>{ kv.Value }</span>
+	</div>
+}
+
+// kvTone returns the colour class for a fact, or the empty string when it has
+// no tone of its own.
+func kvTone(kv KV) string {
+	if kv.Tone == "" {
+		return ""
+	}
+	return kv.Tone.Text()
+}
+
+// Empty is the placeholder a panel shows instead of a chart it has no data
+// for. It always says *why*, because "no data" and "not collected yet" send an
+// operator down very different paths.
+templ Empty(reason string) {
+	<div class="flex items-center justify-center h-[120px] rounded-sm border border-dashed border-default text-[11.5px] text-fg-subtle">
+		{ reason }
+	</div>
+}
+
+// Legend is the row of swatches beneath a chart.
+templ Legend(items []LegendItem) {
+	if len(items) > 0 {
+		<div class="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2.5">
+			for _, it := range items {
+				<span class="inline-flex items-center gap-1.5 text-[11px] text-fg-subtle">
+					@Dot(it.Tone)
+					{ it.Label }
+					if it.Value != "" {
+						<span class="font-mono text-fg-body">{ it.Value }</span>
+					}
+				</span>
+			}
+		</div>
+	}
+}
+
+// Ticks is the x-axis label strip under a chart.
+templ Ticks(labels []string) {
+	<div class="flex justify-between mt-1.5 text-[10px] text-fg-subtle font-mono">
+		for _, l := range labels {
+			<span>{ l }</span>
+		}
+	</div>
+}
+
+// GridLabels positions the y-axis values alongside a chart. They live in the
+// HTML layer rather than inside the SVG so they stay crisp at any scale, which
+// is why each carries a pixel offset computed against the rendered height.
+templ GridLabels(lines []chart.GridLine) {
+	<div class="absolute inset-y-0 right-0 w-14 pointer-events-none">
+		for _, l := range lines {
+			<span
+				class="absolute right-0 -translate-y-1/2 text-[10px] text-fg-subtle font-mono bg-raised pl-1"
+				style={ "top:" + l.TopPx + "px" }
+			>{ l.Label }</span>
+		}
+	</div>
+}
+
+// SortHeader is a clickable column header in the runnersets table.
+templ SortHeader(label string, key fleet.SetSort, current fleet.SetSort, streamURL string) {
+	<button
+		type="button"
+		class={ "inline-flex items-center gap-1 text-[10.5px] uppercase tracking-[0.4px] font-semibold hover:text-fg cursor-pointer",
+			templ.KV("text-fg", key == current),
+			templ.KV("text-fg-subtle", key != current) }
+		data-on:click={ SetAndStream(streamURL, "sort", string(key)) }
+	>
+		{ label }
+		if key == current {
+			<span aria-hidden="true">▾</span>
+		}
+	</button>
+}

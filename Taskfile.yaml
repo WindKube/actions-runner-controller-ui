@@ -1,0 +1,156 @@
+version: "3"
+
+vars:
+  BIN: arc-ui
+  TAILWIND_VERSION: v4.1.14
+  GO_BUILD_FLAGS: "-trimpath"
+  # Stamped into main.version. A dirty or tagless tree is honestly labelled
+  # "dev" rather than pretending to be a release.
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  install:tailwind:
+    desc: Download the Tailwind CSS standalone binary into ./.bin
+    cmds:
+      - mkdir -p .bin
+      - |
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+        # The release asset for x86_64 is called x64, not amd64 — an unmapped
+        # `uname -m` here 404s and looks like a network blip.
+        ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && ARCH=x64; [ "$ARCH" = "aarch64" ] && ARCH=arm64
+        curl -fsSL -o .bin/tailwindcss \
+          "https://github.com/tailwindlabs/tailwindcss/releases/download/{{.TAILWIND_VERSION}}/tailwindcss-${OS}-${ARCH}"
+        chmod +x .bin/tailwindcss
+    status:
+      - test -x .bin/tailwindcss
+
+  install:golangci-lint:
+    desc: Install golangci-lint v2 (v1 does not understand Go 1.26)
+    cmds:
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+    status:
+      - command -v golangci-lint
+
+  gen:
+    desc: Generate everything (templ + CSS + ent)
+    deps: [gen:templ, gen:css]
+
+  gen:templ:
+    desc: Generate _templ.go files from .templ sources
+    cmds:
+      # `go tool templ` runs the version pinned by go.mod's tool directive, so the
+      # generator can never drift from the templ runtime the code links against.
+      - go tool templ generate ./internal/web/...
+
+  gen:css:
+    desc: Build internal/web/static/app.css with Tailwind
+    deps: [install:tailwind]
+    cmds:
+      - .bin/tailwindcss -i assets/input.css -o internal/web/static/app.css --minify
+
+  gen:ent:
+    desc: Regenerate the ent client (only after editing internal/store/ent/schema)
+    cmds:
+      - go tool ent generate ./internal/store/ent/schema
+
+  tidy:
+    desc: go mod tidy
+    cmds:
+      - go mod tidy
+
+  vet:
+    desc: Run go vet
+    deps: [gen]
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: Run golangci-lint
+    deps: [gen, install:golangci-lint]
+    cmds:
+      - golangci-lint run ./...
+
+  test:
+    desc: Run unit tests
+    deps: [gen]
+    cmds:
+      - go test -race -count=1 ./...
+
+  preview:
+    desc: Render the three views to docs/screenshots as standalone HTML
+    deps: [gen]
+    cmds:
+      # The test's working directory is internal/web, so the output path has to
+      # be absolute or the files land somewhere nobody looks.
+      - ARC_UI_PREVIEW_DIR="$PWD/docs/screenshots" go test ./internal/web/ -run TestWritePreview -count=1 -v
+
+  preview:png:
+    desc: Rasterise docs/screenshots/*.html into the PNGs embedded in README.md
+    dir: tools/screenshot
+    cmds:
+      - go run . -in ../../docs/screenshots
+
+  check:
+    desc: Run vet, lint and tests
+    cmds:
+      - task: vet
+      - task: lint
+      - task: test
+
+  build:
+    desc: Build the binary
+    deps: [gen]
+    cmds:
+      - go build {{.GO_BUILD_FLAGS}} -ldflags="-s -w -X main.version={{.VERSION}}" -o {{.BIN}} ./cmd/{{.BIN}}
+
+  run:
+    desc: Build and run against the current kube context (needs a reachable API server)
+    deps: [build]
+    cmds:
+      - ./{{.BIN}} serve
+
+  run:proxy:
+    desc: Run `kubectl proxy` for the current context, the way compose does it
+    cmds:
+      - kubectl proxy --port=8001
+
+  # The repository root is both the build context and where the Dockerfile lives,
+  # which is exactly what CI passes (`context: .`, `file: Dockerfile`). Keeping
+  # the two identical means a local build failure is a real build failure.
+  docker:build:
+    desc: Build the Docker image
+    cmds:
+      - docker build --build-arg VERSION={{.VERSION}} -t {{.BIN}}:local .
+
+  docker:up:
+    desc: Start the compose stack (dashboard + kubectl proxy sidecar)
+    cmds:
+      - docker compose up --build
+
+  docker:down:
+    desc: Stop the compose stack
+    cmds:
+      - docker compose down
+
+  helm:lint:
+    desc: Lint the Helm chart
+    cmds:
+      - helm lint chart/
+
+  helm:template:
+    desc: Render the Helm chart to stdout
+    cmds:
+      - helm template {{.BIN}} chart/
+
+  clean:
+    desc: Remove build artefacts and generated files
+    cmds:
+      - rm -f {{.BIN}}
+      - rm -f internal/web/static/app.css
+      - find . -name '*_templ.go' -delete

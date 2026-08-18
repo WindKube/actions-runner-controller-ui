@@ -1,41 +1,37 @@
-# Everything the build context does not need. Keeping this tight matters more
-# than it looks: the context is uploaded to the builder on every build, and a
-# stray .git or node_modules turns a sub-second transfer into a slow one — and on
-# a shared builder, a leaked .git also hands the build any credentials stored in
-# it.
-
+# Keep the build context to what the image actually needs: Go sources, .templ
+# sources and assets/input.css. Everything below is either regenerated inside
+# the image or irrelevant to it.
+#
+# Docker resolves .dockerignore against the BUILD CONTEXT ROOT, which for every
+# build of this image is the repository root — so this is the file that applies.
 .git
-.gitignore
 .github
-.dockerignore
-
-# Docs and licences: the image carries its provenance in OCI labels instead.
-*.md
-LICENSE
-
-# Local tool state and editor droppings.
-.bin
-.cache
-.idea
-.vscode
-.DS_Store
-.mise.toml
-mise.toml
-
-# Build and test output. Any binary here was built for the host, not for
-# $TARGETPLATFORM, so letting one into the context risks shipping the wrong one.
-/bin
-/dist
-/out
-*.exe
-*.test
-*.out
-coverage.*
-*.coverprofile
-
-# Compose and chart definitions consume the image; they are not inputs to it.
+.gitignore
+.golangci.yml
+.testcoverage.yml
+Taskfile.yaml
 compose.yaml
-compose.yml
-docker-compose.yaml
-docker-compose.yml
-/chart
+chart
+docs
+README.md
+*.md
+
+# Claude Code state, including git worktrees under .claude/worktrees. Without
+# this, a context rooted here recurses into a full second copy of the repo.
+.claude
+
+# Local build artefacts. Shipping a host-built binary or a stale generated file
+# into the context would shadow what the generate stage produces.
+/arc-ui
+.bin/
+*_templ.go
+internal/web/static/app.css
+*.db
+*.db-wal
+*.db-shm
+
+.env
+.env.*
+.DS_Store
+.idea/
+.vscode/

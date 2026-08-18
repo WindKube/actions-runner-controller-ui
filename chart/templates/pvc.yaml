@@ -1,0 +1,45 @@
+{{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+# An explicit PVC, owned by Helm — deliberately NOT a StatefulSet
+# volumeClaimTemplate. A template's claims are immutable and invisible to Helm,
+# so resizing the disk would mean recreating the workload and `helm uninstall`
+# would leak the volume. Here, growing the history is `--set persistence.size=`
+# on a storage class with allowVolumeExpansion.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "arc-ui.pvcName" . }}
+  labels:
+    {{- include "arc-ui.labels" . | nindent 4 }}
+  annotations:
+    # Survive `helm uninstall`. The dashboard's value is its history: months of
+    # samples that cannot be re-derived from anywhere, because nothing else keeps
+    # them. A stray uninstall must not throw that away.
+    #
+    # THE COST: reinstalling under the same release name then fails with
+    #   "PersistentVolumeClaim ... exists and cannot be imported into the current release"
+    # because the kept PVC has no ownership metadata for the new release. On Helm
+    # 3.17+ the fix is `helm install --take-ownership`; before that, adopt it by
+    # hand — see chart/README.md.
+    helm.sh/resource-policy: keep
+    {{- with .Values.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | quote }}
+  {{- /*
+  Omitted entirely when empty, which is what selects the cluster's default
+  StorageClass. Setting it to "-" is the (rarely wanted) way to say "no class at
+  all", for binding a hand-provisioned PV.
+  */}}
+  {{- with .Values.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.persistence.selector }}
+  selector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

@@ -113,9 +113,19 @@ jobs:
           tags: arc-ui:pr
           build-args: |
             VERSION=0.0.0-pr
-            COMMIT=${{ github.sha }}
 
       - name: Smoke test the image
         run: |
           set -euo pipefail
-          docker run --rm arc-ui:pr -version
+
+          # Asserts the value rather than just printing it. This is the only
+          # guard on the whole -ldflags chain — build-arg to ARG VERSION to
+          # -X main.version to web.Builder.Version to the footer. Break any
+          # link and the image still builds and still runs; it just silently
+          # ships a UI that reads "arc-ui dev".
+          got="$(docker run --rm arc-ui:pr version)"
+          if [[ "$got" != "0.0.0-pr" ]]; then
+            echo "::error::version stamping is broken: expected '0.0.0-pr', got '${got}'"
+            exit 1
+          fi
+          echo "version stamped correctly: ${got}"

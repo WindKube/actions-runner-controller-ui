@@ -1,0 +1,58 @@
+{{- if .Values.ingress.enabled }}
+{{- $fullName := include "arc-ui.fullname" . }}
+{{- $svcPort := .Values.service.port }}
+# The dashboard streams updates over Server-Sent Events (Datastar). Any proxy in
+# front of it that buffers responses will hold the whole stream in memory and
+# flush nothing for minutes — the page loads, then simply never changes, with no
+# error anywhere. The app sets `X-Accel-Buffering: no` on the stream itself, which
+# nginx honours, but the ingress annotations below are still required:
+#
+#   proxy-buffering: "off"     belt to the header's braces, and covers proxies
+#                              that ignore X-Accel-Buffering
+#   proxy-read-timeout         an idle SSE connection looks dead to the default
+#                              60s timeout; the stream is cut and the browser
+#                              reconnects on a loop
+#   proxy-send-timeout         same, in the other direction
+#
+# Behind a different controller (Traefik, HAProxy, an ALB) the equivalent knobs
+# have different names — set them via ingress.annotations. Behind Cloudflare,
+# make sure the route is not passing through a caching rule.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "arc-ui.labels" . | nindent 4 }}
+  annotations:
+    {{- if .Values.ingress.sseAnnotations }}
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ $fullName }}
+                port:
+                  number: {{ $svcPort }}
+          {{- end }}
+    {{- end }}
+{{- end }}
