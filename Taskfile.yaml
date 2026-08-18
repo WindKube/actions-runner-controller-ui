@@ -193,9 +193,23 @@ tasks:
       - docker compose down
 
   install:helm-unittest:
-    desc: Install the helm-unittest plugin
+    desc: Install the helm-unittest plugin (requires Helm 4)
     cmds:
-      - helm plugin install https://github.com/helm-unittest/helm-unittest.git --version {{.HELM_UNITTEST_VERSION}}
+      # --verify=false is required under Helm 4, which verifies plugin
+      # signatures before installing. That check is only defined for tarball
+      # sources (a .tgz with a sibling .prov); this is a VCS URL and carries no
+      # provenance file, so helm refuses up front with "plugin source does not
+      # support verification" rather than falling back to an unverified install.
+      #
+      # The flag gives up nothing that was previously checked — a git+tag source
+      # has never been signature-verified — and the --version pin above, not
+      # this flag, is what fixes which bytes get installed.
+      #
+      # This is a Helm 4 flag: Helm 3 has no --verify on `plugin install` and
+      # would exit with "unknown flag". That is intentional. This repo targets
+      # Helm 4, and .github/workflows/ci.yml pins it, so the two agree on what a
+      # passing chart test means.
+      - helm plugin install https://github.com/helm-unittest/helm-unittest.git --version {{.HELM_UNITTEST_VERSION}} --verify=false
     status:
       - helm plugin list 2>/dev/null | grep -q unittest
 

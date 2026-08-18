@@ -110,13 +110,31 @@ jobs:
         with:
           persist-credentials: false
 
+      # Pinned like every other tool in this repo. setup-helm's default already
+      # tracks Helm 4, but naming the version stops a future default from
+      # silently changing what a passing chart test means — and --verify=false
+      # below is a Helm 4 flag that does not exist in Helm 3, so the two have to
+      # move together.
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.4
 
       # Pinned rather than latest: an unpinned plugin can change what a passing
       # chart test means between two runs of the same commit.
+      #
+      # --verify=false is load-bearing under the Helm 4 pinned above. Helm 4
+      # verifies plugin signatures before installing, but that check is only
+      # defined for tarball sources (a .tgz with a sibling .prov). A VCS URL
+      # like this one has no provenance file to check, so helm refuses up front
+      # — "plugin source does not support verification" — rather than falling
+      # back to an unverified install.
+      #
+      # This gives up nothing that was previously checked: a git+tag source has
+      # never been signature-verified. The --version pin above, not this flag,
+      # is what fixes which bytes get installed.
       - name: Install helm-unittest
-        run: helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.1.2
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.1.2 --verify=false
 
       - name: Lint the chart
         run: helm lint chart/
