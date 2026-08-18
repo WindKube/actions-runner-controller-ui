@@ -177,8 +177,8 @@ func (s *Scraper) tick(ctx context.Context) {
 	})
 }
 
-// safeURL is the configured endpoint with its credentials and query string
-// removed, for use in error text.
+// safeURL is the configured endpoint with its credentials, query string and
+// fragment removed, for use in error text.
 //
 // Every error scrape returns is copied into fleet.Source.Reason by tick, which
 // the dashboard renders and the log records. ARC_UI_LISTENER_METRICS_URL is
@@ -186,6 +186,12 @@ func (s *Scraper) tick(ctx context.Context) {
 // parameter, so neither may appear there. The userinfo is replaced rather than
 // dropped: an operator reading "credentials were sent and it still 401'd" is
 // better served than one who cannot tell whether any were sent at all.
+//
+// The fragment is stripped for the same reason and is the easiest of the three
+// to overlook, because it is the one part of a URL that never reaches the
+// server. That makes it invisible in a packet capture and in the listener's own
+// logs — but it is still in the string the operator configured, and this
+// function's whole job is to make that string safe to display.
 func (s *Scraper) safeURL() string {
 	u, err := url.Parse(s.url)
 	if err != nil {
@@ -194,6 +200,11 @@ func (s *Scraper) safeURL() string {
 		return "the configured listener metrics URL"
 	}
 	u.RawQuery = ""
+	// Both: String writes the fragment only when Fragment is set, but leaving
+	// RawFragment behind as a stale encoding hint for a fragment that no longer
+	// exists is a trap for the next reader.
+	u.Fragment = ""
+	u.RawFragment = ""
 	if u.User != nil {
 		u.User = url.User("redacted")
 	}
@@ -241,10 +252,27 @@ func (s *Scraper) scrape(ctx context.Context) (Metrics, []collision, error) {
 		return Metrics{}, nil, fmt.Errorf("scraping %s: unexpected status %s", s.safeURL(), resp.Status)
 	}
 
+	// One byte more than we will accept, so that running the reader dry is
+	// evidence the body overran rather than ended. io.LimitReader alone cannot
+	// express this: it reports EOF at the cap, which the parser reads as the
+	// end of the exposition. A body that overruns on a line boundary then
+	// parses cleanly as its own prefix and we publish it as known — a queue
+	// depth missing every series past the cap, presented as fact.
+	body := &io.LimitedReader{R: resp.Body, N: maxBodyBytes + 1}
+
 	// parse, not Parse: a scale set name reused across namespaces is something
 	// only an operator can fix, so the report has to reach the log — via the
 	// tracker, because this runs every interval forever.
-	m, cols, err := parse(io.LimitReader(resp.Body, maxBodyBytes))
+	m, cols, err := parse(body)
+
+	// Checked before err: an oversized body usually fails the parse too, on
+	// whatever half-line it was cut at. "unexpected token" sends an operator
+	// hunting for a malformed exposition; the size is the actual fault and the
+	// only one of the two they can act on.
+	if body.N == 0 {
+		return Metrics{}, nil, fmt.Errorf(
+			"scraping %s: response exceeds the %d byte limit", s.safeURL(), maxBodyBytes)
+	}
 	if err != nil {
 		return Metrics{}, nil, fmt.Errorf("scraping %s: %w", s.safeURL(), withoutURL(err))
 	}

@@ -758,6 +758,94 @@ func TestScraperRedactsCredentialsFromFailures(t *testing.T) {
 		assert.NotContains(t, src.Reason, token, "the token reached Source.Reason")
 		assert.Contains(t, src.Reason, "401", "the status is what an operator needs to see")
 	})
+
+	t.Run("fragment", func(t *testing.T) {
+		t.Parallel()
+
+		rec := &recorder{}
+		// A fragment is never sent to the server, which is exactly why it is
+		// easy to forget: it is still part of the string an operator pasted
+		// into ARC_UI_LISTENER_METRICS_URL, and safeURL formats that string
+		// into Source.Reason for the dashboard to render.
+		s := NewScraper("http://127.0.0.1:1/metrics#token="+token,
+			time.Hour, testLogger(), rec)
+		s.tick(context.Background())
+
+		src, ok := rec.last()
+		require.True(t, ok, "no source reported")
+		require.False(t, src.Available)
+		assert.NotContains(t, src.Reason, token, "the fragment reached Source.Reason")
+		assert.Contains(t, src.Reason, "127.0.0.1:1", "the endpoint is no longer identifiable")
+	})
+}
+
+// TestScraperBodyLimit pins the behaviour at the maxBodyBytes boundary.
+//
+// io.LimitReader reports EOF at the cap, which a Prometheus text parser cannot
+// tell apart from the real end of the exposition. A body that overruns the cap
+// on a line boundary therefore parses cleanly as its own prefix, and the
+// scraper publishes the truncated result as known — a dashboard confidently
+// showing a queue depth that is missing every series past the 8MiB mark. The
+// scrape has to fail instead.
+func TestScraperBodyLimit(t *testing.T) {
+	t.Parallel()
+
+	// A comment line the parser skips, sized so a whole number of them lands
+	// exactly on the cap. That puts the truncation point on a line boundary,
+	// which is the case that parses cleanly rather than erroring by luck.
+	const padLine = 64
+	padding := strings.Repeat("#"+strings.Repeat("p", padLine-2)+"\n", maxBodyBytes/padLine)
+	require.Len(t, padding, maxBodyBytes, "padding must sit exactly on the cap")
+
+	serve := func(body string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+			_, _ = io.WriteString(w, body)
+		}))
+	}
+
+	t.Run("over the limit is an error, not a truncated success", func(t *testing.T) {
+		t.Parallel()
+
+		// The real metrics sit past the cap, so a reader that stops at the cap
+		// sees only the padding: valid, parseable, and empty.
+		srv := serve(padding + fixture)
+		defer srv.Close()
+
+		rec := &recorder{}
+		s := NewScraper(srv.URL, time.Hour, testLogger(), rec)
+		s.tick(context.Background())
+
+		src, ok := rec.last()
+		require.True(t, ok, "no source reported")
+		assert.False(t, src.Available,
+			"an over-long body was published as a good scrape: %q", src.Reason)
+		assert.False(t, rec.known, "truncated metrics were published as known")
+	})
+
+	t.Run("exactly at the limit still succeeds", func(t *testing.T) {
+		t.Parallel()
+
+		// One byte under the cap would be a weaker test: the point is that the
+		// limit is inclusive, so a body of exactly maxBodyBytes is fine.
+		pad := maxBodyBytes - len(fixture)
+		require.Positive(t, pad, "fixture must be smaller than the cap")
+		body := fixture + "#" + strings.Repeat("p", pad-2) + "\n"
+		require.Len(t, body, maxBodyBytes, "body must sit exactly on the cap")
+
+		srv := serve(body)
+		defer srv.Close()
+
+		rec := &recorder{}
+		s := NewScraper(srv.URL, time.Hour, testLogger(), rec)
+		s.tick(context.Background())
+
+		src, _ := rec.last()
+		assert.True(t, src.Available,
+			"a body exactly at the cap was rejected: %q", src.Reason)
+		assert.Equal(t, 4, rec.depth["arc-linux-x64"],
+			"depth = %v, want arc-linux-x64=4", rec.depth)
+	})
 }
 
 func TestScraperUsesPrivateTransport(t *testing.T) {

@@ -9,7 +9,15 @@ vars:
   # helm-unittest is a helm plugin, not a Go tool, so it cannot ride along in
   # go.mod's tool directive. Pinned for the same reason everything else here is:
   # an unpinned plugin can change what a passing chart test means.
+  #
+  # REV is what actually gets installed. A git tag is a mutable pointer, so
+  # installing by tag would let upstream change the plugin under a pin that
+  # looks fixed; VERSION is kept alongside it only so the number stays readable
+  # and so the status check below has something to match. Move the two together,
+  # and keep them in step with .github/workflows/ci.yml:
+  #   git ls-remote https://github.com/helm-unittest/helm-unittest.git refs/tags/vX.Y.Z
   HELM_UNITTEST_VERSION: v1.1.2
+  HELM_UNITTEST_REV: 33c48cac798e465deda9a66c8e6c07c0973cf53d
   GO_BUILD_FLAGS: "-trimpath"
   # Stamped into main.version. A dirty or tagless tree is honestly labelled
   # "dev" rather than pretending to be a release.
@@ -209,9 +217,21 @@ tasks:
       # would exit with "unknown flag". That is intentional. This repo targets
       # Helm 4, and .github/workflows/ci.yml pins it, so the two agree on what a
       # passing chart test means.
-      - helm plugin install https://github.com/helm-unittest/helm-unittest.git --version {{.HELM_UNITTEST_VERSION}} --verify=false
+      - helm plugin install https://github.com/helm-unittest/helm-unittest.git --version {{.HELM_UNITTEST_REV}} --verify=false
     status:
-      - helm plugin list 2>/dev/null | grep -q unittest
+      # Matching the name alone is the wrong gate, for exactly the reason
+      # `command -v golangci-lint` is wrong above: any already-installed
+      # unittest plugin satisfies it, the install is skipped, and `task
+      # helm:test` then runs the chart suite against a version this repo never
+      # pinned. Match the version column too, so a stale plugin is reinstalled
+      # instead of quietly standing in for the pinned one.
+      #
+      # `helm plugin list` prints the version without the leading v, hence the
+      # ${want#v}.
+      - |
+        want='{{.HELM_UNITTEST_VERSION}}'
+        helm plugin list 2>/dev/null |
+          awk -v want="${want#v}" '$1 == "unittest" && $2 == want { found = 1 } END { exit !found }'
 
   helm:lint:
     desc: Lint the Helm chart

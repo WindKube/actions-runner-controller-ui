@@ -120,21 +120,29 @@ jobs:
         with:
           version: v4.2.4
 
-      # Pinned rather than latest: an unpinned plugin can change what a passing
-      # chart test means between two runs of the same commit.
+      # Pinned to the commit v1.1.2 resolves to, not to the tag. A git tag is a
+      # mutable pointer: upstream can move v1.1.2 onto different code at any
+      # time and `--version v1.1.2` follows it silently — which is the very
+      # "an unpinned plugin changes what a passing chart test means" problem the
+      # pin exists to prevent. Same reasoning as the sha256 digests guarding the
+      # Tailwind download in the Dockerfile: a version names a release, it does
+      # not authenticate one.
+      #
+      # To move the plugin, re-resolve the tag and update Taskfile.yaml's
+      # HELM_UNITTEST_VERSION and HELM_UNITTEST_REV in the same commit:
+      #   git ls-remote https://github.com/helm-unittest/helm-unittest.git refs/tags/vX.Y.Z
       #
       # --verify=false is load-bearing under the Helm 4 pinned above. Helm 4
       # verifies plugin signatures before installing, but that check is only
       # defined for tarball sources (a .tgz with a sibling .prov). A VCS URL
       # like this one has no provenance file to check, so helm refuses up front
       # — "plugin source does not support verification" — rather than falling
-      # back to an unverified install.
-      #
-      # This gives up nothing that was previously checked: a git+tag source has
-      # never been signature-verified. The --version pin above, not this flag,
-      # is what fixes which bytes get installed.
+      # back to an unverified install. The commit pin, not this flag, is what
+      # fixes which bytes get installed; the flag only switches off a check that
+      # cannot run on this kind of source at all.
       - name: Install helm-unittest
-        run: helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.1.2 --verify=false
+        # The revision below is the tag v1.1.2.
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest.git --version 33c48cac798e465deda9a66c8e6c07c0973cf53d --verify=false
 
       - name: Lint the chart
         run: helm lint chart/
