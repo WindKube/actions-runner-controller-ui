@@ -1,0 +1,261 @@
+version: "3"
+
+vars:
+  BIN: arc-ui
+  TAILWIND_VERSION: v4.1.14
+  # Must match the version pinned in .github/workflows/ci.yml, or `task lint`
+  # and CI disagree about what counts as a finding.
+  GOLANGCI_VERSION: v2.12.2
+  # helm-unittest is a helm plugin, not a Go tool, so it cannot ride along in
+  # go.mod's tool directive. Pinned for the same reason everything else here is:
+  # an unpinned plugin can change what a passing chart test means.
+  #
+  # REV is what actually gets installed. A git tag is a mutable pointer, so
+  # installing by tag would let upstream change the plugin under a pin that
+  # looks fixed; VERSION is kept alongside it only so the number stays readable
+  # and so the status check below has something to match. Move the two together,
+  # and keep them in step with .github/workflows/ci.yml:
+  #   git ls-remote https://github.com/helm-unittest/helm-unittest.git refs/tags/vX.Y.Z
+  HELM_UNITTEST_VERSION: v1.1.2
+  HELM_UNITTEST_REV: 33c48cac798e465deda9a66c8e6c07c0973cf53d
+  GO_BUILD_FLAGS: "-trimpath"
+  # Stamped into main.version. A dirty or tagless tree is honestly labelled
+  # "dev" rather than pretending to be a release.
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  install:tailwind:
+    desc: Download the Tailwind CSS standalone binary into ./.bin
+    cmds:
+      - mkdir -p .bin
+      - |
+        set -eu
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+        # Two naming traps in one URL, and both 404 in a way that reads like a
+        # network blip rather than a bug here:
+        #   * the x86_64 asset is called x64, not amd64;
+        #   * the macOS asset is called macos — there is no `darwin` asset at
+        #     all, which is what `uname -s` reports.
+        case "$OS" in darwin) OS=macos ;; esac
+        ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && ARCH=x64; [ "$ARCH" = "aarch64" ] && ARCH=arm64
+        # A version tag does not authenticate the bytes behind it: a release
+        # asset can be replaced in place after the fact. Pin the content too and
+        # refuse to install anything else. Refresh these from the release's
+        # sha256sums.txt whenever TAILWIND_VERSION moves — a stale entry fails
+        # closed, which is the intended direction.
+        case "${OS}-${ARCH}" in
+          linux-x64)   want=bc34c301b080b6e6b98ed24118419833f966f6f347e556945d6557d36a44a56e ;;
+          linux-arm64) want=314941f5f6e143e74e740c587ad1fbaaede5462572dd330bbe0937e611e966db ;;
+          macos-x64)   want=67b25b6103fa7677637e5a5de3327fec3335da316d90d3fdb1a4cd72bda41c0a ;;
+          macos-arm64) want=e722b752f51def86d42e886b4c1171f2d09a4be1a7487a0a51e4aff8e7603ce3 ;;
+          *) echo "unsupported platform for tailwindcss: ${OS}-${ARCH}" >&2; exit 1 ;;
+        esac
+        curl -fsSL -o .bin/tailwindcss.tmp \
+          "https://github.com/tailwindlabs/tailwindcss/releases/download/{{.TAILWIND_VERSION}}/tailwindcss-${OS}-${ARCH}"
+        # sha256sum on Linux, shasum on macOS. Branch on which exists rather
+        # than chaining with ||: the || form silently yields an empty digest
+        # when the first tool is missing, because cut still exits 0.
+        if command -v sha256sum >/dev/null 2>&1; then
+          got=$(sha256sum .bin/tailwindcss.tmp | awk '{print $1}')
+        else
+          got=$(shasum -a 256 .bin/tailwindcss.tmp | awk '{print $1}')
+        fi
+        if [ "$got" != "$want" ]; then
+          rm -f .bin/tailwindcss.tmp
+          echo "tailwindcss ${OS}-${ARCH} checksum mismatch: got ${got}, want ${want}" >&2
+          exit 1
+        fi
+        chmod +x .bin/tailwindcss.tmp
+        mv .bin/tailwindcss.tmp .bin/tailwindcss
+    status:
+      - test -x .bin/tailwindcss
+
+  install:golangci-lint:
+    desc: Install golangci-lint v2 (v1 does not understand Go 1.26)
+    cmds:
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_VERSION}}
+    # `command -v golangci-lint` alone is the wrong gate: it is satisfied by a v1
+    # binary already on PATH, the task is then skipped, and `task lint` runs a
+    # linter that cannot parse Go 1.26 — reported as a pile of syntax errors in
+    # untouched files. Require the major version this repo actually needs.
+    status:
+      - command -v golangci-lint >/dev/null 2>&1
+      - golangci-lint version 2>&1 | grep -qE '\bv?2\.'
+
+  gen:
+    desc: Generate everything (templ + CSS + ent)
+    deps: [gen:templ, gen:css]
+
+  gen:templ:
+    desc: Generate _templ.go files from .templ sources
+    cmds:
+      # `go tool templ` runs the version pinned by go.mod's tool directive, so the
+      # generator can never drift from the templ runtime the code links against.
+      - go tool templ generate ./internal/web/...
+
+  gen:css:
+    desc: Build internal/web/static/app.css with Tailwind
+    deps: [install:tailwind]
+    cmds:
+      - .bin/tailwindcss -i assets/input.css -o internal/web/static/app.css --minify
+
+  gen:ent:
+    desc: Regenerate the ent client (only after editing internal/store/ent/schema)
+    cmds:
+      # These flags are not decoration — internal/store/gen.go documents this
+      # exact invocation and why. `--feature sql/upsert` is the load-bearing one:
+      # without it ent emits no OnConflict builders, and every write in
+      # internal/store/record.go stops compiling. The failure lands there, far
+      # from the task that caused it, which is what makes the omission nasty.
+      - >-
+        go tool ent generate ./internal/store/ent/schema
+        --target ./internal/store/ent
+        --feature sql/upsert
+        --header "// Code generated by ent, DO NOT EDIT."
+
+  tidy:
+    desc: go mod tidy
+    cmds:
+      - go mod tidy
+
+  vet:
+    desc: Run go vet
+    deps: [gen]
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: Run golangci-lint
+    deps: [gen, install:golangci-lint]
+    cmds:
+      - golangci-lint run ./...
+
+  test:
+    desc: Run unit tests
+    deps: [gen]
+    cmds:
+      - go test -race -count=1 ./...
+
+  preview:
+    desc: Render the three views to docs/screenshots as standalone HTML
+    deps: [gen]
+    cmds:
+      # The test's working directory is internal/web, so the output path has to
+      # be absolute or the files land somewhere nobody looks.
+      - ARC_UI_PREVIEW_DIR="$PWD/docs/screenshots" go test ./internal/web/ -run TestWritePreview -count=1 -v
+
+  preview:png:
+    desc: Rasterise docs/screenshots/*.html into the PNGs embedded in README.md
+    dir: tools/screenshot
+    cmds:
+      - go run . -in ../../docs/screenshots
+
+  check:
+    desc: Run vet, lint, tests and the chart tests
+    cmds:
+      - task: vet
+      - task: lint
+      - task: test
+      - task: helm:lint
+      - task: helm:test
+
+  build:
+    desc: Build the binary
+    deps: [gen]
+    cmds:
+      - go build {{.GO_BUILD_FLAGS}} -ldflags="-s -w -X main.version={{.VERSION}}" -o {{.BIN}} ./cmd/{{.BIN}}
+
+  run:
+    desc: Build and run against the current kube context (needs a reachable API server)
+    deps: [build]
+    cmds:
+      - ./{{.BIN}} serve
+
+  run:proxy:
+    desc: Run `kubectl proxy` for the current context, the way compose does it
+    cmds:
+      - kubectl proxy --port=8001
+
+  # The repository root is both the build context and where the Dockerfile lives,
+  # which is exactly what CI passes (`context: .`, `file: Dockerfile`). Keeping
+  # the two identical means a local build failure is a real build failure.
+  docker:build:
+    desc: Build the Docker image
+    cmds:
+      - docker build --build-arg VERSION={{.VERSION}} -t {{.BIN}}:local .
+
+  docker:up:
+    desc: Start the compose stack (dashboard + kubectl proxy sidecar)
+    cmds:
+      - docker compose up --build
+
+  docker:down:
+    desc: Stop the compose stack
+    cmds:
+      - docker compose down
+
+  install:helm-unittest:
+    desc: Install the helm-unittest plugin (requires Helm 4)
+    cmds:
+      # --verify=false is required under Helm 4, which verifies plugin
+      # signatures before installing. That check is only defined for tarball
+      # sources (a .tgz with a sibling .prov); this is a VCS URL and carries no
+      # provenance file, so helm refuses up front with "plugin source does not
+      # support verification" rather than falling back to an unverified install.
+      #
+      # The flag gives up nothing that was previously checked — a git+tag source
+      # has never been signature-verified — and the --version pin above, not
+      # this flag, is what fixes which bytes get installed.
+      #
+      # This is a Helm 4 flag: Helm 3 has no --verify on `plugin install` and
+      # would exit with "unknown flag". That is intentional. This repo targets
+      # Helm 4, and .github/workflows/ci.yml pins it, so the two agree on what a
+      # passing chart test means.
+      - helm plugin install https://github.com/helm-unittest/helm-unittest.git --version {{.HELM_UNITTEST_REV}} --verify=false
+    status:
+      # Matching the name alone is the wrong gate, for exactly the reason
+      # `command -v golangci-lint` is wrong above: any already-installed
+      # unittest plugin satisfies it, the install is skipped, and `task
+      # helm:test` then runs the chart suite against a version this repo never
+      # pinned. Match the version column too, so a stale plugin is reinstalled
+      # instead of quietly standing in for the pinned one.
+      #
+      # `helm plugin list` prints the version without the leading v, hence the
+      # ${want#v}.
+      - |
+        want='{{.HELM_UNITTEST_VERSION}}'
+        helm plugin list 2>/dev/null |
+          awk -v want="${want#v}" '$1 == "unittest" && $2 == want { found = 1 } END { exit !found }'
+
+  helm:lint:
+    desc: Lint the Helm chart
+    cmds:
+      - helm lint chart/
+
+  helm:test:
+    desc: Run the chart's unit tests (chart/tests/*_test.yaml)
+    deps: [install:helm-unittest]
+    cmds:
+      # `helm lint` only checks that the chart renders. These assert what it
+      # renders — and, for the guard rails in arc-ui.validate, that the render
+      # refuses. A `fail` that stopped firing would otherwise be invisible until
+      # a bad values file reached a cluster.
+      - helm unittest chart/
+
+  helm:template:
+    desc: Render the Helm chart to stdout
+    cmds:
+      - helm template {{.BIN}} chart/
+
+  clean:
+    desc: Remove build artefacts and generated files
+    cmds:
+      - rm -f {{.BIN}}
+      - rm -f internal/web/static/app.css
+      - find . -name '*_templ.go' -delete

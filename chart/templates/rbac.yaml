@@ -1,0 +1,150 @@
+{{- if .Values.rbac.create }}
+# READ-ONLY RBAC.
+#
+# arc-ui never writes to the cluster — no scaling, no deletes, no annotations —
+# so this role holds get/list/watch and nothing else. What is withheld is
+# deliberate and worth stating, because "just add * to be safe" is how a
+# dashboard becomes a lateral-movement step:
+#
+#   * secrets            — ARC keeps the GitHub App credentials there. The
+#                          dashboard has no use for them, and a read-only web UI
+#                          that can read Secrets is a credential exfiltration
+#                          surface reachable from a browser.
+#   * pods/exec, pods/attach, pods/portforward
+#                        — remote code execution inside a runner.
+#   * pods/log           — job logs are GitHub's business and routinely contain
+#                          masked-but-recoverable secrets. Enable per-cluster if
+#                          you decide otherwise; it is not on by default.
+#   * every write verb (create/update/patch/delete/deletecollection)
+#                        — there is no code path in this app that needs one.
+#
+# A ClusterRole (not a Role) because the objects it reads are spread across at
+# least two namespaces and one cluster-scoped resource:
+#
+#   * the RUNNER namespaces (ARC_UI_NAMESPACES, default arc-runners) hold the
+#     AutoscalingRunnerSets, EphemeralRunnerSets, EphemeralRunners and their pods;
+#   * the CONTROLLER namespace (ARC_UI_CONTROLLER_NAMESPACE, default arc-systems)
+#     holds the controller Deployment and the AutoscalingListener pods, which
+#     carry the listener health and the queue depth. Forgetting this namespace is
+#     the classic misconfiguration: the fleet renders fine and the listener panel
+#     is permanently "unavailable".
+#   * nodes are cluster-scoped and have no namespace at all.
+#
+# Namespace-scoped RoleBindings are possible (rbac.clusterWide=false) — the
+# ClusterRole is then bound with a RoleBinding into each listed namespace — but
+# node and node-metrics reads will be denied, and the dashboard will report those
+# sources as unavailable rather than failing.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "arc-ui.fullname" . }}
+  labels:
+    {{- include "arc-ui.labels" . | nindent 4 }}
+rules:
+  # ARC's custom resources. /status is a separate subresource for RBAC purposes:
+  # granting the parent does NOT grant it, and the runner counts the dashboard
+  # renders live in status.
+  - apiGroups: ["actions.github.com"]
+    resources:
+      - autoscalingrunnersets
+      - autoscalingrunnersets/status
+      - ephemeralrunnersets
+      - ephemeralrunnersets/status
+      - ephemeralrunners
+      - ephemeralrunners/status
+      - autoscalinglisteners
+      - autoscalinglisteners/status
+    verbs: ["get", "list", "watch"]
+
+  # Pods back the runner detail view; events explain why a pod is Pending
+  # (unschedulable, image pull, quota); nodes give the capacity denominator.
+  - apiGroups: [""]
+    resources:
+      - pods
+      - events
+      - nodes
+    verbs: ["get", "list", "watch"]
+
+  # The ARC controller Deployment, read only to report the controller version in
+  # the footer.
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+    verbs: ["get", "list", "watch"]
+
+  # THE RESOURCE NAMES HERE ARE `pods` AND `nodes`.
+  #
+  # Not podmetrics, not nodemetrics, not pods/metrics. metrics.k8s.io is an
+  # aggregated API whose resources are literally named pods and nodes (the Go
+  # kinds are PodMetrics/NodeMetrics, which is where the wrong guess comes from).
+  # A rule naming podmetrics matches nothing, is accepted silently by the
+  # apiserver, and produces a 403 on every scrape that is indistinguishable from
+  # metrics-server being uninstalled — you will chase the wrong component for an
+  # afternoon.
+  #
+  # watch is listed for completeness; metrics-server does not serve it, and the
+  # collector polls (ARC_UI_SCRAPE_INTERVAL) precisely because it cannot watch.
+  - apiGroups: ["metrics.k8s.io"]
+    resources:
+      - pods
+      - nodes
+    verbs: ["get", "list", "watch"]
+  {{- with .Values.rbac.extraRules }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+---
+{{- if .Values.rbac.clusterWide }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "arc-ui.fullname" . }}
+  labels:
+    {{- include "arc-ui.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "arc-ui.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "arc-ui.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- else }}
+{{- /*
+Namespace-scoped variant: the same ClusterRole, bound once per namespace the
+dashboard reads. The controller namespace is included automatically — leaving it
+out is the single most common way to end up with a permanently blank listener
+panel.
+*/}}
+{{- $ns := concat (.Values.rbac.namespaces | default list) (list .Values.rbac.controllerNamespace) | compact | uniq }}
+{{- /*
+An empty list here renders the ClusterRole and not one RoleBinding. The install
+succeeds, the pod starts, and every API read is then denied — the dashboard
+comes up with every source unavailable, which is a long way to travel back to
+"the values had no namespaces in them".
+*/}}
+{{- if not $ns }}
+{{- fail "arc-ui: rbac.clusterWide=false needs at least one of rbac.namespaces or rbac.controllerNamespace; with neither set, nothing would be granted and every panel would read as unavailable" }}
+{{- end }}
+{{- $root := . }}
+{{- range $i, $namespace := $ns }}
+{{- if $i }}
+---
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "arc-ui.fullname" $root }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "arc-ui.labels" $root | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "arc-ui.fullname" $root }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "arc-ui.serviceAccountName" $root }}
+    namespace: {{ $root.Release.Namespace }}
+{{- end }}
+{{- end }}
+{{- end }}

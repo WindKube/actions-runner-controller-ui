@@ -1,0 +1,67 @@
+/* source(none) turns OFF Tailwind's automatic project scan, leaving only the
+ * @source lines below. Without it the two are additive, not exclusive: the auto
+ * scan walks the whole repo and treats any `word:word` token it finds as a
+ * candidate arbitrary property, so `install:tailwind` in Taskfile.yaml became a
+ * real rule in the shipped stylesheet — `.[install\:tailwind]{install:tailwind}`
+ * — and every YAML or Markdown edit could add another. It also pulled in dead
+ * utilities nothing renders.
+ *
+ * Everything this app uses is a complete literal in a .templ or .go file below;
+ * no class name is built by concatenation, which is what makes an explicit
+ * source list sufficient here. */
+@import "tailwindcss" source(none);
+
+/* Scan the .templ SOURCES, not the generated Go.
+ *
+ * Tailwind v4 auto-detects sources by walking the project, and it deliberately
+ * skips anything .gitignore excludes. `*_templ.go` is gitignored here (it is
+ * generated), so auto-detection sees no class names at all on a clean tree and
+ * silently emits a stylesheet with none of the utilities this app uses — the
+ * page renders unstyled and nothing errors. Pointing @source at the .templ files
+ * makes the scan independent of what is or is not checked in. */
+@source "../internal/web/**/*.templ";
+/* Class names built in Go (state → colour maps in view.go/page.go) are invisible
+ * to a .templ scan, so keep them scannable from here too. */
+@source "../internal/web/*.go";
+
+/* GitHub Primer dark, as tokens.
+ *
+ * Every name below becomes a utility family: --color-canvas gives bg-canvas /
+ * text-canvas / border-canvas, and so on. The dashboard is dark-only on purpose
+ * — it is a wallboard as often as a browser tab — so there is no light palette
+ * to switch to and no media query to guard. */
+@theme {
+  /* Surfaces, back to front. */
+  --color-canvas: #0d1117; /* page background */
+  --color-inset: #010409; /* wells: inputs, table gutters, footer */
+  --color-raised: #10151c; /* cards and panels sitting on the canvas */
+
+  /* Borders. Named plainly so `border-default` and `border-muted` read as the
+   * roles they are, not as another pair of greys to guess between. */
+  --color-default: #21262d; /* panel and table borders */
+  --color-muted: #161b22; /* hairlines between rows inside a panel */
+
+  /* Foreground ramp: headings, body, secondary, tertiary. */
+  --color-fg: #f0f6fc;
+  --color-fg-body: #c9d1d9;
+  --color-fg-muted: #9198a1;
+  --color-fg-subtle: #6e7681;
+
+  /* Semantic accents. These carry the runner states, so they must stay
+   * distinguishable at 6px — the capacity bar is that thin. */
+  --color-accent: #4493f8; /* idle / links / selection */
+  --color-success: #3fb950; /* busy — work is happening */
+  --color-attention: #d29922; /* pending — scaling up */
+  --color-danger: #f85149; /* failed */
+  --color-done: #ab7df8; /* completed */
+  --color-cyan: #39c5cf; /* secondary series in charts */
+
+  /* Deep variants, for fills that must sit *behind* the accents above. */
+  --color-blue-deep: #316dca;
+  --color-purple-deep: #6e5494;
+
+  /* Queued work is demand the fleet has not absorbed yet: it is drawn past the
+   * end of the capacity bar, so it needs a colour that reads as "beyond" rather
+   * than as another runner state. */
+  --color-queued: var(--color-purple-deep);
+}

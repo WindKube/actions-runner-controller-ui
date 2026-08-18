@@ -1,0 +1,86 @@
+# The two binding shapes, and the hole between them.
+#
+# clusterWide=true renders the ClusterRole plus one ClusterRoleBinding.
+# clusterWide=false renders the same ClusterRole plus one RoleBinding per
+# namespace. If that second branch resolves to no namespaces at all it used to
+# render the ClusterRole and not one RoleBinding: the install succeeds, the pod
+# starts, every API read is denied, and the dashboard comes up with every source
+# unavailable — a long way to travel back to "the values had no namespaces in
+# them".
+#
+# Documents are asserted by index rather than by "contains a document of kind X",
+# so the shape is pinned: an extra or reordered document fails here rather than
+# passing quietly.
+suite: rbac
+templates:
+  - rbac.yaml
+tests:
+  - it: binds cluster-wide by default
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: ClusterRole
+        documentIndex: 0
+      - isKind:
+          of: ClusterRoleBinding
+        documentIndex: 1
+
+  # One RoleBinding per namespace, and the controller namespace is always one of
+  # them — leaving it out is the single most common way to end up with a
+  # permanently blank listener panel.
+  - it: binds the runner and controller namespaces when clusterWide is false
+    set:
+      rbac.clusterWide: false
+    asserts:
+      - hasDocuments:
+          count: 3
+      - isKind:
+          of: ClusterRole
+        documentIndex: 0
+      - isKind:
+          of: RoleBinding
+        documentIndex: 1
+      - equal:
+          path: metadata.namespace
+          value: arc-runners
+        documentIndex: 1
+      - isKind:
+          of: RoleBinding
+        documentIndex: 2
+      - equal:
+          path: metadata.namespace
+          value: arc-systems
+        documentIndex: 2
+
+  # The controller namespace is appended even when it is not listed in
+  # rbac.namespaces, and de-duplicated when it is.
+  - it: does not bind the controller namespace twice when it is also listed
+    set:
+      rbac.clusterWide: false
+      rbac.namespaces:
+        - arc-systems
+      rbac.controllerNamespace: arc-systems
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.namespace
+          value: arc-systems
+        documentIndex: 1
+
+  - it: fails when the namespaced branch resolves to no namespaces
+    set:
+      rbac.clusterWide: false
+      rbac.namespaces: []
+      rbac.controllerNamespace: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "needs at least one of rbac.namespaces or rbac.controllerNamespace"
+
+  - it: renders nothing when rbac.create is false
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0

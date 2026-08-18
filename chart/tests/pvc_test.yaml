@@ -1,0 +1,64 @@
+# The PVC's three storageClassName states, which Kubernetes gives three
+# different meanings and which are easy to conflate:
+#
+#   field absent        use the cluster's default StorageClass
+#   field set to ""     bind no class at all (a hand-provisioned PV)
+#   field set to "name" use that class
+#
+# values.yaml documents "-" as the way to ask for the middle one, so the
+# template has to translate it. Emitting "-" verbatim leaves the PVC waiting
+# forever for a StorageClass literally named "-", which reads as a broken
+# provisioner rather than a values typo.
+suite: persistent volume claim
+templates:
+  - pvc.yaml
+tests:
+  - it: creates a claim with the shipped defaults
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PersistentVolumeClaim
+      - equal:
+          path: spec.resources.requests.storage
+          value: 4Gi
+      - contains:
+          path: spec.accessModes
+          content: ReadWriteOnce
+
+  - it: omits storageClassName by default, selecting the cluster default
+    asserts:
+      - notExists:
+          path: spec.storageClassName
+
+  - it: passes a named class through unchanged
+    set:
+      persistence.storageClassName: fast-ssd
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: fast-ssd
+
+  - it: translates the "-" sentinel into the empty string that means "no class"
+    set:
+      persistence.storageClassName: "-"
+    asserts:
+      - exists:
+          path: spec.storageClassName
+      - equal:
+          path: spec.storageClassName
+          value: ""
+
+  - it: renders nothing when an existing claim is supplied
+    set:
+      persistence.existingClaim: adopted-claim
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when persistence is disabled
+    set:
+      persistence.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

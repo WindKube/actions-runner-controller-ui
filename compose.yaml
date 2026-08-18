@@ -1,0 +1,108 @@
+# Local development stack: the dashboard plus a `kubectl proxy` sidecar.
+#
+# WHY THE SIDECAR IS THE DEFAULT PATH
+#
+# Almost every real kubeconfig authenticates through an exec credential plugin —
+# `aws eks get-token`, `gke-gcloud-auth-plugin`, `kubelogin`, `tsh kube`. client-go
+# resolves those by *executing a binary on the machine it runs on*, and that binary
+# does not exist inside a distroless image (nor does the cloud credential chain it
+# needs). Mounting the kubeconfig therefore cannot work, and the failure is a
+# confusing "exec: executable ... not found" deep inside the client.
+#
+# `kubectl proxy` runs on the host toolchain's terms: it resolves the plugin, holds
+# the credential, and re-exposes the API server as plain unauthenticated HTTP. The
+# app then talks to one URL and needs no cluster credential at all. metrics.k8s.io
+# is an aggregated API served *through* the API server, so the proxy covers pod
+# metrics too — there is nothing else to point anywhere.
+#
+# DEV ONLY. See the warning on the kube-proxy service before you copy any of this.
+
+services:
+  arc-ui:
+    build:
+      # The repository root, matching what CI passes (`context: .`,
+      # `file: Dockerfile`). Keeping the two identical means a local build
+      # failure is a real build failure, not a context mismatch.
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: dev
+    image: arc-ui:local
+    container_name: arc-ui
+    restart: unless-stopped
+    depends_on:
+      - kube-proxy
+    ports:
+      - "8080:8080"
+    environment:
+      ARC_UI_HTTP_ADDR: "0.0.0.0:8080"
+      ARC_UI_LOG_LEVEL: "${ARC_UI_LOG_LEVEL:-debug}"
+      ARC_UI_LOG_FORMAT: "${ARC_UI_LOG_FORMAT:-console}" # console is readable in a terminal; prod stays json
+
+      # The sidecar, not the cluster. This single URL covers the ARC custom
+      # resources, pods, events, nodes and metrics.k8s.io alike.
+      KUBE_API_URL: "http://kube-proxy:8001"
+
+      ARC_UI_NAMESPACES: "${ARC_UI_NAMESPACES:-arc-runners}"
+      ARC_UI_CONTROLLER_NAMESPACE: "${ARC_UI_CONTROLLER_NAMESPACE:-arc-systems}"
+      ARC_UI_SCRAPE_INTERVAL: "${ARC_UI_SCRAPE_INTERVAL:-15s}"
+      ARC_UI_LISTENER_METRICS_URL: "${ARC_UI_LISTENER_METRICS_URL:-}"
+      ARC_UI_GITHUB_ORG: "${ARC_UI_GITHUB_ORG:-}"
+      ARC_UI_DB_PATH: "/data/arc-ui.db"
+      ARC_UI_SENTRY_DSN: "${ARC_UI_SENTRY_DSN:-}"
+    volumes:
+      # Named volume, so the history survives `docker compose up --build` and the
+      # charts are not empty every time you touch the code.
+      - arc-ui-data:/data
+    extra_hosts:
+      # On macOS and Windows Docker Desktop provides this name; on Linux it does
+      # not resolve at all unless mapped explicitly. Needed only if you bypass the
+      # sidecar and point KUBE_API_URL at something listening on the host.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # The image is distroless: no shell, no curl, no wget. The binary probes
+      # itself and exits non-zero when unhealthy.
+      test: ["CMD", "/usr/local/bin/arc-ui", "healthcheck"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # !!! UNAUTHENTICATED API SERVER PROXY !!!
+  #
+  # `kubectl proxy` performs no authentication or authorization of its own: anything
+  # that can reach port 8001 acts as *you* against the cluster, with your full
+  # permissions — including deletes. There is deliberately no `ports:` stanza here.
+  # Never add one, never bind it to 0.0.0.0 on a shared host, and never run this
+  # arrangement anywhere but a local machine. In the cluster, arc-ui uses a
+  # ServiceAccount with the read-only ClusterRole from chart/ and no proxy at all.
+  kube-proxy:
+    image: registry.k8s.io/kubectl:v1.34.1
+    container_name: arc-ui-kube-proxy
+    restart: unless-stopped
+    command:
+      - proxy
+      # Default bind is 127.0.0.1, which inside a container means "this container
+      # only" — the app would get connection refused.
+      - --address=0.0.0.0
+      - --port=8001
+      # kubectl proxy defaults --accept-hosts to ^localhost$,^127\.0\.0\.1$,^\[::1\]$
+      # and matches it against the request's Host header. A request from the app
+      # arrives with `Host: kube-proxy:8001`, matches nothing, and gets a bare 403
+      # with no logged reason — it looks exactly like an RBAC denial. Widen it.
+      #
+      # Compose interpolates $VAR, so a literal dollar must be written $$.
+      - --accept-hosts=^.*$$
+    environment:
+      KUBECONFIG: /kube/config
+    volumes:
+      # Mount the WHOLE ~/.kube directory, not just ~/.kube/config. A kubeconfig
+      # routinely references sibling files — client-certificate, client-key,
+      # certificate-authority — by relative path, and those resolve against the
+      # kubeconfig's own directory. Mounting the single file breaks them.
+      # Read-only: nothing here should ever write back a context switch.
+      - "${HOME}/.kube:/kube:ro"
+
+volumes:
+  arc-ui-data:
+

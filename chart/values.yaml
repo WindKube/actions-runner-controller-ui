@@ -1,0 +1,296 @@
+# Default values for arc-ui.
+#
+# The dashboard is READ-ONLY: it never writes to the cluster, and every data
+# source it reads is optional. It boots and serves with metrics-server absent,
+# with the ARC CRDs not installed, and with RBAC missing — each failure shows up
+# as a named unavailable source in the footer instead of as a page of zeros. So
+# an install that is missing something still gives you a diagnosis.
+
+# -- Must stay 1. The app owns one SQLite file on one ReadWriteOnce volume; a
+# second replica either cannot schedule (volume already attached) or corrupts the
+# database (on RWX). The chart calls `fail` rather than let you find out live.
+replicaCount: 1
+
+image:
+  # Published by .github/workflows/release-image.yml, which sets this name from
+  # its own REGISTRY/IMAGE_NAME pair. That workflow is the authority: if the two
+  # disagree, every install pulls a tag that was never pushed.
+  repository: ghcr.io/windkube/actions-runner-controller-ui
+  # Overrides Chart.appVersion. Pin a digest in production if you can.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Entrypoint overrides. Empty means the image's own ENTRYPOINT/CMD.
+command: []
+args: []
+
+serviceAccount:
+  create: true
+  annotations: {}
+  # Defaults to the fullname when create is true.
+  name: ""
+
+# Extra labels on every object, and extra annotations on the Deployment / pods.
+commonLabels: {}
+deploymentAnnotations: {}
+podAnnotations: {}
+podLabels: {}
+
+revisionHistoryLimit: 3
+
+# ---------------------------------------------------------------------------
+# Configuration — every ARC_UI_* variable the binary reads.
+#
+# Set a key to null (or leave it out) to drop the variable and let the binary's
+# own default apply. An explicit "" is NOT the same thing — it is emitted as an
+# empty value, which is how you say "every namespace" to ARC_UI_NAMESPACES.
+# Anything secret (the Sentry DSN) belongs in extraEnv with a secretKeyRef, not
+# here — values.yaml ends up in Git and in `helm get values`.
+#
+# NOT settable here: ARC_UI_HTTP_ADDR, ARC_UI_PRESTOP_DELAY and
+# ARC_UI_SHUTDOWN_TIMEOUT. The chart derives those from service.targetPort and
+# gracePeriod.* so they cannot drift out of agreement with the container port and
+# terminationGracePeriodSeconds.
+# ---------------------------------------------------------------------------
+env:
+  # info | debug | warn | error
+  ARC_UI_LOG_LEVEL: "info"
+  # json for a log pipeline, console for a human.
+  ARC_UI_LOG_FORMAT: "json"
+
+  # Namespaces holding the AutoscalingRunnerSets and their runner pods. Comma
+  # separated. Set to "" for every namespace in the cluster — which needs the
+  # cluster-wide RoleBinding (rbac.clusterWide: true).
+  ARC_UI_NAMESPACES: "arc-runners"
+  # Where the ARC controller and the AutoscalingListener pods live. The listener
+  # carries queue depth and listener health, and it is NOT in the runner
+  # namespace — getting this wrong leaves the listener panel permanently blank.
+  ARC_UI_CONTROLLER_NAMESPACE: "arc-systems"
+
+  # How often pod/node metrics are polled. metrics-server's own resolution is 15s
+  # by default, so anything faster re-fetches byte-identical data and only burns
+  # API server quota.
+  ARC_UI_SCRAPE_INTERVAL: "15s"
+
+  # The ARC listener's Prometheus endpoint, e.g.
+  # http://arc-gha-rs-controller-listener.arc-systems.svc:8080/metrics
+  # Optional: ARC ships with listener metrics disabled, and the dashboard degrades
+  # cleanly without it (no queue depth, everything else intact).
+  # ARC_UI_LISTENER_METRICS_URL: ""
+
+  # Where the history database lives. Must sit under persistence.mountPath, or it
+  # lands on the read-only root filesystem and the store is disabled.
+  ARC_UI_DB_PATH: "/data/arc-ui.db"
+
+  # Retention per storage tier. Raw runner samples exist only to draw the runner
+  # detail view, so they are cheap to keep short; the rolled-up scope tiers are
+  # what the fleet charts read. The 1h tier at 9600h is ~13 months, enough to
+  # compare this quarter with the same quarter last year.
+  ARC_UI_RETENTION_RUNNER_RAW: "15m"
+  ARC_UI_RETENTION_SCOPE_RAW: "6h"
+  ARC_UI_RETENTION_SCOPE_1M: "168h"
+  ARC_UI_RETENTION_SCOPE_5M: "720h"
+  ARC_UI_RETENTION_SCOPE_1H: "9600h"
+
+  # Breadcrumb label. Empty derives it from the AutoscalingRunnerSet's
+  # githubConfigUrl, which is right in almost every case.
+  # ARC_UI_GITHUB_ORG: ""
+
+  # Kubernetes client rate limits. The informers LIST once and then watch, so the
+  # defaults are only ever stressed at boot on a very large fleet.
+  ARC_UI_KUBE_QPS: "50"
+  ARC_UI_KUBE_BURST: "100"
+
+  # Sentry. The DSN is a credential-ish URL — prefer extraEnv + secretKeyRef.
+  # ARC_UI_SENTRY_DSN: ""
+  ARC_UI_SENTRY_ENVIRONMENT: "production"
+  ARC_UI_SENTRY_SAMPLE_RATE: "1.0"
+
+  # Override the API server address. IN-CLUSTER YOU DO NOT WANT THIS: leave it
+  # unset and client-go uses the ServiceAccount token and the in-cluster
+  # endpoint. It exists for the local `kubectl proxy` sidecar (compose.yaml) and
+  # for the rare in-cluster proxy. metrics.k8s.io is an aggregated API served
+  # through the API server, so this one URL would cover metrics too.
+  # KUBE_API_URL: ""
+
+  # ARC_UI_KUBECONFIG / ARC_UI_KUBE_CONTEXT are for running outside a cluster;
+  # in-cluster they should stay unset.
+
+# Extra env entries, for anything needing valueFrom. Example:
+#   - name: ARC_UI_SENTRY_DSN
+#     valueFrom:
+#       secretKeyRef:
+#         name: arc-ui-sentry
+#         key: dsn
+extraEnv: []
+envFrom: []
+
+# ---------------------------------------------------------------------------
+# Shutdown arithmetic.
+#
+#   preStopDelay      readiness flips to false, but the process keeps serving, so
+#                     endpoints controllers and every proxy in front have time to
+#                     stop routing to this pod. Must be at least twice the
+#                     readiness probe period, or clients see 502s.
+#   shutdownTimeout   the drain budget: in-flight requests finish, SSE streams
+#                     close, the store checkpoints and closes.
+#
+# terminationGracePeriodSeconds must exceed preStopDelay + shutdownTimeout with
+# slack, or the kubelet SIGKILLs the process mid-checkpoint and the next start
+# has to recover the WAL. The chart validates this and refuses to render a
+# combination that cannot complete: 10 + 20 + 5 = 35 <= 45.
+#
+# preStopDelay is 10 because probes.readiness.periodSeconds is 5 and the rule
+# above is "at least twice the readiness period". Raise them together or the
+# rule quietly stops holding.
+# ---------------------------------------------------------------------------
+gracePeriod:
+  preStopDelaySeconds: 10
+  shutdownTimeoutSeconds: 20
+terminationGracePeriodSeconds: 45
+
+service:
+  type: ClusterIP
+  port: 8080
+  # The container port; ARC_UI_HTTP_ADDR is derived from it.
+  targetPort: 8080
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Security context.
+#
+# readOnlyRootFilesystem is the one with a catch: SQLite needs somewhere to put
+# temporary files (sorter spills, journal fallback), so the Deployment mounts an
+# emptyDir at /tmp. Remove that mount and the first non-trivial history query
+# fails with SQLITE_CANTOPEN.
+#
+# fsGroupChangePolicy: OnRootMismatch matters once the database is real. The
+# default (Always) makes the kubelet recursively chown the entire volume on every
+# single pod start — on a multi-GB history that is a multi-minute hang before the
+# container even begins, repeated on every restart. OnRootMismatch checks the top
+# directory's ownership first and skips the walk when it already matches.
+# ---------------------------------------------------------------------------
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  capabilities:
+    drop:
+      - ALL
+
+# In-memory /tmp for SQLite scratch. Memory-backed so nothing lands on a node
+# disk; the limit counts against the pod's memory, hence the modest default.
+tmpSizeLimit: 64Mi
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    # No CPU limit on purpose: throttling a dashboard's informer resync makes it
+    # lag exactly when the cluster is busiest. Memory is limited because a runaway
+    # cache should be killed, not swapped.
+    memory: 512Mi
+
+persistence:
+  enabled: true
+  # Bind an existing PVC instead of creating one — this is also the path for
+  # re-adopting a volume kept by helm.sh/resource-policy after an uninstall.
+  existingClaim: ""
+  size: 4Gi
+  accessModes:
+    - ReadWriteOnce
+  # Empty = the cluster's default StorageClass.
+  storageClassName: ""
+  mountPath: /data
+  annotations: {}
+  selector: {}
+
+probes:
+  # /livez — process-local, never touches the cluster.
+  startup:
+    initialDelaySeconds: 3
+    periodSeconds: 3
+    timeoutSeconds: 2
+    # 40 * 3s = 2 minutes to open and migrate the history database.
+    failureThreshold: 40
+  liveness:
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 6
+  # /readyz — informer sync plus store reachability, so traffic waits for real
+  # data. Never point liveness here: an API server blip would restart the pod and
+  # force a full re-LIST, making recovery slower exactly when it hurts.
+  readiness:
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+rbac:
+  create: true
+  # true  → one ClusterRoleBinding: reads every namespace, and nodes and node
+  #         metrics work. Required if ARC_UI_NAMESPACES is empty.
+  # false → RoleBindings into the namespaces below only. Tighter, but node and
+  #         node-metrics reads are denied and report as unavailable sources.
+  clusterWide: true
+  # Used only when clusterWide is false. Keep in sync with ARC_UI_NAMESPACES.
+  namespaces:
+    - arc-runners
+  # Always bound as well when clusterWide is false: the listener pods live here.
+  controllerNamespace: arc-systems
+  # Appended verbatim to the ClusterRole. For pods/log, if you decide the log
+  # exposure is acceptable in your org.
+  extraRules: []
+
+ingress:
+  enabled: false
+  className: ""
+  # nginx annotations that keep the SSE stream unbuffered. See ingress.yaml.
+  sseAnnotations: true
+  annotations: {}
+  hosts:
+    - host: arc-ui.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # - secretName: arc-ui-tls
+  #   hosts: [arc-ui.example.com]
+
+serviceMonitor:
+  # An explicit flag, because guarding only on .Capabilities.APIVersions makes the
+  # resource vanish silently under `helm template` in a GitOps pipeline.
+  enabled: false
+  # Additionally skip when the Prometheus Operator CRD is absent. Safe to leave
+  # true for laptop installs; set false in GitOps so the manifest always renders.
+  requireCapability: true
+  namespace: ""
+  labels: {}
+  path: /metrics
+  interval: 30s
+  scrapeTimeout: 10s
+  relabelings: []
+  metricRelabelings: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+
+extraVolumes: []
+extraVolumeMounts: []

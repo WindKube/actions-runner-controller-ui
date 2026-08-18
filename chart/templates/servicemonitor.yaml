@@ -1,0 +1,45 @@
+{{- if .Values.serviceMonitor.enabled }}
+{{- if or (not .Values.serviceMonitor.requireCapability) (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+# Guarded on an explicit VALUES FLAG, not on the capability check alone.
+#
+# `.Capabilities.APIVersions` is populated from a live cluster. Under
+# `helm template` — which is what every GitOps pipeline runs, Argo CD included —
+# it is empty, so a resource guarded only by `.Capabilities.APIVersions.Has` is
+# quietly omitted from the manifest. Nothing fails; the metrics just never get
+# scraped, and the reason is invisible in the diff. The flag makes the intent
+# explicit and reviewable; serviceMonitor.requireCapability additionally skips it
+# on clusters without the CRD, for people installing straight from a laptop.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "arc-ui.fullname" . }}
+  {{- with .Values.serviceMonitor.namespace }}
+  namespace: {{ . }}
+  {{- end }}
+  labels:
+    {{- include "arc-ui.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "arc-ui.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: {{ .Values.serviceMonitor.path }}
+      interval: {{ .Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+      {{- with .Values.serviceMonitor.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

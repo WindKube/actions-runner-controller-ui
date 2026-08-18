@@ -1,0 +1,43 @@
+arc-ui {{ .Chart.AppVersion }} installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
+
+Reach it:
+{{- if .Values.ingress.enabled }}
+{{- $scheme := ternary "https" "http" (gt (len .Values.ingress.tls) 0) }}
+{{- range .Values.ingress.hosts }}
+  {{ $scheme }}://{{ .host }}
+{{- end }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "arc-ui.fullname" . }} 8080:{{ .Values.service.port }}
+  open http://localhost:8080
+{{- end }}
+
+Watching:
+  runner namespaces     {{ .Values.env.ARC_UI_NAMESPACES | default "(all)" }}
+  controller namespace  {{ .Values.env.ARC_UI_CONTROLLER_NAMESPACE }}
+
+Every data source is optional. If a panel says "unavailable", the footer names
+which source failed and why — that is the diagnosis, not an error to file:
+
+  * ARC CRDs missing        the controller is not installed, or is a version
+                            that does not serve actions.github.com/v1alpha1
+  * metrics.k8s.io 403      RBAC. The resources are named `pods` and `nodes` in
+                            that API group, NOT podmetrics/nodemetrics; the wrong
+                            spelling matches nothing and 403s exactly like a
+                            missing metrics-server.
+  * listener unavailable    either ARC_UI_LISTENER_METRICS_URL is unset (ARC
+                            ships listener metrics disabled) or
+                            ARC_UI_CONTROLLER_NAMESPACE points at the wrong
+                            namespace — the listener pods are NOT in the runner
+                            namespace.
+
+{{- if not .Values.persistence.enabled }}
+
+WARNING: persistence.enabled=false. History lives in the pod only; every chart
+starts empty again after a restart.
+{{- end }}
+{{- if .Values.persistence.enabled }}
+
+The PVC {{ include "arc-ui.pvcName" . }} carries helm.sh/resource-policy: keep, so
+`helm uninstall` leaves it (and your history) behind. Reinstalling under the same
+name then needs `helm install --take-ownership` — see chart/README.md.
+{{- end }}

@@ -1,116 +1,137 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.7
 #
-# arc-ui container image.
+# arc-ui — multi-stage build.
 #
-#   1. deps    — module download only. Keyed on go.mod/go.sum alone, so editing
-#                Go source never re-downloads the module graph.
-#   2. build   — cross-compiles the static binary for $TARGETOS/$TARGETARCH and
-#                stamps the version metadata in via -ldflags.
-#   3. runtime — distroless static. No shell, no package manager, nonroot.
+#   1. deps      — module download only. Keyed on go.mod/go.sum alone, so editing
+#                  Go source never re-downloads the module graph.
+#   2. generate  — the code generators: `go tool templ generate` for the HTML
+#                  templates and the Tailwind standalone binary for the CSS.
+#   3. build     — cross-compiles the static binary for $TARGETOS/$TARGETARCH
+#                  and stages the /data directory the runtime cannot create.
+#   4. runtime   — distroless static. No shell, no package manager, nonroot.
 #
-# SCAFFOLDING: the application this builds is a placeholder (see cmd/arc-ui).
-# The *structure* is not a placeholder though — it is what the real build wants,
-# so replacing the Go code should not mean rewriting this file.
+# The build context is the repository root — which is also where this file lives,
+# so the COPY paths below are plain. That matches what .github/workflows/ci.yml
+# and release-image.yml pass (`context: .`, `file: Dockerfile`). Build it by hand
+# with:
 #
-# Build context is the repository root:
+#     docker build -t arc-ui:local .
 #
-#     docker build -t arc-ui:dev .
+# compose.yaml and `task docker:build` both already do this.
 #
-# Both base images are pinned by digest, not just tag. A tag is a mutable
-# pointer: `nonroot` moves whenever distroless rebuilds, which silently changes
-# what ships in your image. The tag is kept alongside the digest purely so a
-# human can read what it is, and so Dependabot's docker ecosystem can bump the
-# pair together.
+# Every stage but the last is pinned to --platform=$BUILDPLATFORM: with
+# CGO_ENABLED=0 Go cross-compiles for free, so nothing has to run under QEMU.
+# Emulating an arm64 builder to run templ and Tailwind costs minutes of wall clock
+# and OOMs regularly, for zero benefit — both generators only ever emit source.
+
+ARG GO_VERSION=1.26
+ARG TAILWIND_VERSION=v4.1.14
 
 # ---------------------------------------------------------------------------
 # 1. deps
 # ---------------------------------------------------------------------------
-# --platform=$BUILDPLATFORM keeps this stage on the runner's native
-# architecture. With CGO_ENABLED=0 Go cross-compiles for free, so there is never
-# a reason to emulate a foreign builder under QEMU — that costs minutes of wall
-# clock and OOMs regularly, for zero benefit.
-FROM --platform=$BUILDPLATFORM golang:1.26-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS deps
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm AS deps
 
 WORKDIR /src
 
-# Manifests before sources, so a code edit reuses this layer. The go.sum glob is
-# deliberate: this module has no third-party dependencies yet, so the file does
-# not exist. A plain `COPY go.mod go.sum ./` would fail the build today and a
-# glob costs nothing once the file appears.
-COPY go.mod go.sum* ./
-
-# A cache mount rather than a plain `RUN go mod download`: on a cache miss the
-# layer still rebuilds, but the module cache underneath survives, so it
-# re-downloads only what actually changed. Blacksmith's builder keeps these
-# mounts on its sticky disk across runs.
-RUN --mount=type=cache,target=/go/pkg/mod \
-  go mod download -x
+# Manifests before sources, so a code edit reuses this layer. The go.mod `tool`
+# directive puts templ and ent into the module graph, so this download also
+# fetches the generators — no separate `go install` is needed, and they cannot
+# drift from the libraries the binary links against.
+COPY go.mod go.sum ./
+RUN go mod download
 
 # ---------------------------------------------------------------------------
-# 2. build
+# 2. generate — templ + Tailwind
 # ---------------------------------------------------------------------------
-FROM deps AS build
+FROM --platform=$BUILDPLATFORM deps AS generate
 
-# Supplied automatically by BuildKit from the requested --platform.
+ARG TAILWIND_VERSION
+ARG BUILDARCH
+
+# Tailwind v4 ships a standalone binary; three traps live in this one RUN.
+#
+#  * The release asset for x86_64 is named `x64`, not `amd64`. Docker's
+#    $BUILDARCH says `amd64`, so the unmapped URL 404s and the build failure
+#    reads like a transient network error. Map it.
+#  * The binary is a Bun build and is NOT statically linked — it needs glibc.
+#    That is why this stage sits on the Debian golang image and pulls the plain
+#    `linux-x64`/`linux-arm64` asset. The `-musl` variants exist for Alpine
+#    builders only; using one here fails at exec time, not at download time.
+#  * The version is pinned by ARG. An unpinned "latest" makes the generated CSS
+#    non-reproducible between two builds of the same commit.
+#  * A version tag names a release, it does not authenticate one: a GitHub
+#    release asset can be replaced in place after publication. The digests below
+#    pin the bytes, so a swapped asset fails the build instead of silently
+#    generating this image's CSS with someone else's binary. They are tied to
+#    the TAILWIND_VERSION default above — overriding that ARG without also
+#    updating them fails closed, which is the direction we want.
+RUN set -eu; \
+    arch="${BUILDARCH}"; \
+    case "${arch}" in \
+      amd64) arch=x64; sha=bc34c301b080b6e6b98ed24118419833f966f6f347e556945d6557d36a44a56e ;; \
+      arm64) arch=arm64; sha=314941f5f6e143e74e740c587ad1fbaaede5462572dd330bbe0937e611e966db ;; \
+      *) echo "unsupported build arch: ${arch}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/tailwindcss \
+      "https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-${arch}"; \
+    echo "${sha}  /tmp/tailwindcss" | sha256sum -c -; \
+    chmod +x /tmp/tailwindcss; \
+    mv /tmp/tailwindcss /usr/local/bin/tailwindcss
+
+COPY . ./
+
+# `go tool templ` runs the version pinned in go.mod, which is the same version the
+# runtime library is compiled against. `go install .../templ@latest` would let the
+# generator drift from the library and emit code that no longer builds.
+RUN go tool templ generate ./internal/web/...
+
+# Tailwind scans the .templ SOURCES (see assets/input.css). Auto-detection would
+# skip them here for the same reason it does locally — generated files are
+# gitignored — and emit a stylesheet with none of the app's utilities in it.
+RUN tailwindcss -i assets/input.css -o internal/web/static/app.css --minify
+
+# ---------------------------------------------------------------------------
+# 3. build
+# ---------------------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM generate AS build
+
 ARG TARGETOS
 ARG TARGETARCH
-
-# Build metadata, injected into internal/version at link time. The defaults
-# match that package's own defaults so a bare `docker build` still produces a
-# runnable image.
-ARG VERSION=dev
-ARG COMMIT=unknown
-ARG BUILD_DATE=unknown
-
-COPY . .
-
-# -trimpath strips local filesystem paths from the binary, which is both a
-#   reproducibility and an information-disclosure win.
-# -s -w drop the symbol table and DWARF data; nothing debugs this binary in
-#   production, and it removes several MB from an image whose whole point is to
-#   be minimal.
-# CGO_ENABLED=0 is what makes the result runnable on distroless *static*.
-RUN --mount=type=cache,target=/go/pkg/mod \
-  --mount=type=cache,target=/root/.cache/go-build \
-  CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-  go build \
-  -trimpath \
-  -ldflags="-s -w \
-  -X github.com/WindKube/actions-runner-controller-ui/internal/version.Version=${VERSION} \
-  -X github.com/WindKube/actions-runner-controller-ui/internal/version.Commit=${COMMIT} \
-  -X github.com/WindKube/actions-runner-controller-ui/internal/version.Date=${BUILD_DATE}" \
-  -o /out/arc-ui \
-  ./cmd/arc-ui
-
-# ---------------------------------------------------------------------------
-# 3. runtime
-# ---------------------------------------------------------------------------
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a AS runtime
-
-# Repeated here because ARGs do not cross stage boundaries. Only VERSION is
-# needed, for the OCI label.
 ARG VERSION=dev
 
-# These are a fallback. The release workflow passes the authoritative set via
-# docker/metadata-action, which overrides anything declared here.
-LABEL org.opencontainers.image.title="arc-ui" \
-  org.opencontainers.image.description="Read-only web UI for Actions Runner Controller" \
-  org.opencontainers.image.version="${VERSION}" \
-  org.opencontainers.image.licenses="Apache-2.0" \
-  org.opencontainers.image.source="https://github.com/WindKube/actions-runner-controller-ui"
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
+      -o /out/arc-ui ./cmd/arc-ui
+
+# Distroless has no shell and no mkdir, so the SQLite directory has to be built
+# here and copied over: COPY of a directory creates it in the target image.
+RUN install -d -m 0755 -o 65532 -g 65532 /data
+
+# ---------------------------------------------------------------------------
+# 4. runtime
+# ---------------------------------------------------------------------------
+FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 
 COPY --from=build /out/arc-ui /usr/local/bin/arc-ui
+COPY --from=build --chown=65532:65532 /data /data
 
-# 65532:65532 is distroless's `nonroot` user. Stated numerically rather than by
-# name so a Kubernetes runAsUser check and a `docker run` agree on the value.
+# Numeric UID/GID on purpose. Kubernetes' runAsNonRoot admission check has to
+# decide before the container starts whether the user is root, and not every
+# runtime can resolve a *name* out of the image's /etc/passwd to do it — a
+# `USER nonroot` image gets rejected with "container has runAsNonRoot and image
+# has non-numeric user" on those runtimes.
 USER 65532:65532
+
+ENV ARC_UI_HTTP_ADDR=0.0.0.0:8080 \
+    ARC_UI_DB_PATH=/data/arc-ui.db
 
 EXPOSE 8080
 
-# No HEALTHCHECK: this image has no shell and no curl to run one with, and the
-# only orchestrator that matters here is Kubernetes, whose probes are configured
-# on the Pod rather than baked into the image. /healthz is the endpoint to point
-# them at.
+VOLUME ["/data"]
 
+# Exec form only — there is no /bin/sh to interpret a shell-form CMD. For the
+# same reason there is no HEALTHCHECK here: no curl, no wget. compose.yaml probes
+# with the binary's own `healthcheck` subcommand instead.
 ENTRYPOINT ["/usr/local/bin/arc-ui"]
-CMD ["-addr", ":8080"]
+CMD ["serve"]

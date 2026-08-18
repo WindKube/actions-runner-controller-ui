@@ -1,32 +1,34 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+# Build artefacts
+/arc-ui
+/.bin/
+# `go build` inside the nested screenshot module drops its binary next to the
+# source. The PNGs it produces ARE committed — they are what README.md embeds.
+/tools/screenshot/screenshot
+
+# Generated: templ output and the Tailwind bundle. Both are reproduced by
+# `task gen`, so they are not worth reviewing in a diff.
 #
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+# TRAP: internal/web/static is consumed by a `go:embed` of the whole directory,
+# and go:embed FAILS AT COMPILE TIME on a directory with no files at all. That is
+# why internal/web/static/.gitkeep is committed — without it a fresh clone does
+# not build until Tailwind has run once.
+*_templ.go
+internal/web/static/app.css
 
-# Test binary, built with `go test -c`
-*.test
+# SQLite history database (ARC_UI_DB_PATH), plus its WAL sidecars.
+*.db
+*.db-wal
+*.db-shm
 
-# Code coverage profiles and other test artifacts
-*.out
-coverage.*
-*.coverprofile
-profile.cov
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
-go.work
-go.work.sum
-
-# env file
+# Local env
 .env
+.env.*
+!.env.example
 
-# Editor/IDE
-# .idea/
-# .vscode/
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Claude Code worktrees and local session state.
+.claude/

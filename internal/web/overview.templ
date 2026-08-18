@@ -1,0 +1,244 @@
+package web
+
+import (
+	"fmt"
+	"time"
+
+	"arc-ui/internal/fleet"
+)
+
+// OverviewPage is the whole dashboard body.
+templ OverviewPage(o Overview) {
+	@FilterBar(o)
+	@Tiles(o)
+	<div class="mt-3 grid gap-3 grid-cols-1 xl:grid-cols-3">
+		<div class="xl:col-span-2">
+			@HistoryPanel(o)
+		</div>
+		@UtilPanel(o)
+	</div>
+	<div class="mt-3 grid gap-3 grid-cols-1 lg:grid-cols-2">
+		@ResourcePanel(o)
+		@ThroughputPanel(o)
+	</div>
+	<div class="mt-3">
+		@SetsPanel(o)
+	</div>
+	<div class="mt-3 grid gap-3 grid-cols-1 xl:grid-cols-3">
+		<div class="xl:col-span-2">
+			@RunnersPanel(o)
+		</div>
+		<div class="grid gap-3 content-start">
+			@ReposPanel(o)
+			@FailuresPanel(o)
+			@ChurnPanel(o)
+		</div>
+	</div>
+}
+
+// Tiles is the KPI strip.
+templ Tiles(o Overview) {
+	<section id="tiles" class="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
+		for _, t := range o.Tiles {
+			@TileCard(t)
+		}
+	</section>
+}
+
+// HistoryPanel is the stacked fleet-size chart.
+templ HistoryPanel(o Overview) {
+	@Card("history", "fleet over time", o.Range.Label()) {
+		@AreaChartView(o.History)
+	}
+}
+
+// UtilPanel is the utilization line.
+templ UtilPanel(o Overview) {
+	@Card("utilization", "utilization", o.Range.Label()) {
+		@LineChartView(o.Util)
+	}
+}
+
+// ResourcePanel stacks the CPU and memory charts, each against its request.
+templ ResourcePanel(o Overview) {
+	@Card("resources", "resource usage", o.Range.Label()) {
+		@ResourcePair(o.CPU, o.Mem)
+	}
+}
+
+// ThroughputPanel is jobs completed and failed per bucket.
+templ ThroughputPanel(o Overview) {
+	@Card("throughput", "job throughput", o.Range.Label()) {
+		@BarChartView(o.Throughput)
+	}
+}
+
+// ChurnPanel is runners created against runners destroyed.
+templ ChurnPanel(o Overview) {
+	@Card("churn", "runner churn", o.Range.Label()) {
+		@ChurnChartView(o.Churn)
+	}
+}
+
+// SetsPanel is the runnersets table.
+templ SetsPanel(o Overview) {
+	@Card("runnersets", "runnersets", fmt.Sprintf("%d", len(o.Sets))) {
+		if len(o.Sets) == 0 {
+			@Empty("no runnersets match the current filter")
+		} else {
+			<div class="overflow-x-auto -mx-3.5 -my-3.5">
+				<table class="w-full min-w-[860px] text-[12px] border-collapse">
+					<thead>
+						<tr class="border-b border-default">
+							<th class="text-left font-normal px-3.5 py-2">
+								@SortHeader("runnerset", fleet.SortName, o.SetSort, o.Stream)
+							</th>
+							<th class="text-right font-normal px-3.5 py-2">
+								@SortHeader("runners", fleet.SortRunnerCount, o.SetSort, o.Stream)
+							</th>
+							<th class="text-left font-normal px-3.5 py-2 w-[34%]">
+								@SortHeader("capacity", fleet.SortPressure, o.SetSort, o.Stream)
+							</th>
+							<th class="text-right font-normal px-3.5 py-2 text-[10.5px] uppercase tracking-[0.4px] text-fg-subtle">cpu</th>
+							<th class="text-right font-normal px-3.5 py-2 text-[10.5px] uppercase tracking-[0.4px] text-fg-subtle">memory</th>
+							<th class="text-right font-normal px-3.5 py-2 text-[10.5px] uppercase tracking-[0.4px] text-fg-subtle">queued</th>
+							<th class="px-3.5 py-2"></th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, r := range o.Sets {
+							<tr class="border-b border-muted last:border-0 hover:bg-inset/60">
+								<td class="px-3.5 py-2.5">
+									<a href={ templ.SafeURL("/runnersets/" + r.Set.Name) } class="inline-flex items-center gap-2 hover:underline">
+										@Dot(r.Tone)
+										<span class="font-mono text-fg">{ r.Set.Name }</span>
+									</a>
+									<div class="mt-0.5 pl-[15px] text-[11px] text-fg-subtle font-mono truncate max-w-[260px]" title={ r.Set.Image }>
+										{ Dash(r.Set.Image) }
+									</div>
+								</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono">{ fmt.Sprint(r.Totals.Runners) }</td>
+								<td class="px-3.5 py-2.5">
+									@CapacityBar(r)
+									<div class="mt-1 flex items-center justify-between text-[10.5px] text-fg-subtle font-mono">
+										<span>{ r.Bounds }</span>
+										@Pill(r.Tone, r.Badge)
+									</div>
+								</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono">{ UsageCores(r.Totals.CPU) }</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono">{ UsageGiB(r.Totals.Mem) }</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono">
+									if r.Set.QueuedKnown {
+										{ fmt.Sprint(r.Set.Queued) }
+									} else {
+										<span class="text-fg-subtle" title="ARC listener metrics are disabled">—</span>
+									}
+								</td>
+								<td class="px-3.5 py-2.5 text-right">
+									<button
+										type="button"
+										class="text-[11px] text-fg-subtle hover:text-accent cursor-pointer"
+										data-on:click={ SetAndStream(o.Stream, "set", r.Set.Name) }
+									>filter</button>
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	}
+}
+
+// RunnersPanel is the live runner table.
+templ RunnersPanel(o Overview) {
+	@Card("runners", "runners", fmt.Sprintf("%d", len(o.Runners))) {
+		if len(o.Runners) == 0 {
+			@Empty("no runners match the current filter")
+		} else {
+			@RunnerTable(o.Runners, o.Now)
+		}
+	}
+}
+
+// RunnerRow is one line of the runner table.
+templ RunnerRow(r fleet.Runner, now time.Time) {
+	<tr class="border-b border-muted last:border-0 hover:bg-inset/60">
+		<td class="px-3.5 py-2">
+			<a href={ templ.SafeURL("/runners/" + r.Name) } class="font-mono text-fg hover:underline">{ r.Name }</a>
+			<div class="text-[10.5px] text-fg-subtle font-mono">{ Dash(r.SetName) } · { Dash(r.Node) }</div>
+		</td>
+		<td class="px-3.5 py-2">
+			@StatePill(r.State)
+		</td>
+		<td class="px-3.5 py-2 max-w-[280px]">
+			<div class="truncate" title={ JobSummary(r) }>{ JobSummary(r) }</div>
+			if r.Job.Present() {
+				<div class="text-[10.5px] text-fg-subtle font-mono truncate">{ Dash(r.Job.Repository) }</div>
+			}
+		</td>
+		<td class="px-3.5 py-2 text-right tabular-nums font-mono">{ UsageCores(r.CPU) }</td>
+		<td class="px-3.5 py-2 text-right tabular-nums font-mono">{ UsageGiB(r.Mem) }</td>
+		<td class="px-3.5 py-2 text-right tabular-nums font-mono text-fg-subtle">{ fleet.FormatAge(r.Age(now)) }</td>
+	</tr>
+}
+
+// ReposPanel ranks repositories by fleet consumption.
+templ ReposPanel(o Overview) {
+	@Card("repos", "consumption by repository", "") {
+		if len(o.Repos) == 0 {
+			@Empty("no repository activity yet")
+		} else {
+			<div class="space-y-2.5">
+				for _, r := range o.Repos {
+					<div>
+						<div class="flex items-baseline justify-between gap-3 text-[11.5px]">
+							<button
+								type="button"
+								class="font-mono text-fg-body hover:text-accent truncate cursor-pointer text-left"
+								data-on:click={ SetAndStream(o.Stream, "repo", r.Repository) }
+							>{ r.Repository }</button>
+							<span class="font-mono text-fg-subtle shrink-0 tabular-nums">{ r.Label }</span>
+						</div>
+						@MicroBar(ToneAccent, r.Value, r.Max)
+						<div class="mt-0.5 text-[10.5px] text-fg-subtle font-mono">{ r.Detail }</div>
+					</div>
+				}
+			</div>
+		}
+	}
+}
+
+// FailuresPanel is the recent-failure lane.
+templ FailuresPanel(o Overview) {
+	@Card("failures", "recent failures", "") {
+		if len(o.Failures) == 0 {
+			<div class="flex items-center gap-2 text-[11.5px] text-fg-subtle py-2">
+				@Dot(ToneSuccess)
+				no failures among the matching runners
+			</div>
+		} else {
+			<ul class="space-y-2">
+				for _, f := range o.Failures {
+					<li class="flex items-start gap-2">
+						@Dot(failureTone(f))
+						<div class="min-w-0 flex-1">
+							<a href={ templ.SafeURL("/runners/" + f.Runner) } class="block font-mono text-[11.5px] text-fg hover:underline truncate">{ f.Runner }</a>
+							<div class="text-[11px] text-danger truncate" title={ f.Reason }>{ f.Reason }</div>
+						</div>
+						<span class="text-[10.5px] text-fg-subtle font-mono shrink-0">{ fleet.FormatRelative(f.At, o.Now) }</span>
+					</li>
+				}
+			</ul>
+		}
+	}
+}
+
+// failureTone distinguishes a runner that will never work from one that merely
+// exited non-zero.
+func failureTone(f fleet.Failure) Tone {
+	if f.Severe {
+		return ToneDanger
+	}
+	return ToneAttention
+}

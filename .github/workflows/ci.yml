@@ -30,6 +30,23 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # _templ.go is generated and gitignored, so a fresh checkout carries the
+      # .templ sources but none of the Go they compile to. Every component the
+      # package references — Document, OverviewPage, Tiles, ... — is undefined,
+      # and golangci-lint surfaces that as a `typecheck` issue, which reads like
+      # a linter fault rather than the missing generator it actually is.
+      #
+      # `go tool templ` runs the version pinned by go.mod's tool directive. It is
+      # the same invocation the Dockerfile's generate stage uses, so CI and the
+      # image can never generate with two different templ versions.
+      #
+      # Tailwind is deliberately NOT run here. internal/web/static/.gitkeep is
+      # committed so that `go:embed all:static` compiles without app.css, and
+      # neither the linters nor the tests read the stylesheet — downloading a
+      # 100MB binary to produce CSS nothing asserts on would only cost minutes.
+      - name: Generate templ sources
+        run: go tool templ generate ./internal/web/...
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
@@ -54,6 +71,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Same reason as the lint job: without this the packages that import
+      # internal/web fail to build and `go test` reports "[build failed]"
+      # instead of running anything.
+      - name: Generate templ sources
+        run: go tool templ generate ./internal/web/...
+
       - name: Unit tests
         run: go test -race -shuffle=on -covermode=atomic -coverprofile=coverage.out ./...
 
@@ -74,6 +97,62 @@ jobs:
             echo
             echo "$REPORT"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  chart:
+    name: helm chart
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Pinned like every other tool in this repo. setup-helm's default already
+      # tracks Helm 4, but naming the version stops a future default from
+      # silently changing what a passing chart test means — and --verify=false
+      # below is a Helm 4 flag that does not exist in Helm 3, so the two have to
+      # move together.
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.4
+
+      # Pinned to the commit v1.1.2 resolves to, not to the tag. A git tag is a
+      # mutable pointer: upstream can move v1.1.2 onto different code at any
+      # time and `--version v1.1.2` follows it silently — which is the very
+      # "an unpinned plugin changes what a passing chart test means" problem the
+      # pin exists to prevent. Same reasoning as the sha256 digests guarding the
+      # Tailwind download in the Dockerfile: a version names a release, it does
+      # not authenticate one.
+      #
+      # To move the plugin, re-resolve the tag and update Taskfile.yaml's
+      # HELM_UNITTEST_VERSION and HELM_UNITTEST_REV in the same commit:
+      #   git ls-remote https://github.com/helm-unittest/helm-unittest.git refs/tags/vX.Y.Z
+      #
+      # --verify=false is load-bearing under the Helm 4 pinned above. Helm 4
+      # verifies plugin signatures before installing, but that check is only
+      # defined for tarball sources (a .tgz with a sibling .prov). A VCS URL
+      # like this one has no provenance file to check, so helm refuses up front
+      # — "plugin source does not support verification" — rather than falling
+      # back to an unverified install. The commit pin, not this flag, is what
+      # fixes which bytes get installed; the flag only switches off a check that
+      # cannot run on this kind of source at all.
+      - name: Install helm-unittest
+        # The revision below is the tag v1.1.2.
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest.git --version 33c48cac798e465deda9a66c8e6c07c0973cf53d --verify=false
+
+      - name: Lint the chart
+        run: helm lint chart/
+
+      # `helm lint` only proves the chart renders. These assert what it renders,
+      # and — for the guard rails in the arc-ui.validate helper — that the render
+      # refuses. A `fail` that quietly stopped firing is exactly the kind of
+      # regression that otherwise surfaces in a cluster rather than in CI.
+      - name: Run the chart unit tests
+        run: helm unittest chart/
 
   container:
     name: container build ${{ matrix.arch }}
@@ -113,9 +192,19 @@ jobs:
           tags: arc-ui:pr
           build-args: |
             VERSION=0.0.0-pr
-            COMMIT=${{ github.sha }}
 
       - name: Smoke test the image
         run: |
           set -euo pipefail
-          docker run --rm arc-ui:pr -version
+
+          # Asserts the value rather than just printing it. This is the only
+          # guard on the whole -ldflags chain — build-arg to ARG VERSION to
+          # -X main.version to web.Builder.Version to the footer. Break any
+          # link and the image still builds and still runs; it just silently
+          # ships a UI that reads "arc-ui dev".
+          got="$(docker run --rm arc-ui:pr version)"
+          if [[ "$got" != "0.0.0-pr" ]]; then
+            echo "::error::version stamping is broken: expected '0.0.0-pr', got '${got}'"
+            exit 1
+          fi
+          echo "version stamped correctly: ${got}"

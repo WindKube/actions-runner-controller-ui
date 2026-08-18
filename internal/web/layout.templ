@@ -1,0 +1,185 @@
+package web
+
+import (
+	"fmt"
+
+	"arc-ui/internal/fleet"
+)
+
+// Document is the full page shell.
+//
+// The page is rendered complete on the server: every panel is present in the
+// initial HTML, so a deep link works, back and forward work, and the dashboard
+// is readable before any script runs. Datastar's job is only to keep it fresh.
+templ Document(p Page, body templ.Component) {
+	<!DOCTYPE html>
+	<html lang="en" class="bg-canvas">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="color-scheme" content="dark"/>
+			<title>{ p.Title } · arc-ui</title>
+			if p.CSS != "" {
+				<link rel="stylesheet" href={ p.CSS }/>
+			}
+			if p.JS != "" {
+				<script type="module" src={ p.JS } defer></script>
+			}
+		</head>
+		<body
+			class="bg-canvas text-fg-body font-sans text-[13px] antialiased min-h-screen"
+			data-signals={ p.Signals.JSON() }
+			data-init={ StreamCall(p.Stream) }
+		>
+			@Topbar(p)
+			<main class="mx-auto max-w-[1600px] px-4 pb-10">
+				@body
+			</main>
+			@HealthStrip(p)
+		</body>
+	</html>
+}
+
+// Topbar carries the breadcrumb, the live indicator and the range selector.
+templ Topbar(p Page) {
+	<header class="sticky top-0 z-20 border-b border-default bg-canvas/95 backdrop-blur">
+		<div class="mx-auto max-w-[1600px] px-4 h-12 flex items-center gap-4">
+			<nav class="flex items-center gap-1.5 min-w-0" aria-label="breadcrumb">
+				<span class="text-[12px] font-semibold text-fg tracking-tight">arc-ui</span>
+				for _, c := range p.Crumbs {
+					<span class="text-fg-subtle" aria-hidden="true">/</span>
+					if c.Href != "" {
+						<a href={ templ.SafeURL(c.Href) } class="text-[12px] text-fg-muted hover:text-fg truncate font-mono">{ c.Label }</a>
+					} else {
+						<span class="text-[12px] text-fg truncate font-mono">{ c.Label }</span>
+					}
+				}
+			</nav>
+			<div class="flex-1"></div>
+			@RangePicker(p)
+			@LiveIndicator(p)
+		</div>
+	</header>
+}
+
+// RangePicker is the window selector. Each pill sets the range signal and
+// reopens the stream, which re-renders every chart against the new window.
+templ RangePicker(p Page) {
+	<div class="hidden sm:flex items-center rounded-md border border-default overflow-hidden" role="group" aria-label="time range">
+		for _, r := range AllRanges() {
+			<button
+				type="button"
+				class={ "px-2 h-[26px] text-[11px] font-mono border-r border-default last:border-r-0 cursor-pointer",
+					templ.KV("bg-accent/15 text-accent", r == p.Range),
+					templ.KV("text-fg-subtle hover:text-fg hover:bg-inset", r != p.Range) }
+				aria-pressed={ fmt.Sprint(r == p.Range) }
+				data-on:click={ SetAndStream(p.Stream, "range", string(r)) }
+			>{ string(r) }</button>
+		}
+	</div>
+}
+
+// LiveIndicator shows how long ago the last update arrived.
+//
+// The elapsed time is counted in the browser, not rendered by the server, and
+// that is the whole point. If it were server-rendered it would freeze at
+// whatever it last said when the stream died — displaying "1.2s" forever on a
+// page that had stopped updating entirely. Counting locally means a dead
+// stream is visible as a number that climbs.
+//
+// _seen and _ago are prefixed with an underscore so Datastar keeps them local:
+// signals matching /(^|\.)_/ are excluded from outgoing requests by default.
+templ LiveIndicator(p Page) {
+	<div
+		id="live-indicator"
+		class="flex items-center gap-2 shrink-0"
+		data-signals="{_seen: Date.now(), _ago: 0}"
+		data-on-signal-patch-filter="{include: /^_seq$/}"
+		data-on-signal-patch="$_seen = Date.now()"
+		data-on-interval__duration.1s="$_ago = (Date.now() - $_seen) / 1000"
+	>
+		<span
+			class="inline-block w-[7px] h-[7px] rounded-full"
+			data-class="{'bg-success': $_ago < 30, 'bg-danger': $_ago >= 30, 'animate-pulse': $_ago < 30}"
+			aria-hidden="true"
+		></span>
+		<span
+			class="text-[11px] font-mono tabular-nums"
+			data-class="{'text-fg-subtle': $_ago < 30, 'text-danger': $_ago >= 30}"
+			data-text="$_ago < 30 ? `last event ${$_ago.toFixed(1)}s` : `stalled ${Math.round($_ago)}s`"
+		>last event —</span>
+	</div>
+}
+
+// FilterBar is the row of dropdowns above the dashboard.
+templ FilterBar(o Overview) {
+	<div id="filterbar" class="flex flex-wrap items-center gap-2 py-3">
+		for _, s := range o.Selects {
+			@FilterSelect(s, o.Stream)
+		}
+		<button
+			type="button"
+			class={ "h-[28px] px-2.5 rounded-md border border-default text-[11px] cursor-pointer",
+				templ.KV("text-fg-muted hover:text-fg hover:bg-inset", o.Active > 0),
+				templ.KV("text-fg-subtle opacity-50 cursor-not-allowed", o.Active == 0) }
+			disabled?={ o.Active == 0 }
+			data-on:click={ ClearFilters(o.Stream) }
+		>clear</button>
+		<div class="flex-1"></div>
+		<span class="text-[11px] text-fg-subtle font-mono">{ o.Summary }</span>
+	</div>
+}
+
+// FilterSelect is one dropdown. data-bind keeps the signal and the control in
+// step; the change handler reopens the stream so the pushed fragments match
+// what the user is now looking at.
+templ FilterSelect(s fleet.Select, streamURL string) {
+	<label class="flex items-center gap-1.5">
+		<span class="text-[10.5px] uppercase tracking-[0.4px] text-fg-subtle">{ s.Label }</span>
+		<select
+			class={ "h-[28px] rounded-md border border-default bg-inset px-2 pr-6 text-[11.5px] font-mono max-w-[220px] cursor-pointer",
+				templ.KV("text-accent border-accent/40", s.Filtering),
+				templ.KV("text-fg-body", !s.Filtering) }
+			data-bind={ s.Key }
+			data-on:change={ StreamCall(streamURL) }
+		>
+			for _, o := range s.Options {
+				<option value={ o.Value } selected?={ o.Selected }>{ o.Label }</option>
+			}
+		</select>
+	</label>
+}
+
+// HealthStrip names every data source and why any of them is unavailable.
+//
+// This is the panel that stops the dashboard from lying. When metrics-server
+// is down the resource charts are empty; without this strip that is
+// indistinguishable from a fleet that is doing nothing.
+templ HealthStrip(p Page) {
+	<footer id="health" class="border-t border-default bg-inset">
+		<div class="mx-auto max-w-[1600px] px-4 py-3">
+			if len(p.Warnings) > 0 {
+				<ul class="mb-2.5 space-y-1">
+					for _, w := range p.Warnings {
+						<li class="flex items-start gap-1.5 text-[11px] text-attention">
+							<span aria-hidden="true">▲</span>
+							<span>{ w }</span>
+						</li>
+					}
+				</ul>
+			}
+			<div class="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+				<span class="text-[10.5px] uppercase tracking-[0.4px] text-fg-subtle">control plane &amp; collection</span>
+				for _, s := range p.Sources {
+					<span class="inline-flex items-center gap-1.5 text-[11px]">
+						@Dot(s.Tone)
+						<span class="text-fg-subtle">{ s.Label }</span>
+						<span class={ "font-mono", s.Tone.Text() }>{ s.Value }</span>
+					</span>
+				}
+				<div class="flex-1"></div>
+				<span class="text-[10.5px] text-fg-subtle font-mono">arc-ui { p.Version }</span>
+			</div>
+		</div>
+	</footer>
+}

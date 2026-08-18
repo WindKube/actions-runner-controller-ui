@@ -128,10 +128,15 @@ jobs:
           context: .
           file: Dockerfile
           platforms: ${{ matrix.platform }}
+          # VERSION is the only build-arg the Dockerfile declares. It becomes
+          # main.version via -ldflags, which is what `arc-ui version` prints and
+          # what the dashboard footer renders. The commit and the build date are
+          # not linked into the binary — they travel as OCI labels, which is
+          # where image metadata belongs and what `docker buildx imagetools
+          # inspect` reads. Passing undeclared build-args here would be silently
+          # dropped by BuildKit with only a warning.
           build-args: |
             VERSION=${{ needs.prepare.outputs.version }}
-            COMMIT=${{ steps.git.outputs.sha }}
-            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
           sbom: true
@@ -284,6 +289,24 @@ jobs:
           echo "::group::gh attestation verify"
           gh attestation verify "oci://${IMAGE}@${DIGEST}" --owner "${GITHUB_REPOSITORY_OWNER}"
           echo "::endgroup::"
+
+      - name: Verify the published image reports the release version
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # The end of the chain, checked against the artefact that actually
+          # ships rather than against a local build. If the tag says 1.4.2 and
+          # the binary says "dev", the release is wrong and this is the last
+          # place to notice before anyone pulls it.
+          got="$(docker run --rm "${IMAGE}:${VERSION}" version)"
+          if [[ "$got" != "$VERSION" ]]; then
+            echo "::error::${IMAGE}:${VERSION} reports version '${got}'; the -ldflags stamp did not take"
+            exit 1
+          fi
+          echo "Image reports version ${got}"
 
       - name: Summarise the release
         env:
