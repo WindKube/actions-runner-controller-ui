@@ -229,9 +229,20 @@ jobs:
           mapfile -t annotations < <(grep '^index:' <<< "$DOCKER_METADATA_OUTPUT_ANNOTATIONS")
           (( ${#annotations[@]} )) || { echo "::error::no index-level annotations; DOCKER_METADATA_ANNOTATIONS_LEVELS must be 'index'"; exit 1; }
 
+          # The `index:` prefix is NOT decoration that metadata-action adds for
+          # us to strip — it is the annotation's *type*, and buildx wants it in
+          # the flag value: --annotation=index:foo=bar. Rewriting the prefix
+          # into the flag instead of prepending to it produced an untyped
+          # annotation, and `imagetools create` accepts only the index and
+          # manifest-descriptor types, so it rejected the whole invocation with
+          #
+          #     ERROR: "" annotations are not supported yet
+          #
+          # which names neither the flag nor the value that caused it. Hence
+          # /#/ and not /#index:/ below: prepend, never replace.
           docker buildx imagetools create \
             "${tags[@]/#/--tag=}" \
-            "${annotations[@]/#index:/--annotation=}" \
+            "${annotations[@]/#/--annotation=}" \
             "${digests[@]/#/${IMAGE}@sha256:}"
 
       - name: Resolve the manifest list digest
