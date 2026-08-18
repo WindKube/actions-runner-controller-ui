@@ -1,4 +1,15 @@
-@import "tailwindcss";
+/* source(none) turns OFF Tailwind's automatic project scan, leaving only the
+ * @source lines below. Without it the two are additive, not exclusive: the auto
+ * scan walks the whole repo and treats any `word:word` token it finds as a
+ * candidate arbitrary property, so `install:tailwind` in Taskfile.yaml became a
+ * real rule in the shipped stylesheet — `.[install\:tailwind]{install:tailwind}`
+ * — and every YAML or Markdown edit could add another. It also pulled in dead
+ * utilities nothing renders.
+ *
+ * Everything this app uses is a complete literal in a .templ or .go file below;
+ * no class name is built by concatenation, which is what makes an explicit
+ * source list sufficient here. */
+@import "tailwindcss" source(none);
 
 /* Scan the .templ SOURCES, not the generated Go.
  *

@@ -46,14 +46,22 @@ func probeKubernetes(ctx context.Context, kube kubernetes.Interface, disc discov
 		return unavailable(fleet.SourceKubernetes, fmt.Sprintf("%s: %v", unreachablePrefix, err), now)
 	}
 
-	checks := make([]accessCheck, 0, 2*len(cfg.watch)+1)
+	checks := make([]accessCheck, 0, 2*len(cfg.watch)+2)
 	for _, ns := range cfg.watch {
 		checks = append(checks,
 			accessCheck{namespace: ns, resource: "pods", verb: "list"},
 			accessCheck{namespace: ns, resource: "pods", verb: "watch"},
 		)
 	}
-	checks = append(checks, accessCheck{namespace: cfg.controller, resource: "pods", verb: "list"})
+	// Both verbs here too. startPodInformers runs a real informer in the
+	// controller namespace, and an informer watches as well as lists — probing
+	// only `list` lets a missing `watch` through, so boot reports Kubernetes as
+	// available and the gap shows up later as a reflector error in the logs,
+	// far from anything that names RBAC.
+	checks = append(checks,
+		accessCheck{namespace: cfg.controller, resource: "pods", verb: "list"},
+		accessCheck{namespace: cfg.controller, resource: "pods", verb: "watch"},
+	)
 
 	if denied := deniedChecks(ctx, kube, checks); len(denied) > 0 {
 		return unavailable(fleet.SourceKubernetes, "missing RBAC: "+strings.Join(denied, ", "), now)

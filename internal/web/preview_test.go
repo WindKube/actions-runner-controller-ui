@@ -38,6 +38,12 @@ func TestWritePreview(t *testing.T) {
 		History:  previewHistory{},
 		Version:  "preview",
 		Interval: 15 * time.Second,
+		// Only needs to be a stable string for write() to match on — the link is
+		// swapped for an inline <style> there. JS is deliberately left unset: the
+		// layout omits the module script entirely when Page.JS is empty, and a
+		// preview file has no server to stream from. An empty src= would resolve
+		// to the page itself and make the browser parse this HTML as a module.
+		CSS: "/static/app.css",
 	}
 	ctx := context.Background()
 	sig := Signals{}.Normalize()
@@ -63,13 +69,11 @@ func write(t *testing.T, dir, name string, css []byte, p Page, body templ.Compon
 	var sb strings.Builder
 	require.NoError(t, Document(p, body).Render(context.Background(), &sb), "render %s", name)
 
-	// Swap the stylesheet link for the real thing so the file is self-contained,
-	// and drop the module script: without a server there is nothing to stream.
-	html := sb.String()
-	html = strings.Replace(html,
-		`<link rel="stylesheet" href="">`,
-		"<style>"+string(css)+"</style>", 1)
-	html = strings.Replace(html, `<link rel="stylesheet" href="/static/app.css">`,
+	// Swap the stylesheet link for the real thing so the file is self-contained.
+	// The module script needs no handling here: the layout omits it when Page.JS
+	// is empty, which is why the preview Builder leaves it unset.
+	html := strings.Replace(sb.String(),
+		`<link rel="stylesheet" href="/static/app.css">`,
 		"<style>"+string(css)+"</style>", 1)
 
 	path := filepath.Join(dir, name)

@@ -15,9 +15,11 @@ package listener
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"arc-ui/internal/fleet"
@@ -68,6 +70,28 @@ type Scraper struct {
 	now        func() time.Time
 }
 
+// scrapeTransport returns a connection pool private to one Scraper.
+//
+// Leaving http.Client.Transport nil would mean http.DefaultTransport, which is
+// shared with every other HTTP client in the process. That is a correctness
+// problem in tests before it is a tidiness one: httptest.Server.Close() calls
+// CloseIdleConnections() on http.DefaultTransport directly
+// (net/http/httptest/server.go), so one parallel test closing its server tears
+// down connections another test's scrape is still using — the scrape then fails
+// with "http: CloseIdleConnections called" rather than the status it was
+// meant to observe.
+//
+// Clone() rather than a bare &http.Transport{}: a zero Transport silently drops
+// ProxyFromEnvironment (so HTTP_PROXY/NO_PROXY would stop being honoured for
+// in-cluster scrapes), the dial timeouts, HTTP/2, and idle-connection reaping.
+// Cloning changes which pool the connections live in and nothing else.
+func scrapeTransport() http.RoundTripper {
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		return t.Clone()
+	}
+	return &http.Transport{}
+}
+
 // NewScraper returns a Scraper for the given endpoint. An empty url is valid
 // and means "ARC's listener metrics are disabled", which is the default.
 func NewScraper(url string, interval time.Duration, log zerolog.Logger, sink Sink) *Scraper {
@@ -79,7 +103,7 @@ func NewScraper(url string, interval time.Duration, log zerolog.Logger, sink Sin
 		interval: interval,
 		log:      log.With().Str("component", "listener-scraper").Logger(),
 		sink:     sink,
-		client:   &http.Client{Timeout: scrapeTimeout},
+		client:   &http.Client{Timeout: scrapeTimeout, Transport: scrapeTransport()},
 		now:      time.Now,
 	}
 }
@@ -153,12 +177,51 @@ func (s *Scraper) tick(ctx context.Context) {
 	})
 }
 
+// safeURL is the configured endpoint with its credentials and query string
+// removed, for use in error text.
+//
+// Every error scrape returns is copied into fleet.Source.Reason by tick, which
+// the dashboard renders and the log records. ARC_UI_LISTENER_METRICS_URL is
+// operator-supplied and may legitimately carry userinfo or a token query
+// parameter, so neither may appear there. The userinfo is replaced rather than
+// dropped: an operator reading "credentials were sent and it still 401'd" is
+// better served than one who cannot tell whether any were sent at all.
+func (s *Scraper) safeURL() string {
+	u, err := url.Parse(s.url)
+	if err != nil {
+		// Unparseable, so it cannot be redacted field by field, and echoing it
+		// raw is the thing being avoided.
+		return "the configured listener metrics URL"
+	}
+	u.RawQuery = ""
+	if u.User != nil {
+		u.User = url.User("redacted")
+	}
+	return u.String()
+}
+
+// withoutURL strips net/url's URL-bearing wrapper from err.
+//
+// Redacting the URL this package formats itself is only half the job: a
+// *url.Error carries the request URL verbatim, and net/http redacts only the
+// password inside it — a token in the query string survives untouched, and %w
+// would carry the whole thing into Source.Reason. Unwrapping keeps the useful
+// half ("connect: connection refused") and drops the half that leaks, since the
+// caller supplies its own redacted URL alongside.
+func withoutURL(err error) error {
+	var uerr *url.Error
+	if errors.As(err, &uerr) && uerr.Err != nil {
+		return uerr.Err
+	}
+	return err
+}
+
 // scrape fetches and parses the endpoint once, returning the scale set name
 // collisions the body contained along with the metrics.
 func (s *Scraper) scrape(ctx context.Context) (Metrics, []collision, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.url, nil)
 	if err != nil {
-		return Metrics{}, nil, fmt.Errorf("building request for %s: %w", s.url, err)
+		return Metrics{}, nil, fmt.Errorf("building request for %s: %w", s.safeURL(), withoutURL(err))
 	}
 	// The listener serves classic Prometheus text; ask for it explicitly so a
 	// proxy in front of it does not negotiate something we cannot parse.
@@ -166,7 +229,7 @@ func (s *Scraper) scrape(ctx context.Context) (Metrics, []collision, error) {
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return Metrics{}, nil, fmt.Errorf("scraping %s: %w", s.url, err)
+		return Metrics{}, nil, fmt.Errorf("scraping %s: %w", s.safeURL(), withoutURL(err))
 	}
 	defer func() {
 		// Drain before closing so the connection can be reused across ticks.
@@ -175,7 +238,7 @@ func (s *Scraper) scrape(ctx context.Context) (Metrics, []collision, error) {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return Metrics{}, nil, fmt.Errorf("scraping %s: unexpected status %s", s.url, resp.Status)
+		return Metrics{}, nil, fmt.Errorf("scraping %s: unexpected status %s", s.safeURL(), resp.Status)
 	}
 
 	// parse, not Parse: a scale set name reused across namespaces is something
@@ -183,7 +246,7 @@ func (s *Scraper) scrape(ctx context.Context) (Metrics, []collision, error) {
 	// tracker, because this runs every interval forever.
 	m, cols, err := parse(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
-		return Metrics{}, nil, fmt.Errorf("scraping %s: %w", s.url, err)
+		return Metrics{}, nil, fmt.Errorf("scraping %s: %w", s.safeURL(), withoutURL(err))
 	}
 	return m, cols, nil
 }

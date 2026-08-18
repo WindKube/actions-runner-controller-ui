@@ -123,11 +123,13 @@ func (a *Assets) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if match := r.Header.Get("If-None-Match"); match != "" && strings.Contains(match, item.etag) {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-
+	// No hand-rolled If-None-Match branch here. Writing 304 before these
+	// headers are set sends a 304 carrying neither ETag nor Cache-Control,
+	// which stops the browser extending the freshness lifetime and makes it
+	// revalidate the hashed asset on every load — exactly what the immutable
+	// strategy above exists to avoid. http.ServeContent evaluates the
+	// conditional itself, provided ETag is set before the call, so setting the
+	// headers first is both correct and less code.
 	w.Header().Set("Content-Type", item.contentType)
 	w.Header().Set("ETag", item.etag)
 	if item.immutable {

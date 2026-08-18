@@ -130,7 +130,11 @@ func (c *Collector) EventsForPod(ctx context.Context, namespace, name string, ui
 	}
 
 	c.events.put(key, events, time.Now())
-	return events, nil
+	// Cloned for the same reason eventCache.get clones: the caller may sort or
+	// truncate what it gets back. Returning `events` here would hand out the
+	// cache's own backing array on the miss path, so the first caller could
+	// reorder the entry every later cache hit then serves.
+	return slices.Clone(events), nil
 }
 
 // newestEvents orders events newest first and keeps at most maxEventsPerPod.

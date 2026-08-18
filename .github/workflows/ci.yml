@@ -30,6 +30,23 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # _templ.go is generated and gitignored, so a fresh checkout carries the
+      # .templ sources but none of the Go they compile to. Every component the
+      # package references — Document, OverviewPage, Tiles, ... — is undefined,
+      # and golangci-lint surfaces that as a `typecheck` issue, which reads like
+      # a linter fault rather than the missing generator it actually is.
+      #
+      # `go tool templ` runs the version pinned by go.mod's tool directive. It is
+      # the same invocation the Dockerfile's generate stage uses, so CI and the
+      # image can never generate with two different templ versions.
+      #
+      # Tailwind is deliberately NOT run here. internal/web/static/.gitkeep is
+      # committed so that `go:embed all:static` compiles without app.css, and
+      # neither the linters nor the tests read the stylesheet — downloading a
+      # 100MB binary to produce CSS nothing asserts on would only cost minutes.
+      - name: Generate templ sources
+        run: go tool templ generate ./internal/web/...
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
@@ -54,6 +71,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Same reason as the lint job: without this the packages that import
+      # internal/web fail to build and `go test` reports "[build failed]"
+      # instead of running anything.
+      - name: Generate templ sources
+        run: go tool templ generate ./internal/web/...
+
       - name: Unit tests
         run: go test -race -shuffle=on -covermode=atomic -coverprofile=coverage.out ./...
 
@@ -74,6 +97,36 @@ jobs:
             echo
             echo "$REPORT"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  chart:
+    name: helm chart
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      # Pinned rather than latest: an unpinned plugin can change what a passing
+      # chart test means between two runs of the same commit.
+      - name: Install helm-unittest
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.1.2
+
+      - name: Lint the chart
+        run: helm lint chart/
+
+      # `helm lint` only proves the chart renders. These assert what it renders,
+      # and — for the guard rails in the arc-ui.validate helper — that the render
+      # refuses. A `fail` that quietly stopped firing is exactly the kind of
+      # regression that otherwise surfaces in a cluster rather than in CI.
+      - name: Run the chart unit tests
+        run: helm unittest chart/
 
   container:
     name: container build ${{ matrix.arch }}

@@ -112,9 +112,22 @@ func (p *Poller) Run(ctx context.Context) error {
 // tick performs one scrape and reports the outcome. It never returns an error:
 // a broken metrics-server degrades the dashboard, it does not stop it.
 func (p *Poller) tick(ctx context.Context) {
-	usage, err := p.scrape(ctx)
+	// One scrape must not outlive its own interval. Run calls tick
+	// synchronously, so a metrics-server that accepts the connection and then
+	// never answers blocks the List for the life of the process: no later tick
+	// fires, and the dashboard silently stops updating without ever reporting
+	// the source as unavailable. With a deadline the hang becomes an ordinary
+	// scrape failure, which the code below already knows how to report.
+	scrapeCtx, cancel := context.WithTimeout(ctx, p.interval)
+	defer cancel()
+
+	usage, err := p.scrape(scrapeCtx)
 	if err != nil {
 		if ctx.Err() != nil {
+			// Deliberately ctx and not scrapeCtx: a scrape that timed out is a
+			// metrics-server fault worth reporting, while a cancelled parent is
+			// shutdown. Testing the derived context would conflate them.
+			//
 			// Shutdown, not a metrics-server fault. Leave the last known
 			// health alone so the final render does not accuse a healthy
 			// cluster of being broken.

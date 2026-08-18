@@ -90,8 +90,8 @@ these are caught by `helm template` in CI — not at 3am by a Deployment that ca
 never roll.
 */}}
 {{- define "arc-ui.validate" -}}
-{{- if gt (int .Values.replicaCount) 1 -}}
-{{- fail (printf "arc-ui: replicaCount=%v is not supported. This is a single-writer app: it owns one SQLite file on one ReadWriteOnce PVC, and a second replica would either fail to schedule (the volume is already attached) or corrupt the database (if the volume is RWX). Scale the cluster, not the dashboard." .Values.replicaCount) -}}
+{{- if ne (int .Values.replicaCount) 1 -}}
+{{- fail (printf "arc-ui: replicaCount=%v is not supported; this chart runs exactly one replica. It is a single-writer app: it owns one SQLite file on one ReadWriteOnce PVC, so two replicas either fail to schedule (the volume is already attached) or corrupt the database (if the volume is RWX) — and zero silently renders a Deployment with no dashboard at all. Scale the cluster, not the dashboard." .Values.replicaCount) -}}
 {{- end -}}
 {{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) -}}
 {{- if not .Values.persistence.size -}}
@@ -106,6 +106,12 @@ terminationGracePeriodSeconds must outlast the whole shutdown sequence:
 Undershoot it and the kubelet SIGKILLs mid-checkpoint, which is exactly how a
 WAL ends up needing recovery on the next start.
 */}}
+{{- if lt (int .Values.gracePeriod.preStopDelaySeconds) 0 -}}
+{{- fail (printf "arc-ui: gracePeriod.preStopDelaySeconds=%v must not be negative. The preStop sleep is what keeps the pod serving while endpoints controllers stop routing to it; a negative value skips that window and clients see 502s through the rollout." .Values.gracePeriod.preStopDelaySeconds) -}}
+{{- end -}}
+{{- if le (int .Values.gracePeriod.shutdownTimeoutSeconds) 0 -}}
+{{- fail (printf "arc-ui: gracePeriod.shutdownTimeoutSeconds=%v must be positive. It is the drain budget: at zero or below, in-flight requests and SSE streams are cut immediately and the store gets no time to checkpoint, which is what leaves a WAL to recover on the next start." .Values.gracePeriod.shutdownTimeoutSeconds) -}}
+{{- end -}}
 {{- $needed := add (int .Values.gracePeriod.preStopDelaySeconds) (int .Values.gracePeriod.shutdownTimeoutSeconds) 5 -}}
 {{- if lt (int .Values.terminationGracePeriodSeconds) $needed -}}
 {{- fail (printf "arc-ui: terminationGracePeriodSeconds=%v is shorter than preStopDelay(%v) + shutdownTimeout(%v) + 5s slack = %vs; the process would be SIGKILLed mid-shutdown" .Values.terminationGracePeriodSeconds .Values.gracePeriod.preStopDelaySeconds .Values.gracePeriod.shutdownTimeoutSeconds $needed) -}}

@@ -391,9 +391,21 @@ func FormatRelative(t, now time.Time) string {
 const GiB = 1024 * 1024 * 1024
 
 // FormatGiB renders a byte count as the design does, e.g. "12Gi".
+//
+// Sub-gibibyte values get a decimal place. At %.0f a 512Mi request renders as
+// "0Gi", which is character-for-character what no request at all renders as, so
+// the panel cannot tell a small request from a missing one. Anything positive
+// that would still round to "0.0Gi" is shown as "<0.1Gi" rather than
+// reintroducing the same ambiguity one decimal further down.
 func FormatGiB(bytes float64) string {
 	if bytes <= 0 {
 		return "0Gi"
+	}
+	if gib := bytes / GiB; gib < 1 {
+		if gib < 0.05 {
+			return "<0.1Gi"
+		}
+		return fmt.Sprintf("%.1fGi", gib)
 	}
 	return fmt.Sprintf("%.0fGi", bytes/GiB)
 }

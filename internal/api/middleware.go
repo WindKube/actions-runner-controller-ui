@@ -68,10 +68,10 @@ func isBrokenPipe(rec any) bool {
 
 // accessLog records one line per request.
 //
-// SSE streams are logged when they open rather than when they close, because a
+// SSE streams get a line when they open as well as when they close, because a
 // stream that stays open for an hour would otherwise produce no log line at all
 // until it ended — exactly backwards from what you want when debugging why a
-// dashboard is not updating.
+// dashboard is not updating. The closing line carries how long it was open.
 func accessLog(log zerolog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path

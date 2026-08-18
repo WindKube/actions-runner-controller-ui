@@ -142,10 +142,14 @@ envFrom: []
 # terminationGracePeriodSeconds must exceed preStopDelay + shutdownTimeout with
 # slack, or the kubelet SIGKILLs the process mid-checkpoint and the next start
 # has to recover the WAL. The chart validates this and refuses to render a
-# combination that cannot complete: 8 + 20 + 5 = 33 <= 45.
+# combination that cannot complete: 10 + 20 + 5 = 35 <= 45.
+#
+# preStopDelay is 10 because probes.readiness.periodSeconds is 5 and the rule
+# above is "at least twice the readiness period". Raise them together or the
+# rule quietly stops holding.
 # ---------------------------------------------------------------------------
 gracePeriod:
-  preStopDelaySeconds: 8
+  preStopDelaySeconds: 10
   shutdownTimeoutSeconds: 20
 terminationGracePeriodSeconds: 45
 

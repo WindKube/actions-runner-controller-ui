@@ -1,0 +1,114 @@
+# The guard rails in the "arc-ui.validate" helper, which deployment.yaml
+# includes on its first line. `fail` aborts the render, so every case below
+# asserts on the render failing rather than on rendered output — that is the
+# whole point of the helper: be caught by `helm template` in CI, not at 3am by a
+# Deployment that can never roll.
+suite: arc-ui.validate guard rails
+templates:
+  - deployment.yaml
+tests:
+  - it: renders with the shipped defaults
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment
+
+  # This chart is single-writer: it owns one SQLite file on one ReadWriteOnce
+  # PVC. Two replicas either fail to schedule or corrupt the database, and zero
+  # renders a Deployment with no dashboard at all — which used to slip through,
+  # because the check was `gt 1` rather than `ne 1`.
+  - it: rejects two replicas
+    set:
+      replicaCount: 2
+    asserts:
+      - failedTemplate:
+          errorPattern: "replicaCount=2 is not supported"
+
+  - it: rejects zero replicas
+    set:
+      replicaCount: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "replicaCount=0 is not supported"
+
+  # `add` accepts negatives happily, so an unvalidated preStopDelay shrinks the
+  # $needed total and the terminationGracePeriodSeconds check below then passes
+  # on a combination that drains incorrectly.
+  - it: rejects a negative preStopDelay
+    set:
+      gracePeriod.preStopDelaySeconds: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "preStopDelaySeconds=-1 must not be negative"
+
+  - it: rejects a zero drain budget
+    set:
+      gracePeriod.shutdownTimeoutSeconds: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "shutdownTimeoutSeconds=0 must be positive"
+
+  - it: rejects a negative drain budget
+    set:
+      gracePeriod.shutdownTimeoutSeconds: -5
+    asserts:
+      - failedTemplate:
+          errorPattern: "shutdownTimeoutSeconds=-5 must be positive"
+
+  # Zero is legal for the pre-stop delay specifically — it means "do not wait",
+  # which is right for a cluster with nothing proxying in front.
+  - it: accepts a zero preStopDelay
+    set:
+      gracePeriod.preStopDelaySeconds: 0
+    asserts:
+      - isKind:
+          of: Deployment
+
+  - it: rejects a grace period shorter than the shutdown sequence
+    set:
+      terminationGracePeriodSeconds: 10
+    asserts:
+      - failedTemplate:
+          errorPattern: "is shorter than preStopDelay"
+
+  - it: rejects persistence enabled with no size
+    set:
+      persistence.size: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "persistence.size is empty"
+
+  # The shipped defaults have to satisfy the helper they are validated by, and
+  # the arithmetic in values.yaml has to stay true: 10 + 20 + 5 = 35 <= 45.
+  - it: ships defaults that fit inside the grace period
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 45
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_PRESTOP_DELAY
+            value: "10s"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_SHUTDOWN_TIMEOUT
+            value: "20s"
+
+  # values.yaml states the pre-stop delay must be at least twice the readiness
+  # probe period, or clients see 502s through a rollout. Nothing enforces that
+  # at render time, so it is pinned here: change either number and this test
+  # fails, which is the prompt to re-check the rule rather than discover it in
+  # production. 10 >= 2 * 5.
+  - it: keeps preStopDelay at least twice the readiness period
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.periodSeconds
+          value: 5
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_PRESTOP_DELAY
+            value: "10s"

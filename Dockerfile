@@ -60,16 +60,24 @@ ARG BUILDARCH
 #    builders only; using one here fails at exec time, not at download time.
 #  * The version is pinned by ARG. An unpinned "latest" makes the generated CSS
 #    non-reproducible between two builds of the same commit.
+#  * A version tag names a release, it does not authenticate one: a GitHub
+#    release asset can be replaced in place after publication. The digests below
+#    pin the bytes, so a swapped asset fails the build instead of silently
+#    generating this image's CSS with someone else's binary. They are tied to
+#    the TAILWIND_VERSION default above — overriding that ARG without also
+#    updating them fails closed, which is the direction we want.
 RUN set -eu; \
     arch="${BUILDARCH}"; \
     case "${arch}" in \
-      amd64) arch=x64 ;; \
-      arm64) arch=arm64 ;; \
+      amd64) arch=x64; sha=bc34c301b080b6e6b98ed24118419833f966f6f347e556945d6557d36a44a56e ;; \
+      arm64) arch=arm64; sha=314941f5f6e143e74e740c587ad1fbaaede5462572dd330bbe0937e611e966db ;; \
       *) echo "unsupported build arch: ${arch}" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL -o /usr/local/bin/tailwindcss \
+    curl -fsSL -o /tmp/tailwindcss \
       "https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-${arch}"; \
-    chmod +x /usr/local/bin/tailwindcss
+    echo "${sha}  /tmp/tailwindcss" | sha256sum -c -; \
+    chmod +x /tmp/tailwindcss; \
+    mv /tmp/tailwindcss /usr/local/bin/tailwindcss
 
 COPY . ./
 

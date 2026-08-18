@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -688,6 +689,86 @@ func TestScraperLogsScaleSetNameCollision(t *testing.T) {
 	for _, want := range []string{"shared", "team-a", "team-b"} {
 		assert.Contains(t, buf.String(), want, "collision warning does not mention %q: %s", want, buf.String())
 	}
+}
+
+// TestScraperUsesPrivateTransport pins the scraper to its own connection pool.
+//
+// A nil Transport means http.DefaultTransport, and that global is shared with
+// every other HTTP client in the process — including httptest, whose
+// Server.Close() calls CloseIdleConnections() on http.DefaultTransport directly
+// (net/http/httptest/server.go). Sharing it means one parallel test closing its
+// server can tear down a connection another test's scrape is still using, and
+// that scrape then fails with "http: CloseIdleConnections called" instead of
+// reporting the status it was asserting on. TestScraperFailureModes below
+// flaked on exactly that, roughly once in twenty runs of the suite.
+// TestScraperRedactsCredentialsFromFailures proves that neither the userinfo
+// nor a token query parameter in ARC_UI_LISTENER_METRICS_URL reaches
+// fleet.Source.Reason, which the dashboard renders and the log records.
+//
+// Redacting only what this package formats is not enough on its own: a
+// *url.Error carries the request URL verbatim, and net/http redacts the
+// password inside it but not the query string. Both halves are checked here.
+func TestScraperRedactsCredentialsFromFailures(t *testing.T) {
+	t.Parallel()
+
+	const (
+		password = "s3cr3t"
+		token    = "deadbeef"
+	)
+
+	t.Run("dial failure", func(t *testing.T) {
+		t.Parallel()
+
+		rec := &recorder{}
+		// Port 1 has nothing listening, so this fails while dialling and the
+		// error arrives wrapped in a *url.Error.
+		s := NewScraper("http://user:"+password+"@127.0.0.1:1/metrics?token="+token,
+			time.Hour, testLogger(), rec)
+		s.tick(context.Background())
+
+		src, ok := rec.last()
+		require.True(t, ok, "no source reported")
+		require.False(t, src.Available)
+		assert.NotContains(t, src.Reason, password, "the password reached Source.Reason")
+		assert.NotContains(t, src.Reason, token, "the token reached Source.Reason")
+		assert.Contains(t, src.Reason, "127.0.0.1:1", "the endpoint is no longer identifiable")
+	})
+
+	t.Run("non-200 response", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer srv.Close()
+
+		u, err := url.Parse(srv.URL)
+		require.NoError(t, err)
+		u.User = url.UserPassword("user", password)
+		u.RawQuery = "token=" + token
+
+		rec := &recorder{}
+		s := NewScraper(u.String(), time.Hour, testLogger(), rec)
+		s.tick(context.Background())
+
+		src, ok := rec.last()
+		require.True(t, ok, "no source reported")
+		require.False(t, src.Available)
+		assert.NotContains(t, src.Reason, password, "the password reached Source.Reason")
+		assert.NotContains(t, src.Reason, token, "the token reached Source.Reason")
+		assert.Contains(t, src.Reason, "401", "the status is what an operator needs to see")
+	})
+}
+
+func TestScraperUsesPrivateTransport(t *testing.T) {
+	t.Parallel()
+
+	s := NewScraper("http://127.0.0.1:1", time.Hour, testLogger(), &recorder{})
+
+	require.NotNil(t, s.client.Transport,
+		"Transport is nil, which means the process-global http.DefaultTransport")
+	assert.NotSame(t, http.DefaultTransport, s.client.Transport,
+		"scraper shares the process-global connection pool")
 }
 
 func TestScraperFailureModes(t *testing.T) {

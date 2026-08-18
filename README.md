@@ -307,7 +307,7 @@ differ slightly.
 <details>
 <summary><b>Repository layout</b></summary>
 
-```
+```text
 cmd/arc-ui/          the CLI (serve, healthcheck, version)
 internal/config/     env parsing and validation
 internal/logging/    zerolog construction
@@ -355,7 +355,7 @@ the source tree. `release-image.yml` validates the git tag against a semver
 regex, strips the leading `v`, and passes the result as the `VERSION` build-arg.
 The Dockerfile's build stage links it in:
 
-```
+```sh
 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" ./cmd/arc-ui
 ```
 

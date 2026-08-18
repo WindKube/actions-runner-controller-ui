@@ -246,17 +246,28 @@ func (r TimeRange) Window(now time.Time) Window {
 	return Window{From: now.Add(-r.Duration()), To: now, Points: r.Points()}
 }
 
-// Ticks are the six x-axis labels beneath a chart.
+// Ticks are the x-axis labels beneath a chart.
+//
+// The Ticks component lays these out with flex justify-between, so whatever is
+// returned lands at equal spacing across the full width of the chart. That
+// makes the step size a correctness property rather than a matter of taste: a
+// set whose labels are not equally spaced in TIME puts a label under a position
+// that means something else, and the axis silently lies.
+//
+// The count therefore varies by range, chosen so the step is a round unit —
+// six labels means five gaps, and a 6h window does not divide into five whole
+// hours. Six works for 15m (3m), 1h (12m) and 30d (6d); 6h and 24h want seven,
+// and 7d wants eight.
 func (r TimeRange) Ticks() []string {
 	switch r {
 	case Range15m:
 		return []string{"-15m", "-12m", "-9m", "-6m", "-3m", "now"}
 	case Range6h:
-		return []string{"-6h", "-5h", "-4h", "-3h", "-1h", "now"}
+		return []string{"-6h", "-5h", "-4h", "-3h", "-2h", "-1h", "now"}
 	case Range24h:
-		return []string{"-24h", "-18h", "-12h", "-6h", "-3h", "now"}
+		return []string{"-24h", "-20h", "-16h", "-12h", "-8h", "-4h", "now"}
 	case Range7d:
-		return []string{"-7d", "-5d", "-4d", "-2d", "-1d", "now"}
+		return []string{"-7d", "-6d", "-5d", "-4d", "-3d", "-2d", "-1d", "now"}
 	case Range30d:
 		return []string{"-30d", "-24d", "-18d", "-12d", "-6d", "now"}
 	default:

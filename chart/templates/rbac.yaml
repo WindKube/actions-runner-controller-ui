@@ -116,6 +116,15 @@ out is the single most common way to end up with a permanently blank listener
 panel.
 */}}
 {{- $ns := concat (.Values.rbac.namespaces | default list) (list .Values.rbac.controllerNamespace) | compact | uniq }}
+{{- /*
+An empty list here renders the ClusterRole and not one RoleBinding. The install
+succeeds, the pod starts, and every API read is then denied — the dashboard
+comes up with every source unavailable, which is a long way to travel back to
+"the values had no namespaces in them".
+*/}}
+{{- if not $ns }}
+{{- fail "arc-ui: rbac.clusterWide=false needs at least one of rbac.namespaces or rbac.controllerNamespace; with neither set, nothing would be granted and every panel would read as unavailable" }}
+{{- end }}
 {{- $root := . }}
 {{- range $i, $namespace := $ns }}
 {{- if $i }}

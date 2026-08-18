@@ -19,8 +19,12 @@ templ Document(p Page, body templ.Component) {
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="color-scheme" content="dark"/>
 			<title>{ p.Title } · arc-ui</title>
-			<link rel="stylesheet" href={ p.CSS }/>
-			<script type="module" src={ p.JS } defer></script>
+			if p.CSS != "" {
+				<link rel="stylesheet" href={ p.CSS }/>
+			}
+			if p.JS != "" {
+				<script type="module" src={ p.JS } defer></script>
+			}
 		</head>
 		<body
 			class="bg-canvas text-fg-body font-sans text-[13px] antialiased min-h-screen"

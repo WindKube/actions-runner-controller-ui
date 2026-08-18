@@ -228,6 +228,30 @@ func TestFormatAge(t *testing.T) {
 	}
 }
 
+func TestFormatGiB(t *testing.T) {
+	t.Parallel()
+
+	cases := map[float64]string{
+		0:  "0Gi",
+		-1: "0Gi",
+
+		GiB:      "1Gi",
+		12 * GiB: "12Gi",
+
+		// Sub-gibibyte requests are the point of the decimal place: at %.0f a
+		// 512Mi request rendered as "0Gi", indistinguishable from no request.
+		GiB / 2:  "0.5Gi",
+		GiB / 10: "0.1Gi",
+
+		// Positive, but small enough that one decimal would round it back to
+		// "0.0Gi" and reintroduce the same ambiguity.
+		GiB / 100: "<0.1Gi",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, FormatGiB(in), "FormatGiB(%v)", in)
+	}
+}
+
 func TestByRepositoryRanksBusiestFirst(t *testing.T) {
 	t.Parallel()
 

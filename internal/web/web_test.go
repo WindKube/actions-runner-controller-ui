@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -514,6 +515,55 @@ func TestStreamRegistryRefusesAfterClose(t *testing.T) {
 	assert.Zero(t, reg.Len(), "want no registered streams after close")
 }
 
+// tickOffset parses a tick label into how far before "now" it sits.
+// time.ParseDuration has no unit for days, so those are handled separately.
+func tickOffset(t *testing.T, label string) time.Duration {
+	t.Helper()
+
+	if label == "now" {
+		return 0
+	}
+	body := strings.TrimPrefix(label, "-")
+	if days, ok := strings.CutSuffix(body, "d"); ok {
+		n, err := strconv.Atoi(days)
+		require.NoError(t, err, "tick %q", label)
+		return time.Duration(n) * 24 * time.Hour
+	}
+	d, err := time.ParseDuration(body)
+	require.NoError(t, err, "tick %q", label)
+	return d
+}
+
+// TestTicksAreEvenlySpaced treats the label strip as a correctness property
+// rather than a snapshot.
+//
+// Ticks lays the labels out with flex justify-between, so they land at equal
+// spacing across the chart however many there are. A set whose labels are not
+// equally spaced in TIME therefore prints a label underneath a position that
+// means something else, and the axis lies without looking wrong. Three ranges
+// used to do exactly that: 6h skipped -2h, 24h ended on two 3h steps after
+// three 6h ones, and 7d mixed 2d and 1d steps.
+func TestTicksAreEvenlySpaced(t *testing.T) {
+	t.Parallel()
+
+	for _, r := range AllRanges() {
+		labels := r.Ticks()
+
+		require.GreaterOrEqual(t, len(labels), 3, "%s: too few labels to space", r)
+		assert.Equal(t, "now", labels[len(labels)-1], "%s: the strip must end at now", r)
+		assert.Equal(t, r.Duration(), tickOffset(t, labels[0]),
+			"%s: the strip must start at the window edge", r)
+
+		want := r.Duration() / time.Duration(len(labels)-1)
+		for i := 1; i < len(labels); i++ {
+			gap := tickOffset(t, labels[i-1]) - tickOffset(t, labels[i])
+			assert.Equal(t, want, gap,
+				"%s: %q to %q is %s, but %d labels across %s means every gap is %s",
+				r, labels[i-1], labels[i], gap, len(labels), r.Duration(), want)
+		}
+	}
+}
+
 func TestAssetsAreContentHashedAndImmutable(t *testing.T) {
 	t.Parallel()
 
@@ -531,4 +581,38 @@ func TestAssetsAreContentHashedAndImmutable(t *testing.T) {
 	// Last-Modified and no ETag of its own; the hashed name plus this header
 	// is the entire caching strategy.
 	assert.Contains(t, rec.Header().Get("Cache-Control"), "immutable", "want immutable for a hashed asset")
+}
+
+// TestAssetsConditionalRequestKeepsCachingHeaders pins what a 304 must carry.
+//
+// A 304 answering If-None-Match has to repeat the ETag and Cache-Control the
+// 200 would have carried, or the browser cannot extend the freshness lifetime
+// and revalidates the hashed asset on every load — which defeats the whole
+// content-hash-plus-immutable strategy. An earlier hand-rolled branch here
+// wrote the 304 before those headers were set; http.ServeContent now answers
+// the conditional itself, after they are in place.
+func TestAssetsConditionalRequestKeepsCachingHeaders(t *testing.T) {
+	t.Parallel()
+
+	assets, err := NewAssets()
+	require.NoError(t, err)
+
+	path := strings.TrimPrefix(assets.JS(), AssetPrefix[:len(AssetPrefix)-1])
+
+	first := httptest.NewRecorder()
+	assets.ServeHTTP(first, httptest.NewRequest(http.MethodGet, path, nil))
+	require.Equal(t, http.StatusOK, first.Code)
+
+	etag := first.Header().Get("ETag")
+	require.NotEmpty(t, etag, "no ETag on the 200, so there is nothing to revalidate with")
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("If-None-Match", etag)
+	second := httptest.NewRecorder()
+	assets.ServeHTTP(second, req)
+
+	require.Equal(t, http.StatusNotModified, second.Code, "a matching ETag must revalidate")
+	assert.Equal(t, etag, second.Header().Get("ETag"), "the 304 dropped the ETag")
+	assert.Contains(t, second.Header().Get("Cache-Control"), "immutable",
+		"the 304 dropped Cache-Control")
 }

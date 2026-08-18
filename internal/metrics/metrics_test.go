@@ -329,6 +329,17 @@ func TestPollerRunStopsOnContextCancel(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- p.Run(ctx) }()
 
+	// Wait for the immediate first scrape before cancelling. Asserting on it
+	// after an unconditional cancel races Run: if the cancellation is observed
+	// first, nothing is ever pushed and the assertion fails for a reason that
+	// has nothing to do with what it is testing.
+	require.Eventually(t, func() bool {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		return rec.usageN > 0
+	}, 5*time.Second, time.Millisecond,
+		"no scrape before the first tick; the dashboard would be blank for a whole interval")
+
 	cancel()
 	select {
 	case err := <-done:
@@ -336,8 +347,6 @@ func TestPollerRunStopsOnContextCancel(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancellation")
 	}
-
-	assert.NotZero(t, rec.usageN, "no scrape before the first tick; the dashboard would be blank for a whole interval")
 }
 
 func TestNewPollerDefaultsInterval(t *testing.T) {

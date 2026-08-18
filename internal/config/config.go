@@ -114,6 +114,20 @@ func Load() (Config, []Warning, error) {
 		return Config{}, warns, fmt.Errorf("ARC_UI_KUBE_QPS and ARC_UI_KUBE_BURST must be positive")
 	}
 
+	// Both halves of the shutdown sequence are fed to time.After and
+	// context.WithTimeout, neither of which rejects a negative duration — they
+	// just fire immediately. Unchecked, ARC_UI_PRESTOP_DELAY=-1s silently skips
+	// the window that keeps the pod serving while endpoints controllers stop
+	// routing to it, and a non-positive ARC_UI_SHUTDOWN_TIMEOUT cuts in-flight
+	// requests and SSE streams at once and leaves the store no time to
+	// checkpoint. Both look like a clean shutdown in the logs.
+	if cfg.PreStopDelay < 0 {
+		return Config{}, warns, fmt.Errorf("ARC_UI_PRESTOP_DELAY=%s must not be negative", cfg.PreStopDelay)
+	}
+	if cfg.ShutdownTimeout <= 0 {
+		return Config{}, warns, fmt.Errorf("ARC_UI_SHUTDOWN_TIMEOUT=%s must be positive", cfg.ShutdownTimeout)
+	}
+
 	cfg.Namespaces = normalizeNamespaces(cfg.Namespaces)
 
 	return cfg, warns, nil

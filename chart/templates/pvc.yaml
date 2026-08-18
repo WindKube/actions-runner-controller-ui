@@ -36,7 +36,13 @@ spec:
   all", for binding a hand-provisioned PV.
   */}}
   {{- with .Values.persistence.storageClassName }}
-  storageClassName: {{ . | quote }}
+  {{- /*
+  "-" has to reach the API server as the empty string. Kubernetes reads an
+  empty storageClassName as "bind no class", while a literal "-" is just a
+  class name — the PVC then waits forever for a StorageClass called "-", which
+  looks like a broken provisioner rather than a values typo.
+  */}}
+  storageClassName: {{ ternary "" . (eq . "-") | quote }}
   {{- end }}
   {{- with .Values.persistence.selector }}
   selector:

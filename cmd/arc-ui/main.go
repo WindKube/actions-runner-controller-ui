@@ -306,7 +306,20 @@ func run(parent context.Context) error {
 		cfg.PreStopDelay+cfg.ShutdownTimeout+5*time.Second)
 	defer cancel()
 
-	return server.Shutdown(shutdownCtx)
+	shutdownErr := server.Shutdown(shutdownCtx)
+
+	// Join the recorder before returning. Its worker holds the store, and
+	// db.Close is deferred further up this function — deferred calls run after
+	// this return, so without the join a RecordSnapshot still in flight can
+	// write to a closed store. ctx is already cancelled, so the worker is
+	// on its way out; this waits only for the write it was in the middle of.
+	select {
+	case <-recorder.stopped:
+	case <-shutdownCtx.Done():
+		log.Warn().Msg("snapshot recorder did not stop before the shutdown deadline")
+	}
+
+	return shutdownErr
 }
 
 // storeSource turns a write outcome into the health-strip verdict. A nil error
