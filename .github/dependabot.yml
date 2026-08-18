@@ -1,0 +1,90 @@
+# Pinning every action to a commit SHA is only half the job. A SHA is immutable,
+# which is the point — and also means a pinned action never picks up a security
+# fix on its own. Without something bumping them, SHA pins rot into a liability
+# and the usual response is to give up and go back to floating tags.
+#
+# Dependabot reads the `# vX.Y.Z` comment beside each SHA to know what version it
+# is looking at, and rewrites both the SHA and the comment together. That comment
+# is load-bearing: drop it and Dependabot can no longer bump the pin.
+#
+# Every updater below sets a 7-day `cooldown`, i.e. it will not propose a version
+# until it has been public for a week. Dependabot's own default is three days.
+# The reasoning is that package compromises are usually *opportunistic* — the
+# attacker expects the ecosystem to yank the malicious version fairly quickly, so
+# the danger window is measured in hours or days. Auto-adopting a release the
+# moment it appears is what walks into that window; waiting a week means somebody
+# else finds it first. It also avoids day-one regressions.
+#
+# The cost is real and deliberate: new versions arrive a week late. Note that
+# Dependabot *alerts* are advisory-driven and independent of these version-update
+# entries, and zizmor.yml re-audits on a schedule, so neither route to hearing
+# about a known-vulnerable dependency depends on this cooldown.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "ci"
+    groups:
+      # One PR per week for the whole set rather than eight. Actions updates are
+      # reviewed as "did anything here change behaviour", which is a judgement
+      # made once across the batch, not eight times.
+      #
+      # Note that zizmor.yml re-audits on a schedule, so a genuinely vulnerable
+      # action gets flagged in the Security tab independently of whether this
+      # week's grouped PR has been merged.
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+    commit-message:
+      prefix: "deps"
+    groups:
+      # Patch bumps of direct and indirect dependencies alike are noise
+      # individually and a single decision collectively.
+      go-patch:
+        patterns: ["*"]
+        update-types: ["patch"]
+      # Minors get their own PR: still grouped, but separated so a behavioural
+      # change is not reviewed in the same breath as a pile of patches.
+      go-minor:
+        patterns: ["*"]
+        update-types: ["minor"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+    commit-message:
+      prefix: "docker"
+    # Both base images in the Dockerfile are pinned tag@sha256, and this is what
+    # moves them. The distroless runtime base especially: it rebuilds often, and a
+    # digest pin means those rebuilds — including their CVE fixes — reach this
+    # image only when something bumps the pin.

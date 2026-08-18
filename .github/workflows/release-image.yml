@@ -1,0 +1,311 @@
+# ONE-TIME SETUP on the first release: GHCR creates the package private and
+# unlinked. Set it public and link it to this repository at
+# https://github.com/orgs/WindKube/packages/container/actions-runners-controller-ui/settings
+name: release-image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing git tag to rebuild and publish, e.g. v1.2.3
+        required: true
+        type: string
+
+concurrency:
+  group: release-image-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: windkube/actions-runners-controller-ui
+
+jobs:
+  prepare:
+    name: Resolve release metadata
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - name: Validate the tag and derive the version
+        id: resolve
+        env:
+          RAW_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          IS_PRERELEASE: ${{ github.event.release.prerelease || false }}
+        run: |
+          set -euo pipefail
+
+          semver_re='^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          if [[ ! "$RAW_TAG" =~ $semver_re ]]; then
+            echo "::error::refusing to build from tag '${RAW_TAG}': expected vMAJOR.MINOR.PATCH[-prerelease]"
+            exit 1
+          fi
+
+          version="${RAW_TAG#v}"
+
+          prerelease="$IS_PRERELEASE"
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          fi
+
+          {
+            echo "tag=${RAW_TAG}"
+            echo "version=${version}"
+            echo "prerelease=${prerelease}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Publishing ${version} from tag ${RAW_TAG} (prerelease=${prerelease})"
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: blacksmith-4vcpu-ubuntu-2404
+          - arch: arm64
+            platform: linux/arm64
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
+    steps:
+      - name: Checkout the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          persist-credentials: false
+
+      - name: Record the built commit
+        id: git
+        run: |
+          set -euo pipefail
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker builder
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
+        with:
+          cache-key: arc-ui-${{ matrix.arch }}
+
+      - name: Collect OCI labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.version }}
+          labels: |
+            org.opencontainers.image.title=arc-ui
+            org.opencontainers.image.description=Read-only web UI for Actions Runner Controller
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.git.outputs.sha }}
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Build and push by digest
+        id: build
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            COMMIT=${{ steps.git.outputs.sha }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::build produced no usable digest (got '${DIGEST}')"
+            exit 1
+          fi
+
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish and sign manifest list
+    needs: [prepare, build]
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Download the per-arch digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker builder
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
+        with:
+          cache-key: arc-ui-manifest
+
+      - name: Compute tags and annotations
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.prepare.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.prepare.outputs.tag }},enable=${{ needs.prepare.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.prerelease == 'false' }}
+          labels: |
+            org.opencontainers.image.title=arc-ui
+            org.opencontainers.image.description=Read-only web UI for Actions Runner Controller
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Create and push the manifest list
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          digests=(*)
+          (( ${#digests[@]} )) || { echo "::error::no per-arch digests were uploaded"; exit 1; }
+          echo "Assembling ${#digests[@]} architecture(s)"
+
+          mapfile -t tags < <(grep . <<< "$DOCKER_METADATA_OUTPUT_TAGS")
+          mapfile -t annotations < <(grep '^index:' <<< "$DOCKER_METADATA_OUTPUT_ANNOTATIONS")
+          (( ${#annotations[@]} )) || { echo "::error::no index-level annotations; DOCKER_METADATA_ANNOTATIONS_LEVELS must be 'index'"; exit 1; }
+
+          docker buildx imagetools create \
+            "${tags[@]/#/--tag=}" \
+            "${annotations[@]/#index:/--annotation=}" \
+            "${digests[@]/#/${IMAGE}@sha256:}"
+
+      - name: Resolve the manifest list digest
+        id: digest
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" \
+            --format '{{json .Manifest}}' | jq -r '.digest')"
+
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::could not resolve a manifest digest for ${IMAGE}:${VERSION} (got '${digest}')"
+            exit 1
+          fi
+
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "Manifest list digest: ${digest}"
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign the image
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes --recursive "${IMAGE}@${DIGEST}"
+
+      - name: Verify the signature and the attestation
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          echo "::group::cosign verify"
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/\.github/workflows/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${IMAGE}@${DIGEST}"
+          echo "::endgroup::"
+
+          echo "::group::gh attestation verify"
+          gh attestation verify "oci://${IMAGE}@${DIGEST}" --owner "${GITHUB_REPOSITORY_OWNER}"
+          echo "::endgroup::"
+
+      - name: Summarise the release
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          {
+            echo "### Published \`${IMAGE}:${VERSION}\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Digest | \`${DIGEST}\` |"
+            echo "| Platforms | linux/amd64, linux/arm64 |"
+            echo "| Signature | cosign keyless (recursive), verified |"
+            echo "| Provenance | GitHub artifact attestation, verified |"
+            echo
+            echo '```'
+            echo "docker pull ${IMAGE}:${VERSION}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}"

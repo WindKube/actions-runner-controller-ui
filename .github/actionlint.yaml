@@ -1,0 +1,15 @@
+# actionlint configuration.
+#
+# actionlint validates `runs-on:` against the list of labels GitHub itself
+# provides, so every Blacksmith runner reads as an unknown label. Declaring them
+# here is not merely silencing a warning — it is what turns the check back on. A
+# typo like `blacksmith-4vcpu-ubunut-2404` is otherwise caught by nothing: the
+# workflow parses, the job queues, and it waits for a runner that will never
+# exist until somebody notices the release never shipped.
+#
+# Keep this list in step with the runners actually used across .github/workflows.
+self-hosted-runner:
+  labels:
+    - blacksmith-2vcpu-ubuntu-2404
+    - blacksmith-4vcpu-ubuntu-2404
+    - blacksmith-4vcpu-ubuntu-2404-arm

@@ -1,0 +1,41 @@
+# Everything the build context does not need. Keeping this tight matters more
+# than it looks: the context is uploaded to the builder on every build, and a
+# stray .git or node_modules turns a sub-second transfer into a slow one — and on
+# a shared builder, a leaked .git also hands the build any credentials stored in
+# it.
+
+.git
+.gitignore
+.github
+.dockerignore
+
+# Docs and licences: the image carries its provenance in OCI labels instead.
+*.md
+LICENSE
+
+# Local tool state and editor droppings.
+.bin
+.cache
+.idea
+.vscode
+.DS_Store
+.mise.toml
+mise.toml
+
+# Build and test output. Any binary here was built for the host, not for
+# $TARGETPLATFORM, so letting one into the context risks shipping the wrong one.
+/bin
+/dist
+/out
+*.exe
+*.test
+*.out
+coverage.*
+*.coverprofile
+
+# Compose and chart definitions consume the image; they are not inputs to it.
+compose.yaml
+compose.yml
+docker-compose.yaml
+docker-compose.yml
+/chart

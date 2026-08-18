@@ -1,0 +1,22 @@
+# go-test-coverage configuration, consumed by the test job in
+# .github/workflows/ci.yml. Kept as a file rather than action inputs so that
+# `go-test-coverage --config=.testcoverage.yml` reproduces CI's verdict locally.
+profile: coverage.out
+
+# Ratchet floors, not targets. They sit just under today's numbers so that a
+# regression trips them, and they are meant to be raised as real code lands.
+#
+# Current state (scaffolding only): total 61.9%, cmd/arc-ui 56.8%,
+# internal/version 100%. cmd/arc-ui trails permanently because main() calls
+# os.Exit and cli() parses global flags, so neither is reachable from a test.
+threshold:
+  file: 50
+  package: 50
+  total: 55
+
+exclude:
+  paths:
+    # Pre-staged for the arc-ui import: templ and ent generated sources. Holding
+    # generated code to a coverage floor measures the generator, not this project.
+    - _templ\.go$
+    - ^internal/store/ent/

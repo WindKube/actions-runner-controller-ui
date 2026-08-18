@@ -1,0 +1,97 @@
+# release-drafter configuration. Consumed by .github/workflows/release-drafter.yml.
+#
+# Categories are driven by PR labels, and so is the version bump. That is a
+# deliberate trade: it means an unlabelled PR lands in the uncategorised tail and
+# only bumps the patch version, which is visible in the draft and easy to fix by
+# relabelling and re-running the workflow. The alternative — parsing titles for
+# conventional-commit prefixes — fails silently on a typo.
+#
+# There is intentionally NO `autolabeler:` block. Autolabelling requires the
+# workflow to run on `pull_request_target`, which executes the trusted workflow
+# from the base branch with a write-scoped token in a context that can be
+# influenced by the PR. For a public repository accepting outside contributions
+# that is a bad trade for the convenience of not typing a label.
+
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+
+categories:
+  - title: "🚨 Breaking changes"
+    labels: ["breaking"]
+  - title: "✨ Features"
+    labels: ["feature", "enhancement"]
+  - title: "🐛 Fixes"
+    labels: ["fix", "bug"]
+  - title: "🔒 Security"
+    labels: ["security"]
+  - title: "📚 Documentation"
+    labels: ["documentation"]
+  - title: "⬆️ Dependencies"
+    labels: ["dependencies"]
+    # Dependabot output is the bulk of the volume and the least of the interest.
+    # Collapsing keeps it available without letting it bury the human changes.
+    collapse-after: 5
+  - title: "🧹 Maintenance"
+    labels: ["chore", "refactor", "ci", "test"]
+
+exclude-labels:
+  - "skip-changelog"
+
+change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
+# A PR title is free text that ends up rendered as markdown. Escaping these stops
+# a title containing `_`, `<` or a backtick from mangling the release notes — or
+# from `@`-pinging an unrelated account.
+change-title-escapes: '\<*_&`#@'
+
+no-changes-template: "- No changes"
+
+version-resolver:
+  major:
+    labels: ["major", "breaking"]
+  minor:
+    labels: ["minor", "feature", "enhancement"]
+  patch:
+    labels: ["patch", "fix", "bug", "security", "documentation", "dependencies", "chore", "refactor", "ci", "test"]
+  # The conservative direction. Under-bumping produces a wrong-looking version
+  # number; over-bumping to a major silently claims a breaking change that
+  # downstream consumers will act on.
+  default: patch
+
+template: |
+  ## What's changed
+
+  $CHANGES
+
+  ## Container image
+
+  ```
+  docker pull ghcr.io/windkube/actions-runners-controller-ui:$RESOLVED_VERSION
+  ```
+
+  Multi-arch (`linux/amd64`, `linux/arm64`), built by
+  [`release-image.yml`](https://github.com/$OWNER/$REPOSITORY/blob/main/.github/workflows/release-image.yml)
+  and signed keylessly — no maintainer holds a signing key.
+
+  <details>
+  <summary>Verifying the image before you run it</summary>
+
+  Build provenance, via GitHub's attestation store:
+
+  ```
+  gh attestation verify \
+    oci://ghcr.io/windkube/actions-runners-controller-ui:$RESOLVED_VERSION \
+    --owner $OWNER
+  ```
+
+  Or the cosign signature, if you already verify images that way:
+
+  ```
+  cosign verify \
+    --certificate-identity-regexp '^https://github.com/$OWNER/$REPOSITORY/\.github/workflows/' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    ghcr.io/windkube/actions-runners-controller-ui:$RESOLVED_VERSION
+  ```
+
+  </details>
+
+  **Full changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
