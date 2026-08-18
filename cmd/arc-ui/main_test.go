@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/WindKube/actions-runners-controller-ui/internal/version"
+	"github.com/WindKube/actions-runner-controller-ui/internal/version"
 )
 
 func TestHandlerRoutes(t *testing.T) {

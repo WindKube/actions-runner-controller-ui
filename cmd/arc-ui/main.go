@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/WindKube/actions-runners-controller-ui/internal/version"
+	"github.com/WindKube/actions-runner-controller-ui/internal/version"
 )
 
 const (

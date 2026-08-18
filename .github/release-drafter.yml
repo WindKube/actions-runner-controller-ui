@@ -51,7 +51,19 @@ version-resolver:
   minor:
     labels: ["minor", "feature", "enhancement"]
   patch:
-    labels: ["patch", "fix", "bug", "security", "documentation", "dependencies", "chore", "refactor", "ci", "test"]
+    labels:
+      [
+        "patch",
+        "fix",
+        "bug",
+        "security",
+        "documentation",
+        "dependencies",
+        "chore",
+        "refactor",
+        "ci",
+        "test",
+      ]
   # The conservative direction. Under-bumping produces a wrong-looking version
   # number; over-bumping to a major silently claims a breaking change that
   # downstream consumers will act on.
@@ -65,7 +77,7 @@ template: |
   ## Container image
 
   ```
-  docker pull ghcr.io/windkube/actions-runners-controller-ui:$RESOLVED_VERSION
+  docker pull ghcr.io/windkube/actions-runner-controller-ui:$RESOLVED_VERSION
   ```
 
   Multi-arch (`linux/amd64`, `linux/arm64`), built by
@@ -79,7 +91,7 @@ template: |
 
   ```
   gh attestation verify \
-    oci://ghcr.io/windkube/actions-runners-controller-ui:$RESOLVED_VERSION \
+    oci://ghcr.io/windkube/actions-runner-controller-ui:$RESOLVED_VERSION \
     --owner $OWNER
   ```
 
@@ -89,7 +101,7 @@ template: |
   cosign verify \
     --certificate-identity-regexp '^https://github.com/$OWNER/$REPOSITORY/\.github/workflows/' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    ghcr.io/windkube/actions-runners-controller-ui:$RESOLVED_VERSION
+    ghcr.io/windkube/actions-runner-controller-ui:$RESOLVED_VERSION
   ```
 
   </details>

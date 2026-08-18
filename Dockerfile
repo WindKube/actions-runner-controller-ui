@@ -44,7 +44,7 @@ COPY go.mod go.sum* ./
 # re-downloads only what actually changed. Blacksmith's builder keeps these
 # mounts on its sticky disk across runs.
 RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download -x
+  go mod download -x
 
 # ---------------------------------------------------------------------------
 # 2. build
@@ -71,16 +71,16 @@ COPY . .
 #   be minimal.
 # CGO_ENABLED=0 is what makes the result runnable on distroless *static*.
 RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build \
-      -trimpath \
-      -ldflags="-s -w \
-        -X github.com/WindKube/actions-runners-controller-ui/internal/version.Version=${VERSION} \
-        -X github.com/WindKube/actions-runners-controller-ui/internal/version.Commit=${COMMIT} \
-        -X github.com/WindKube/actions-runners-controller-ui/internal/version.Date=${BUILD_DATE}" \
-      -o /out/arc-ui \
-      ./cmd/arc-ui
+  --mount=type=cache,target=/root/.cache/go-build \
+  CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+  go build \
+  -trimpath \
+  -ldflags="-s -w \
+  -X github.com/WindKube/actions-runner-controller-ui/internal/version.Version=${VERSION} \
+  -X github.com/WindKube/actions-runner-controller-ui/internal/version.Commit=${COMMIT} \
+  -X github.com/WindKube/actions-runner-controller-ui/internal/version.Date=${BUILD_DATE}" \
+  -o /out/arc-ui \
+  ./cmd/arc-ui
 
 # ---------------------------------------------------------------------------
 # 3. runtime
@@ -94,10 +94,10 @@ ARG VERSION=dev
 # These are a fallback. The release workflow passes the authoritative set via
 # docker/metadata-action, which overrides anything declared here.
 LABEL org.opencontainers.image.title="arc-ui" \
-      org.opencontainers.image.description="Read-only web UI for Actions Runner Controller" \
-      org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.source="https://github.com/WindKube/actions-runners-controller-ui"
+  org.opencontainers.image.description="Read-only web UI for Actions Runner Controller" \
+  org.opencontainers.image.version="${VERSION}" \
+  org.opencontainers.image.licenses="Apache-2.0" \
+  org.opencontainers.image.source="https://github.com/WindKube/actions-runner-controller-ui"
 
 COPY --from=build /out/arc-ui /usr/local/bin/arc-ui
 

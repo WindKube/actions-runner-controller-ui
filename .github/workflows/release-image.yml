@@ -1,6 +1,6 @@
 # ONE-TIME SETUP on the first release: GHCR creates the package private and
 # unlinked. Set it public and link it to this repository at
-# https://github.com/orgs/WindKube/packages/container/actions-runners-controller-ui/settings
+# https://github.com/orgs/WindKube/packages/container/actions-runner-controller-ui/settings
 name: release-image
 
 on:
@@ -21,7 +21,7 @@ permissions: {}
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: windkube/actions-runners-controller-ui
+  IMAGE_NAME: windkube/actions-runner-controller-ui
 
 jobs:
   prepare:

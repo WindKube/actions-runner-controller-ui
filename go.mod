@@ -1,4 +1,4 @@
-module github.com/WindKube/actions-runners-controller-ui
+module github.com/WindKube/actions-runner-controller-ui
 
 // Minor-only on purpose. A patch-pinned directive (`go 1.26.5`) makes the
 // Dockerfile's `golang:1.26` base image download a second toolchain whenever the
