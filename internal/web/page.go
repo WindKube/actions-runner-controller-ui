@@ -665,13 +665,23 @@ func resourceChart(title string, used, request []float64, r TimeRange, stroke, f
 		},
 	}
 
-	if req := lastOf(request); req > 0 {
+	// Any positive sample in the window earns the line, not just the newest
+	// one: a fleet that has scaled to nothing since midnight still reserved
+	// what it reserved, and that is the only thing left on the panel to read.
+	if anyPositive(request) {
 		c.Refs = append(c.Refs, RefLine{
-			Points: chart.FlatLine(req, chartW, lineH, peak),
+			// The whole series rather than its newest value flattened across
+			// the window. Requests move — sets get rescaled and the runner
+			// count they are multiplied by changes every scrape — so a flat
+			// line backdates today's reservation over an hour that never saw
+			// it, and the usage it is being compared against is real.
+			Points: chart.Plot(request, chartW, lineH, peak, "", strokeMuted).Points,
 			Stroke: strokeMuted,
-			Label:  "requested " + format(req),
+			Label:  "requested " + format(lastOf(request)),
 		})
-		c.Legend = append(c.Legend, LegendItem{Label: "requested", Tone: ToneMuted, Value: format(req)})
+		c.Legend = append(c.Legend, LegendItem{
+			Label: "requested", Tone: ToneMuted, Value: format(lastOf(request)),
+		})
 	}
 	return c
 }
@@ -741,6 +751,20 @@ func runnerLine(title string, at []time.Time, vals []float64, request, limit flo
 		})
 	}
 	return c
+}
+
+// anyPositive reports whether a series ever rose above zero in the window.
+//
+// PeakOf cannot answer this: it floors its result at 1 so callers can divide by
+// it, which makes an all-zero series indistinguishable from one that peaked at
+// one.
+func anyPositive(v []float64) bool {
+	for _, x := range v {
+		if x > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func lastOf(v []float64) float64 {

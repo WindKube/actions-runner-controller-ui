@@ -616,3 +616,58 @@ func TestAssetsConditionalRequestKeepsCachingHeaders(t *testing.T) {
 	assert.Contains(t, second.Header().Get("Cache-Control"), "immutable",
 		"the 304 dropped Cache-Control")
 }
+
+// The requested-resources line is drawn from a series the store has kept all
+// along, yet resourceChart drew only its newest value, flat across the whole
+// window. A fleet that grew from 2 cores to 6 an instant ago then claimed to
+// have reserved 6 cores for the entire hour — a reservation that never
+// happened, on the one panel whose whole job is comparing usage against what
+// was actually reserved at the time.
+func TestRequestLineFollowsHistoryNotOnlyItsNewestValue(t *testing.T) {
+	t.Parallel()
+
+	used := []float64{1, 1, 1, 4}
+	request := []float64{2, 2, 2, 6}
+
+	c := resourceChart("cpu", used, request, Range1h, strokeCPU, fillCPU, ToneCPU, fleet.FormatCores)
+
+	require.Len(t, c.Refs, 1, "want the requested reference line")
+	ys := polylineYs(t, c.Refs[0].Points)
+	require.Len(t, ys, len(request), "want one point per sample, got %v", ys)
+	// SVG y grows downward, so the smaller early request sits lower on the plot
+	// than the larger closing one.
+	assert.Greater(t, ys[0], ys[3],
+		"the early 2-core request must sit below the closing 6-core one, got %v", ys)
+}
+
+// polylineYs pulls the y coordinate out of each "x,y" pair of a points string.
+func polylineYs(t *testing.T, points string) []float64 {
+	t.Helper()
+
+	fields := strings.Fields(points)
+	out := make([]float64, 0, len(fields))
+	for _, pair := range fields {
+		_, y, ok := strings.Cut(pair, ",")
+		require.True(t, ok, "malformed point %q in %q", pair, points)
+		v, err := strconv.ParseFloat(y, 64)
+		require.NoError(t, err, "parse y of %q", pair)
+		out = append(out, v)
+	}
+	return out
+}
+
+// A fleet scaled to nothing right now still reserved resources for the rest of
+// the window, and that history is the only thing on the panel worth looking at.
+// Gating the line on its newest value alone blanks it every night.
+func TestRequestLineSurvivesAFleetThatIsIdleRightNow(t *testing.T) {
+	t.Parallel()
+
+	used := []float64{1, 1, 1, 0}
+	request := []float64{2, 2, 2, 0}
+
+	c := resourceChart("cpu", used, request, Range1h, strokeCPU, fillCPU, ToneCPU, fleet.FormatCores)
+
+	require.Len(t, c.Refs, 1, "want the requested line kept for the history in the window")
+	assert.Len(t, polylineYs(t, c.Refs[0].Points), len(request),
+		"want one point per sample even though the newest is zero")
+}
