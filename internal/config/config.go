@@ -122,6 +122,9 @@ func Load() (Config, []Warning, error) {
 	if cfg.KubeQPS <= 0 || cfg.KubeBurst <= 0 {
 		return Config{}, warns, fmt.Errorf("ARC_UI_KUBE_QPS and ARC_UI_KUBE_BURST must be positive")
 	}
+	if cfg.ListenerMetricsPath != "" && !strings.HasPrefix(cfg.ListenerMetricsPath, "/") {
+		return Config{}, warns, fmt.Errorf("ARC_UI_LISTENER_METRICS_PATH=%q must begin with /", cfg.ListenerMetricsPath)
+	}
 
 	// Both halves of the shutdown sequence are fed to time.After and
 	// context.WithTimeout, neither of which rejects a negative duration — they

@@ -1071,6 +1071,7 @@ func storePanel(s StoreStats, now time.Time) StorePanel {
 			{Label: "jobs", Value: Thousands(s.Jobs), Mono: true},
 			{Label: "phases", Value: Thousands(s.Phases), Mono: true},
 			{Label: "churn events", Value: Thousands(s.ChurnEvents), Mono: true},
+			{Label: "failures", Value: Thousands(s.Failures), Mono: true},
 			{Label: "oldest sample", Value: oldest, Mono: true},
 			{Label: "file", Value: Dash(s.Path), Mono: true},
 		},

@@ -68,7 +68,7 @@ const maxBodyBytes = 8 << 20
 // hunting through the dashboard's own settings, where the problem is not.
 const disabledReason = "listener metrics endpoint not configured; ARC ships them disabled — " +
 	"uncomment the metrics: block in the gha-runner-scale-set-controller chart values, " +
-	"expose the listener's metrics port with a Service, then set ARC_UI_LISTENER_METRICS_URL"
+	"then recreate the listener pods so they pick up the flags"
 
 // Sink receives each scrape result and each health change.
 type Sink interface {

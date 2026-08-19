@@ -243,6 +243,7 @@ type StoreStats struct {
 	Jobs        int64
 	Phases      int64
 	ChurnEvents int64
+	Failures    int64
 	Rows        int64
 
 	// Oldest is the timestamp of the oldest surviving sample, which is the

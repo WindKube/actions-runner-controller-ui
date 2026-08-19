@@ -206,7 +206,7 @@ their `name` and `namespace` labels — a Prometheus federation endpoint, for
 instance, in which case scrape the listeners with a PodMonitor using
 `honorLabels: true` and point the dashboard at:
 
-```
+```text
 http://prometheus-operated.monitoring.svc:9090/federate?match%5B%5D=%7B__name__%3D~%22gha_.%2A%22%7D
 ```
 
