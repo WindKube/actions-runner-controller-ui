@@ -24,11 +24,18 @@ which source failed and why — that is the diagnosis, not an error to file:
                             that API group, NOT podmetrics/nodemetrics; the wrong
                             spelling matches nothing and 403s exactly like a
                             missing metrics-server.
-  * listener unavailable    either ARC_UI_LISTENER_METRICS_URL is unset (ARC
-                            ships listener metrics disabled) or
+  * listener unavailable    the listener pods expose no metrics port, because
+                            ARC ships listener metrics disabled — uncomment the
+                            metrics: block in the gha-runner-scale-set-controller
+                            values and recreate the listener pods. Or
                             ARC_UI_CONTROLLER_NAMESPACE points at the wrong
-                            namespace — the listener pods are NOT in the runner
-                            namespace.
+                            namespace: the listener pods are NOT in the runner
+                            namespace, and discovery looks for them there.
+  * listeners partly scraped  some listeners answered and some did not; the strip
+                            names the ones that failed. The sets they serve show
+                            no queue depth rather than zero. Usually a listener
+                            restarting, or a NetworkPolicy in the controller
+                            namespace denying ingress to its metrics port.
 
 {{- if not .Values.persistence.enabled }}
 

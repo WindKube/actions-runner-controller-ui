@@ -88,8 +88,9 @@ reproducible — see [Regenerating the screenshots](#regenerating-the-screenshot
   `actions.github.com` scale-set CRDs, not the legacy `actions.summerwind.net`
   ones).
 - Read access to the runner namespaces and to the controller namespace.
-- Optional: `metrics-server`, for CPU and memory. Optional: the ARC listener's
-  Prometheus endpoint, for queue depth. Both absent is a supported configuration.
+- Optional: `metrics-server`, for CPU and memory. Optional: ARC's listener
+  metrics, for queue depth ([how to turn them on](#queue-depth)). Both absent is
+  a supported configuration.
 
 ## Quick start
 
@@ -127,7 +128,8 @@ authority; this table is it in prose.
 | `ARC_UI_NAMESPACES` | `arc-runners` | comma-separated namespaces holding the AutoscalingRunnerSets and runner pods. **Empty means every namespace** (needs cluster-wide RBAC) |
 | `ARC_UI_CONTROLLER_NAMESPACE` | `arc-systems` | where the ARC controller and the AutoscalingListener pods live. Not the runner namespace |
 | `ARC_UI_SCRAPE_INTERVAL` | `15s` | pod/node metrics poll period. Below 15s re-fetches identical data (metrics-server's own resolution) and only burns API quota; below 1s is rejected |
-| `ARC_UI_LISTENER_METRICS_URL` | — | the ARC listener's Prometheus endpoint. Optional: ARC ships listener metrics disabled |
+| `ARC_UI_LISTENER_METRICS_URL` | — | scrape **one** endpoint instead of discovering the listeners — for something that aggregates them, such as a Prometheus `/federate` URL. See [Queue depth](#queue-depth) |
+| `ARC_UI_LISTENER_METRICS_PATH` | `/metrics` | the path discovered listeners serve metrics on; mirrors the controller chart's `metrics.listenerEndpoint` |
 | `ARC_UI_DB_PATH` | `/data/arc-ui.db` | SQLite history file |
 | `ARC_UI_RETENTION_RUNNER_RAW` | `15m` | raw per-runner samples — only the runner detail view reads them |
 | `ARC_UI_RETENTION_SCOPE_RAW` | `6h` | raw per-scale-set samples |
@@ -146,6 +148,73 @@ authority; this table is it in prose.
 | `ARC_UI_SENTRY_SAMPLE_RATE` | `1.0` | |
 | `KUBE_API_URL` | — | override the API server address. **Unprefixed on purpose**: it names shared infrastructure, not this app's own setting. `metrics.k8s.io` is an aggregated API served *through* the API server, so this one URL covers custom resources, pods, events and metrics alike |
 | `METRICS_SERVER_URL` | — | deprecated alias for `KUBE_API_URL`, folded in with a warning. It was always a misunderstanding: nothing talks to metrics-server directly |
+
+## Queue depth
+
+Queue depth — jobs GitHub has assigned to a scale set that have no runner yet —
+is the one number the cluster cannot tell you. It exists only on GitHub's side of
+the listener's connection, so it comes from the ARC listeners' Prometheus
+endpoints, and **ARC ships those disabled**. Everything else on the dashboard
+works without them.
+
+To turn them on, uncomment the `metrics:` block in the
+`gha-runner-scale-set-controller` chart values:
+
+```yaml
+metrics:
+  controllerManagerAddr: ":8080"
+  listenerAddr: ":8080"
+  listenerEndpoint: "/metrics"
+```
+
+then upgrade the controller and recreate the listener pods, which is what makes
+them pick the flags up:
+
+```bash
+kubectl -n arc-systems delete pod \
+  -l app.kubernetes.io/component=runner-scale-set-listener
+```
+
+Running jobs are unaffected; there is a few-second gap where new job assignments
+are not picked up. Confirm the port exists — its absence is how a listener says
+metrics are off:
+
+```bash
+kubectl -n arc-systems get pods \
+  -l app.kubernetes.io/component=runner-scale-set-listener \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].ports}{"\n"}{end}'
+```
+
+Nothing else is needed: **the dashboard discovers the listeners itself**. It finds
+the AutoscalingListener pods in `ARC_UI_CONTROLLER_NAMESPACE`, reads each pod's IP
+and its port named `metrics`, and scrapes all of them, merging the answers per
+scale set. That matters because ARC runs **one listener per scale set** and each
+serves only its own series — so a fleet of twenty scale sets has twenty endpoints,
+and no single URL covers it.
+
+Which is also why `ARC_UI_LISTENER_METRICS_URL` is not the way to do this. It
+scrapes exactly one endpoint, and:
+
+- pointed at one listener, you get queue depth for that one scale set;
+- pointed at a Service in front of all of them, you get **one** of them — a
+  Service load-balances per connection and the scraper's keep-alive pins it to
+  whichever pod answered first, then silently jumps to another when the
+  connection is recycled.
+
+Set it only when something genuinely aggregates the listeners while preserving
+their `name` and `namespace` labels — a Prometheus federation endpoint, for
+instance, in which case scrape the listeners with a PodMonitor using
+`honorLabels: true` and point the dashboard at:
+
+```
+http://prometheus-operated.monitoring.svc:9090/federate?match%5B%5D=%7B__name__%3D~%22gha_.%2A%22%7D
+```
+
+Partial answers are published rather than discarded: if three of twenty listeners
+are unreachable, the other seventeen sets keep their queue depth, the three show
+no depth rather than zero, and the health strip names the listeners that failed.
+A NetworkPolicy in the controller namespace, or a service mesh requiring mTLS, is
+the usual reason for that.
 
 ## Kubernetes
 

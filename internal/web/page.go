@@ -1092,8 +1092,11 @@ func warnings(s fleet.Snapshot, t fleet.Totals) []string {
 	if !t.QueuedKnown && len(s.Sets) > 0 {
 		out = append(out, "queue depth is unavailable: ARC listener metrics are disabled")
 	}
+	// Any source carrying a reason is worth a line, available or not: a partial
+	// answer is a source that is working for some of the fleet and silent for
+	// the rest, and silence is what the warnings exist to break.
 	for _, src := range s.Sources {
-		if !src.Available && src.Reason != "" {
+		if src.Reason != "" {
 			out = append(out, src.Name+": "+src.Reason)
 		}
 	}

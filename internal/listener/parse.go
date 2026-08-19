@@ -98,11 +98,16 @@ func Parse(r io.Reader) (Metrics, error) {
 	return m, err
 }
 
-// parse is Parse plus the scale set name collisions it noticed on the way —
-// a deployment mistake worth naming, but not a parse error. Parse keeps the
-// two-result signature because that is the surface outside this package
-// compiles against.
-func parse(r io.Reader) (Metrics, []collision, error) {
+// parse is Parse plus the namespace index it built on the way, from which the
+// scale set name collisions fall out — a deployment mistake worth naming, but
+// not a parse error.
+//
+// The index rather than the collisions themselves, because one listener serves
+// one scale set: two same-named sets in different namespaces now produce two
+// separate bodies, and the collision only exists once their indexes are unioned.
+// Parse keeps the two-result signature because that is the surface outside this
+// package compiles against.
+func parse(r io.Reader) (Metrics, namespaceIndex, error) {
 	// The validation scheme must be passed explicitly: a zero-valued
 	// TextParser carries model.UnsetValidation and panics on the first metric
 	// name it sees. UTF8Validation is the permissive one — we are reading
@@ -131,7 +136,67 @@ func parse(r io.Reader) (Metrics, []collision, error) {
 		StartedJobsTotal:   collect(families, metricStartedJobs, sum, ns),
 		CompletedJobsTotal: collect(families, metricCompletedJobs, sum, ns),
 	}
-	return m, ns.collisions(), nil
+	return m, ns, nil
+}
+
+// fold merges other into m, with the same per-family rules parse applies within
+// one body.
+//
+// It exists because a fleet's metrics arrive as one body per listener, and the
+// two aggregations have to agree: a family summed inside a body and kept
+// first-wins across bodies would report a different number depending on how ARC
+// happened to distribute its listeners.
+func (m *Metrics) fold(other Metrics) {
+	// Summed, like parse's `sum` families: these count things that add up, and
+	// upstream already splits them by repository and workflow within one body.
+	foldSum(&m.AssignedJobs, other.AssignedJobs)
+	foldSum(&m.RunningJobs, other.RunningJobs)
+	foldSum(&m.RegisteredRunners, other.RegisteredRunners)
+	foldSum(&m.BusyRunners, other.BusyRunners)
+	foldSum(&m.IdleRunners, other.IdleRunners)
+	foldSum(&m.StartedJobsTotal, other.StartedJobsTotal)
+	foldSum(&m.CompletedJobsTotal, other.CompletedJobsTotal)
+
+	// Kept, like parse's `perScaleSet` families: these are per-scale-set limits
+	// rather than quantities, and the sum of two ceilings is a ceiling that
+	// exists nowhere.
+	foldKeep(&m.DesiredRunners, other.DesiredRunners)
+	foldKeep(&m.MinRunners, other.MinRunners)
+	foldKeep(&m.MaxRunners, other.MaxRunners)
+}
+
+// foldSum adds src into dst, allocating only if there is something to add. A
+// family no listener exposed stays nil, because "not reported" and "zero" are
+// different answers.
+func foldSum(dst *map[string]float64, src map[string]float64) {
+	for set, v := range src {
+		if *dst == nil {
+			*dst = make(map[string]float64, len(src))
+		}
+		(*dst)[set] += v
+	}
+}
+
+// foldKeep takes src's value only for sets dst has never seen.
+func foldKeep(dst *map[string]float64, src map[string]float64) {
+	for set, v := range src {
+		if *dst == nil {
+			*dst = make(map[string]float64, len(src))
+		}
+		if _, seen := (*dst)[set]; !seen {
+			(*dst)[set] = v
+		}
+	}
+}
+
+// union folds other into i, so a name claimed by two listeners in two
+// namespaces is the collision it would have been inside one body.
+func (i namespaceIndex) union(other namespaceIndex) {
+	for set, namespaces := range other {
+		for ns := range namespaces {
+			i.add(set, ns)
+		}
+	}
 }
 
 // collision is one scale set name that turned up under more than one distinct

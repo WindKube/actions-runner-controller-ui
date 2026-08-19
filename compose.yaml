@@ -46,6 +46,14 @@ services:
       ARC_UI_NAMESPACES: "${ARC_UI_NAMESPACES:-arc-runners}"
       ARC_UI_CONTROLLER_NAMESPACE: "${ARC_UI_CONTROLLER_NAMESPACE:-arc-systems}"
       ARC_UI_SCRAPE_INTERVAL: "${ARC_UI_SCRAPE_INTERVAL:-15s}"
+      # Left empty, the dashboard discovers the ARC listener pods and scrapes them
+      # at their pod IPs — which works in-cluster and NOT from here, because pod
+      # IPs are not routable from your machine. Expect the health strip to name
+      # every listener as unreachable in this stack. For queue depth locally,
+      # port-forward one listener and point this at it, accepting that one URL
+      # covers one scale set:
+      #   kubectl -n arc-systems port-forward pod/<listener> 8080:8080
+      #   ARC_UI_LISTENER_METRICS_URL=http://host.docker.internal:8080/metrics
       ARC_UI_LISTENER_METRICS_URL: "${ARC_UI_LISTENER_METRICS_URL:-}"
       ARC_UI_GITHUB_ORG: "${ARC_UI_GITHUB_ORG:-}"
       ARC_UI_DB_PATH: "/data/arc-ui.db"

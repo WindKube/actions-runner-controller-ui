@@ -202,7 +202,15 @@ func run(parent context.Context) error {
 	poller := metrics.NewPoller(clients.Metrics, cfg.Namespaces, cfg.ScrapeInterval, log, collector)
 	go supervise(ctx, log, "metrics poller", poller.Run)
 
-	scraper := listener.NewScraper(cfg.ListenerMetricsURL, cfg.ScrapeInterval, log, collector)
+	// A configured URL wins: it names one endpoint, which is what an operator
+	// pointing the dashboard at an aggregator in front of the listeners — a
+	// Prometheus /federate URL, a proxy — has asked for. With nothing configured
+	// the listener pods are discovered from the controller namespace, because ARC
+	// runs one listener per scale set and each serves only its own series.
+	scraper := listener.NewDiscoveringScraper(collector, cfg.ScrapeInterval, log, collector)
+	if cfg.ListenerMetricsURL != "" {
+		scraper = listener.NewScraper(cfg.ListenerMetricsURL, cfg.ScrapeInterval, log, collector)
+	}
 	go supervise(ctx, log, "listener scraper", scraper.Run)
 
 	// Fleet changes are handed to the recorder, which persists each snapshot for

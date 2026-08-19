@@ -520,7 +520,12 @@ func JobSummary(r fleet.Runner) string {
 
 // SourceTone colours a data source in the control-plane strip.
 func SourceTone(s fleet.Source) Tone {
-	if s.Available {
+	switch {
+	case s.Available && s.Reason != "":
+		// Degraded: neither the green that says "nothing to look at" nor the red
+		// that says "this is down", because it is genuinely in between.
+		return ToneAttention
+	case s.Available:
 		return ToneSuccess
 	}
 	return ToneDanger
@@ -529,11 +534,14 @@ func SourceTone(s fleet.Source) Tone {
 // SourceValue is the text shown for a data source, favouring the failure
 // reason when there is one — an operator needs to know *why* a panel is empty.
 func SourceValue(s fleet.Source, okText string) string {
-	if s.Available {
-		return okText
-	}
+	// A reason on an available source means it answered only partly — a fleet
+	// whose listeners are half reachable, say. Reporting that as okText hides
+	// the half that is missing, and the panels it feeds give no other sign.
 	if s.Reason != "" {
 		return s.Reason
+	}
+	if s.Available {
+		return okText
 	}
 	return "unavailable"
 }

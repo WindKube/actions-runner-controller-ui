@@ -233,10 +233,30 @@ func (e Event) Warning() bool { return e.Type == "Warning" }
 // optional: the dashboard boots and serves with all of them broken, naming the
 // failures in the control-plane strip rather than rendering zeros.
 type Source struct {
-	Name      string
+	Name string
+	// Available is whether the source answered at all.
 	Available bool
+	// Reason explains a source that is unavailable — or, when Available is
+	// true, one that answered only partly. A fleet whose listeners are half
+	// reachable has real queue depth for half its sets, and painting that as an
+	// outage would be as wrong as painting it as healthy.
 	Reason    string
 	CheckedAt time.Time
+}
+
+// ListenerTarget is one ARC listener metrics endpoint to scrape.
+//
+// It lives here rather than in the scraper because the two sides must not import
+// each other: the collector discovers targets from its pod cache and the scraper
+// consumes them, and this package is the vocabulary they already share.
+type ListenerTarget struct {
+	// Set and Namespace name the scale set this listener serves. They are not
+	// used to key anything — the exposition carries its own labels — but they
+	// are what makes a per-target error message mean something.
+	Set       string
+	Namespace string
+	Pod       string
+	URL       string
 }
 
 // Names of the data sources reported in the control-plane strip.

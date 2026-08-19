@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -297,6 +299,101 @@ func copySnapshot(s fleet.Snapshot) fleet.Snapshot {
 	s.Runners = slices.Clone(s.Runners)
 	s.Sources = slices.Clone(s.Sources)
 	return s
+}
+
+// listenerMetricsPort is the container port ARC names when the controller is
+// configured with a listener metrics address. Its absence is how a listener says
+// metrics were never enabled, which on a stock install is every listener.
+const listenerMetricsPort = "metrics"
+
+// defaultListenerMetricsPath matches the controller chart's default
+// metrics.listenerEndpoint.
+const defaultListenerMetricsPath = "/metrics"
+
+// ListenerTargets returns one scrape target per listener pod currently serving
+// metrics, so the scraper can cover a whole fleet instead of one scale set.
+//
+// ARC runs one AutoscalingListener pod per AutoscalingRunnerSet and each serves
+// only its own scale set's series, so a single configured URL covers exactly one
+// set however many there are — and a Service in front of them is worse, because
+// a keep-alive connection pins to whichever pod it reached first and then jumps
+// to another when it is recycled.
+//
+// Everything this needs is already cached: the controller namespace is watched
+// unfiltered for listener health, and trimPod keeps status.podIP and the
+// container ports. Targets are rebuilt on every call rather than remembered,
+// because a pod IP is recycled the moment the address is.
+func (c *Collector) ListenerTargets() []fleet.ListenerTarget {
+	path := c.cfg.ListenerMetricsPath
+	if path == "" {
+		path = defaultListenerMetricsPath
+	}
+
+	c.mu.Lock()
+	pods := lo.Values(c.ctrlPods)
+	c.mu.Unlock()
+
+	out := make([]fleet.ListenerTarget, 0, len(pods))
+	for _, pod := range pods {
+		if pod == nil || pod.Status.PodIP == "" || pod.DeletionTimestamp != nil {
+			continue
+		}
+		// A Succeeded or Failed pod can keep a stale address long enough to be
+		// scraped, and the answer would be a connection refused reported as a
+		// broken listener.
+		if pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		// The scale set labels are what separates a listener from the controller
+		// manager, which lives in the same namespace and also serves metrics —
+		// its own gha_controller_* series, which this parser does not read. They
+		// are also the only link that survives across ARC versions; the
+		// component label does not, which is why the informer above is
+		// unfiltered.
+		set := pod.Labels[arcapi.LabelScaleSetName]
+		ns := pod.Labels[arcapi.LabelScaleSetNamespace]
+		if set == "" || ns == "" {
+			continue
+		}
+		// Runner pods carry those same labels, and land here if runners share
+		// the controller namespace. They expose no ports, so the port lookup
+		// below already excludes them — this is belt and braces for the day
+		// something gives them one.
+		if pod.Labels[arcapi.LabelEphemeralRunner] == "True" {
+			continue
+		}
+
+		port, ok := metricsPortOf(pod)
+		if !ok {
+			continue
+		}
+
+		out = append(out, fleet.ListenerTarget{
+			Set:       set,
+			Namespace: ns,
+			Pod:       pod.Name,
+			URL:       fmt.Sprintf("http://%s%s", net.JoinHostPort(pod.Status.PodIP, strconv.Itoa(int(port))), path),
+		})
+	}
+
+	// Stable order so the log line a scrape failure produces names the same
+	// listener each time, and so tests do not depend on map iteration.
+	slices.SortFunc(out, func(a, b fleet.ListenerTarget) int {
+		return strings.Compare(a.Pod, b.Pod)
+	})
+	return out
+}
+
+// metricsPortOf finds the listener's metrics port by name.
+func metricsPortOf(pod *corev1.Pod) (int32, bool) {
+	for _, ctr := range pod.Spec.Containers {
+		for _, p := range ctr.Ports {
+			if p.Name == listenerMetricsPort {
+				return p.ContainerPort, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // SetUsage injects the latest pod metrics, keyed by "namespace/podname".

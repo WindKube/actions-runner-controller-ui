@@ -76,11 +76,33 @@ env:
   # API server quota.
   ARC_UI_SCRAPE_INTERVAL: "15s"
 
-  # The ARC listener's Prometheus endpoint, e.g.
-  # http://arc-gha-rs-controller-listener.arc-systems.svc:8080/metrics
-  # Optional: ARC ships with listener metrics disabled, and the dashboard degrades
-  # cleanly without it (no queue depth, everything else intact).
+  # Queue depth comes from the ARC listeners' Prometheus endpoints, and by default
+  # they are DISCOVERED: the dashboard finds the AutoscalingListener pods in
+  # ARC_UI_CONTROLLER_NAMESPACE and scrapes each one directly. Leave both of the
+  # settings below alone and that is what happens.
+  #
+  # This needs nothing but the RBAC the chart already grants — but it does need
+  # ARC's metrics to be on, which they are not by default. Uncomment the metrics:
+  # block in the gha-runner-scale-set-controller chart values and recreate the
+  # listener pods; each one then exposes a container port named "metrics" and the
+  # dashboard picks it up within one scrape interval. Until then the queue depth
+  # panel says so instead of showing zero.
+  #
+  # If a NetworkPolicy in the controller namespace denies ingress, or a service
+  # mesh requires mTLS the dashboard does not speak, the scrapes fail and the
+  # health strip names the listeners that did not answer.
+  #
+  # Set ARC_UI_LISTENER_METRICS_URL only to scrape ONE endpoint instead: something
+  # that aggregates the listeners, such as a Prometheus /federate URL. Pointing it
+  # at a single listener, or at a Service in front of all of them, covers exactly
+  # one scale set — a Service load-balances per connection and the scraper's
+  # keep-alive pins it to whichever pod answered first.
   # ARC_UI_LISTENER_METRICS_URL: ""
+  #
+  # The path discovered listeners serve metrics on. It mirrors the controller
+  # chart's metrics.listenerEndpoint, which is configurable and which the pod
+  # itself does not advertise anywhere.
+  ARC_UI_LISTENER_METRICS_PATH: "/metrics"
 
   # Where the history database lives. Must sit under persistence.mountPath, or it
   # lands on the read-only root filesystem and the store is disabled.

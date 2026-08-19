@@ -854,3 +854,26 @@ func TestMergeFailuresCapsThePageWithoutCappingTheCount(t *testing.T) {
 	assert.Equal(t, 40, got.More, "want the window's remainder, not the page's")
 	assert.Equal(t, "last 6 hours", got.Window, "the lane has to say which window it covers")
 }
+
+// A source that answered only partly is neither healthy nor an outage. Green
+// hides that some of the fleet has no queue depth at all; red claims an outage
+// that is not happening. Both readings send an operator to the wrong place.
+func TestPartlyAvailableSourceIsReportedAsDegraded(t *testing.T) {
+	t.Parallel()
+
+	const reason = "17 of 20 listeners scraped; arc-arm64-listener: connection refused"
+
+	src := fleet.Source{Name: fleet.SourceListener, Available: true, Reason: reason, CheckedAt: now}
+	assert.Equal(t, reason, SourceValue(src, "ok"), "a degraded source must show why, not \"ok\"")
+	assert.Equal(t, ToneAttention, SourceTone(src), "a degraded source is neither success nor danger")
+
+	snap := sampleSnapshot()
+	snap.Sources = append(snap.Sources, src)
+	b := testBuilder()
+	b.Fleet = SnapshotFunc(func() fleet.Snapshot { return snap })
+
+	html := renderOverviewWith(t, b)
+
+	assert.Contains(t, html, "17 of 20 listeners scraped",
+		"a partial scrape has to reach the page; it is the only sign those sets are missing")
+}

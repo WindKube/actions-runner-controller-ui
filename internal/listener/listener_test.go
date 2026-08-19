@@ -332,9 +332,10 @@ func TestParseDoesNotSumCeilingsAcrossNamespaces(t *testing.T) {
 func TestParseReportsScaleSetNameCollision(t *testing.T) {
 	t.Parallel()
 
-	_, cols, err := parse(strings.NewReader(collisions))
+	_, index, err := parse(strings.NewReader(collisions))
 	require.NoError(t, err, "parse")
 
+	cols := index.collisions()
 	require.Len(t, cols, 1, "one name in two namespaces is one collision, got %+v", cols)
 	assert.Equal(t, "shared", cols[0].set, "collision set")
 	assert.Equal(t, []string{"team-a", "team-b"}, cols[0].namespaces, "collision namespaces")
@@ -346,13 +347,13 @@ func TestParseReportsScaleSetNameCollision(t *testing.T) {
 func TestParseSingleNamespaceIsUnaffected(t *testing.T) {
 	t.Parallel()
 
-	m, cols, err := parse(strings.NewReader(fixture))
+	m, index, err := parse(strings.NewReader(fixture))
 	require.NoError(t, err, "parse")
 
 	assert.Equal(t, float64(50), m.MaxRunners["arc-linux-x64"], "MaxRunners")
 	assert.Equal(t, float64(2), m.MinRunners["arc-linux-x64"], "MinRunners")
 	assert.Equal(t, float64(20), m.DesiredRunners["arc-linux-x64"], "DesiredRunners")
-	assert.Empty(t, cols, "a single-namespace scrape must not report a collision")
+	assert.Empty(t, index.collisions(), "a single-namespace scrape must not report a collision")
 }
 
 // ceilingFamilies are the families collect reads with perScaleSet aggregation:
@@ -451,8 +452,9 @@ func TestCollisionWarningTruncatesOversizedLabelValues(t *testing.T) {
 		fmt.Sprintf("gha_max_runners{name=%q,namespace=%q} 30\n", huge+"-set", huge+"-team-a") +
 		fmt.Sprintf("gha_max_runners{name=%q,namespace=%q} 50\n", huge+"-set", huge+"-team-b")
 
-	_, cols, err := parse(strings.NewReader(body))
+	_, index, err := parse(strings.NewReader(body))
 	require.NoError(t, err, "parse")
+	cols := index.collisions()
 	require.Len(t, cols, 1, "one name in two namespaces is one collision, got %d", len(cols))
 
 	var buf strings.Builder
@@ -572,9 +574,10 @@ func TestParseUnlabelledCollisionIsUndetectable(t *testing.T) {
 gha_max_runners{name="shared"} 30
 gha_max_runners{name="shared"} 50
 `
-	m, cols, err := parse(strings.NewReader(body))
+	m, index, err := parse(strings.NewReader(body))
 	require.NoError(t, err, "parse")
-	assert.Empty(t, cols, "an unlabelled collision cannot be detected, so it must not be reported")
+	assert.Empty(t, index.collisions(),
+		"an unlabelled collision cannot be detected, so it must not be reported")
 	assert.Equal(t, float64(30), m.MaxRunners["shared"], "the first series wins; there is nothing else to choose on")
 }
 
@@ -1060,4 +1063,145 @@ func TestHealthTrackerLogsTransitionsOnly(t *testing.T) {
 	h.ok(log)
 	h.ok(log)
 	assert.Equal(t, 1, strings.Count(buf.String(), "source recovered"), "recovery must log once")
+}
+
+// oneSetBody is what a single listener actually serves: its own scale set and
+// nothing else. Every listener in a cluster serves a body shaped like this.
+func oneSetBody(set string, assigned, running int) string {
+	return fmt.Sprintf(`# HELP gha_assigned_jobs Number of jobs assigned to the runner scale set.
+# TYPE gha_assigned_jobs gauge
+gha_assigned_jobs{name=%q,namespace="arc-runners"} %d
+# HELP gha_running_jobs Number of jobs running.
+# TYPE gha_running_jobs gauge
+gha_running_jobs{name=%q,namespace="arc-runners"} %d
+# HELP gha_max_runners Maximum number of runners.
+# TYPE gha_max_runners gauge
+gha_max_runners{name=%q,namespace="arc-runners"} 50
+`, set, assigned, set, running, set)
+}
+
+// listenerServing starts a server answering with body, and returns a target
+// pointed at it.
+func listenerServing(t *testing.T, set, body string) fleet.ListenerTarget {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+
+	return fleet.ListenerTarget{Set: set, Namespace: "arc-runners", Pod: set + "-listener", URL: srv.URL}
+}
+
+// targets is a fixed Discoverer.
+type targets []fleet.ListenerTarget
+
+func (t targets) ListenerTargets() []fleet.ListenerTarget { return t }
+
+// ARC runs one listener per scale set and each serves only its own series, so a
+// fleet's queue depth exists only as the union of every listener's answer.
+func TestScraperMergesEveryDiscoveredListener(t *testing.T) {
+	t.Parallel()
+
+	rec := &recorder{}
+	s := NewDiscoveringScraper(targets{
+		listenerServing(t, "arc-linux-x64", oneSetBody("arc-linux-x64", 12, 8)),
+		listenerServing(t, "arc-arm64", oneSetBody("arc-arm64", 7, 2)),
+	}, time.Hour, testLogger(), rec)
+
+	s.tick(context.Background())
+
+	require.True(t, rec.known, "queue depth reported unknown after every listener answered")
+	assert.Equal(t, 4, rec.depth["arc-linux-x64"], "depth = %v", rec.depth)
+	assert.Equal(t, 5, rec.depth["arc-arm64"], "depth = %v", rec.depth)
+}
+
+// One listener restarting must not blank the queue depth of nineteen healthy
+// ones — but it must not be silent either, because the sets it serves are now
+// missing from a panel that gives no other sign of it.
+func TestOneUnreachableListenerDoesNotHideTheRest(t *testing.T) {
+	t.Parallel()
+
+	rec := &recorder{}
+	s := NewDiscoveringScraper(targets{
+		listenerServing(t, "arc-linux-x64", oneSetBody("arc-linux-x64", 12, 8)),
+		{Set: "arc-arm64", Namespace: "arc-runners", Pod: "arc-arm64-listener", URL: "http://127.0.0.1:1/metrics"},
+	}, time.Hour, testLogger(), rec)
+
+	s.tick(context.Background())
+
+	require.True(t, rec.known, "one dead listener blanked the queue depth of a healthy one")
+	assert.Equal(t, 4, rec.depth["arc-linux-x64"], "depth = %v", rec.depth)
+	assert.NotContains(t, rec.depth, "arc-arm64", "a listener that did not answer must report no depth, not zero")
+
+	src, ok := rec.last()
+	require.True(t, ok, "no source reported")
+	assert.True(t, src.Available, "a partly reachable fleet is not an outage")
+	assert.Contains(t, src.Reason, "1 of 2", "a partial scrape must say how partial: %q", src.Reason)
+	assert.Contains(t, src.Reason, "arc-arm64-listener", "the failing listener must be named: %q", src.Reason)
+}
+
+func TestEveryListenerFailingLeavesQueueDepthUnknown(t *testing.T) {
+	t.Parallel()
+
+	rec := &recorder{}
+	s := NewDiscoveringScraper(targets{
+		{Set: "a", Pod: "a-listener", URL: "http://127.0.0.1:1/metrics"},
+		{Set: "b", Pod: "b-listener", URL: "http://127.0.0.1:1/metrics"},
+	}, time.Hour, testLogger(), rec)
+
+	s.tick(context.Background())
+
+	assert.False(t, rec.known, "queue depth must be unknown when nothing answered")
+	src, ok := rec.last()
+	require.True(t, ok, "no source reported")
+	assert.False(t, src.Available, "source available with no listener reachable")
+}
+
+// A stock ARC install exposes no listener metrics at all, so discovery finds
+// nothing. That is the normal case and has to explain itself — and unlike a
+// configured-but-empty URL it must keep looking, because it becomes true the
+// moment someone uncomments the chart's metrics block.
+func TestDiscoveringNoListenersExplainsThatMetricsAreDisabled(t *testing.T) {
+	t.Parallel()
+
+	rec := &recorder{}
+	s := NewDiscoveringScraper(targets(nil), time.Hour, testLogger(), rec)
+
+	s.tick(context.Background())
+
+	assert.False(t, rec.known, "queue depth reported as known with no listener serving metrics")
+	src, ok := rec.last()
+	require.True(t, ok, "no source reported")
+	assert.False(t, src.Available, "source available with nothing to scrape")
+	for _, want := range []string{"metrics", "chart"} {
+		assert.Contains(t, src.Reason, want, "reason does not mention %q", want)
+	}
+}
+
+// Two scale sets of the same name in different namespaces get one listener each,
+// so the collision that used to be visible inside one body is now spread across
+// two — and it is the same deployment mistake, with the same consequence for the
+// ceilings the dashboard draws.
+func TestTheSameSetNameFromTwoListenersIsReportedAsACollision(t *testing.T) {
+	t.Parallel()
+
+	teamA := listenerServing(t, "shared", `# TYPE gha_max_runners gauge
+gha_max_runners{name="shared",namespace="team-a"} 10
+`)
+	teamB := listenerServing(t, "shared", `# TYPE gha_max_runners gauge
+gha_max_runners{name="shared",namespace="team-b"} 20
+`)
+
+	var buf strings.Builder
+	s := NewDiscoveringScraper(targets{teamA, teamB}, time.Hour,
+		zerolog.New(&buf).Level(zerolog.InfoLevel), &recorder{})
+
+	s.tick(context.Background())
+
+	for _, want := range []string{"shared", "team-a", "team-b"} {
+		assert.Contains(t, buf.String(), want,
+			"a collision spread across two listeners went unreported: %s", buf.String())
+	}
 }
