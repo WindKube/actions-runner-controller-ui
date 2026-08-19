@@ -167,7 +167,19 @@ type Overview struct {
 	Repos    []RepoBar
 	Failures []fleet.Failure
 
+	// Store is the history store's own footprint, reported at the foot of the
+	// page. Nothing else on the dashboard is about the dashboard itself.
+	Store StorePanel
+
 	SetSort fleet.SetSort
+}
+
+// StorePanel is the SQLite footer's view model.
+type StorePanel struct {
+	// Enabled is false when there is no history store, in which case Rows is
+	// empty and the panel explains itself rather than reporting zeros.
+	Enabled bool
+	Rows    []KV
 }
 
 // SetDetail is the per-RunnerSet view.
@@ -395,6 +407,7 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 	throughput, _ := b.History.Throughput(ctx, scope, win)
 	churn, _ := b.History.Churn(ctx, scope, win)
 	repos, _ := b.History.Repos(ctx, win, 8)
+	stats, _ := b.History.Stats(ctx)
 
 	page := b.page("Fleet", snap, sig, now, []Crumb{{Label: snap.Org}, {Label: "fleet"}})
 	page.Warnings = warnings(snap, totals)
@@ -416,6 +429,7 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 		Runners:    runners,
 		Repos:      repoBars(repos, runners),
 		Failures:   fleet.Failures(runners, 6),
+		Store:      storePanel(stats, now),
 		SetSort:    setSort,
 	}
 }
@@ -961,6 +975,37 @@ func listenerTone(s fleet.Snapshot) Tone {
 		return ToneDanger
 	}
 	return ToneSuccess
+}
+
+// storePanel describes the history store's own footprint.
+//
+// Every count is a row the retention sweep is responsible for eventually
+// deleting, so the panel doubles as the readout for whether retention is
+// keeping up: rows climbing while the oldest sample stays put is the shape of a
+// compactor that has stopped running.
+func storePanel(s StoreStats, now time.Time) StorePanel {
+	if !s.Enabled {
+		return StorePanel{}
+	}
+
+	oldest := "—"
+	if !s.Oldest.IsZero() {
+		oldest = fleet.FormatRelative(s.Oldest, now)
+	}
+
+	return StorePanel{
+		Enabled: true,
+		Rows: []KV{
+			{Label: "on disk", Value: fleet.FormatBytes(s.SizeBytes), Mono: true},
+			{Label: "rows", Value: Thousands(s.Rows), Mono: true},
+			{Label: "samples", Value: Thousands(s.Samples), Mono: true},
+			{Label: "jobs", Value: Thousands(s.Jobs), Mono: true},
+			{Label: "phases", Value: Thousands(s.Phases), Mono: true},
+			{Label: "churn events", Value: Thousands(s.ChurnEvents), Mono: true},
+			{Label: "oldest sample", Value: oldest, Mono: true},
+			{Label: "file", Value: Dash(s.Path), Mono: true},
+		},
+	}
 }
 
 // warnings surfaces conditions that make the numbers on screen less than they

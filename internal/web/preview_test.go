@@ -224,6 +224,22 @@ func previewEvents() []fleet.Event {
 // alignment bugs this preview exists to catch.
 type previewHistory struct{}
 
+// Stats is a plausible mid-life store: a few weeks of history on a volume that
+// is nowhere near full, so the footer renders every row with realistic widths.
+func (previewHistory) Stats(context.Context) (StoreStats, error) {
+	return StoreStats{
+		Enabled:     true,
+		Path:        "/data/arc-ui.db",
+		SizeBytes:   47 * 1024 * 1024,
+		Samples:     3_214_887,
+		Jobs:        18_402,
+		Phases:      91_755,
+		ChurnEvents: 36_804,
+		Rows:        3_361_848,
+		Oldest:      previewNow.Add(-21 * 24 * time.Hour),
+	}, nil
+}
+
 func (previewHistory) Scope(_ context.Context, scope Scope, w Window) (ScopeSeries, error) {
 	n := w.Points
 	if n <= 0 {

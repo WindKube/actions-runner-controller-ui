@@ -90,14 +90,30 @@ func testBuilder() *Builder {
 // renderOverview renders the unfiltered fleet overview as a complete document.
 func renderOverview(t *testing.T) string {
 	t.Helper()
+	return renderOverviewWith(t, testBuilder())
+}
 
-	o := testBuilder().Overview(context.Background(), Signals{}, now)
+// renderOverviewWith renders the overview from a caller-supplied builder, for
+// the tests that need a history other than NoHistory.
+func renderOverviewWith(t *testing.T, b *Builder) string {
+	t.Helper()
+
+	o := b.Overview(context.Background(), Signals{}, now)
 	o.Stream = "/stream"
 
 	var sb strings.Builder
 	require.NoError(t, Document(o.Page, OverviewPage(o)).Render(context.Background(), &sb), "render")
 	return sb.String()
 }
+
+// statsHistory is NoHistory with a store-statistics answer, so the footer can
+// be rendered without a database anywhere in sight.
+type statsHistory struct {
+	NoHistory
+	stats StoreStats
+}
+
+func (h statsHistory) Stats(context.Context) (StoreStats, error) { return h.stats, nil }
 
 func TestOverviewRendersEveryPatchTarget(t *testing.T) {
 	t.Parallel()
@@ -109,7 +125,7 @@ func TestOverviewRendersEveryPatchTarget(t *testing.T) {
 	for _, id := range []string{
 		"filterbar", "tiles", "history", "utilization", "resources",
 		"throughput", "churn", "runnersets", "runners", "repos",
-		"failures", "health", "live-indicator",
+		"failures", "store", "health", "live-indicator",
 	} {
 		assert.Contains(t, html, `id="`+id+`"`, "missing patch target id=%q", id)
 	}
@@ -354,6 +370,7 @@ func (s windowSpy) Runner(_ context.Context, _ string, w Window) (RunnerSeries, 
 func (s windowSpy) Throughput(context.Context, Scope, Window) (Counts, error) { return Counts{}, nil }
 func (s windowSpy) Churn(context.Context, Scope, Window) (Counts, error)      { return Counts{}, nil }
 func (s windowSpy) Repos(context.Context, Window, int) ([]RepoHistory, error) { return nil, nil }
+func (s windowSpy) Stats(context.Context) (StoreStats, error)                 { return StoreStats{}, nil }
 
 func TestMissingRunnerIsNotFoundNotAnError(t *testing.T) {
 	t.Parallel()
@@ -670,4 +687,65 @@ func TestRequestLineSurvivesAFleetThatIsIdleRightNow(t *testing.T) {
 	require.Len(t, c.Refs, 1, "want the requested line kept for the history in the window")
 	assert.Len(t, polylineYs(t, c.Refs[0].Points), len(request),
 		"want one point per sample even though the newest is zero")
+}
+
+// Row counts in the store footer run to seven and eight digits. Unseparated,
+// 1234567 and 12345678 are the same shape at a glance, which is the one thing a
+// capacity readout must not be.
+func TestThousandsSeparatesLongCounts(t *testing.T) {
+	t.Parallel()
+
+	cases := map[int64]string{
+		0:         "0",
+		7:         "7",
+		999:       "999",
+		1000:      "1,000",
+		12345:     "12,345",
+		1234567:   "1,234,567",
+		123456789: "123,456,789",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, Thousands(in), "Thousands(%d)", in)
+	}
+}
+
+// The SQLite file is the one moving part of this dashboard nobody else
+// monitors: it grows on a PVC sized once at install time, and the first symptom
+// of a full volume is the history quietly stopping. The footer is the only
+// place its size is ever reported.
+func TestStoreFooterReportsSizeAndRowCounts(t *testing.T) {
+	t.Parallel()
+
+	b := testBuilder()
+	b.History = statsHistory{stats: StoreStats{
+		Enabled:     true,
+		Path:        "/data/arc-ui.db",
+		SizeBytes:   12 * 1024 * 1024,
+		Samples:     1234567,
+		Jobs:        42,
+		Phases:      7,
+		ChurnEvents: 99,
+		Rows:        1234715,
+		Oldest:      now.Add(-72 * time.Hour),
+	}}
+
+	html := renderOverviewWith(t, b)
+
+	assert.Contains(t, html, `id="store"`, "the footer must be a patchable region")
+	assert.Contains(t, html, "12.0 MiB", "want the size on disk")
+	assert.Contains(t, html, "1,234,567", "want the sample count, separated")
+	assert.Contains(t, html, "/data/arc-ui.db", "want the file the numbers describe")
+}
+
+// Running without a writable volume is a supported configuration, and the
+// footer is then reporting on a store that does not exist. Zeros would read as
+// an empty database rather than an absent one.
+func TestStoreFooterSaysSoWhenHistoryIsDisabled(t *testing.T) {
+	t.Parallel()
+
+	html := renderOverview(t)
+
+	assert.Contains(t, html, "history store disabled",
+		"an absent store must be named, not rendered as zero rows")
+	assert.NotContains(t, html, "0 B", "an absent store must not report a size")
 }

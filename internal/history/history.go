@@ -11,11 +11,20 @@ package history
 import (
 	"context"
 	"slices"
+	"sync"
 	"time"
 
 	"arc-ui/internal/store"
 	"arc-ui/internal/web"
 )
+
+// statsTTL bounds how stale the store footer may be.
+//
+// COUNT(*) over samples scans an index — millions of rows once the hourly tier
+// has a year in it — and the SSE stream re-renders every panel on every snapshot
+// change, for every connected browser. Counted per render, the cheapest panel on
+// the page would be the most expensive thing the store does.
+const statsTTL = time.Minute
 
 // Queries is the slice of the store this adapter uses. Declaring it as an
 // interface keeps the adapter testable without a database.
@@ -24,17 +33,94 @@ type Queries interface {
 	Churn(ctx context.Context, setName string, r store.Range) (created, terminated []store.Point, err error)
 	Throughput(ctx context.Context, setName string, r store.Range) (ok, failed []store.Point, err error)
 	RepoConsumption(ctx context.Context, r store.Range) ([]store.RepoTotal, error)
+	Stats(ctx context.Context) (store.Stats, error)
 }
 
 // Adapter satisfies web.History using the store.
 type Adapter struct {
 	Q Queries
+
+	// stats memoises Q.Stats. A nil cache counts on every call, which is what a
+	// zero-valued Adapter does; New always supplies one.
+	stats *statsCache
 }
 
 var _ web.History = Adapter{}
 
 // New returns an adapter over q.
-func New(q Queries) Adapter { return Adapter{Q: q} }
+func New(q Queries) Adapter {
+	return Adapter{Q: q, stats: &statsCache{clock: time.Now}}
+}
+
+// statsCache holds one memoised store.Stats answer.
+type statsCache struct {
+	mu    sync.Mutex
+	clock func() time.Time
+
+	at  time.Time
+	val web.StoreStats
+}
+
+// Stats reports what the history is costing on disk, memoised for statsTTL.
+func (a Adapter) Stats(ctx context.Context) (web.StoreStats, error) {
+	if a.stats == nil {
+		return a.countStats(ctx)
+	}
+	return a.stats.get(ctx, a.countStats)
+}
+
+// get returns the memoised value, or counts and stores a fresh one.
+//
+// The lock is held across the count rather than only around the fields. Every
+// connected browser renders the footer on the same tick, so releasing it first
+// would let a cold cache launch one COUNT(*) per stream against a database with
+// one writer and a handful of readers; serialised, the first caller counts and
+// the rest read what it stored.
+func (c *statsCache) get(
+	ctx context.Context,
+	count func(context.Context) (web.StoreStats, error),
+) (web.StoreStats, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := c.clock()
+	if !c.at.IsZero() && now.Sub(c.at) < statsTTL {
+		return c.val, nil
+	}
+
+	val, err := count(ctx)
+	if err != nil {
+		// Deliberately not cached: a failed count is usually a database busy
+		// for milliseconds, and memoising that would keep the footer broken for
+		// a minute after the store recovered. There is nothing worth serving
+		// from the cache in this branch anyway.
+		return web.StoreStats{}, err
+	}
+
+	c.val, c.at = val, now
+	return val, nil
+}
+
+// countStats asks the store and maps its answer onto the view contract.
+func (a Adapter) countStats(ctx context.Context) (web.StoreStats, error) {
+	st, err := a.Q.Stats(ctx)
+	if err != nil {
+		return web.StoreStats{}, err
+	}
+	return web.StoreStats{
+		// Anything the store answered proves the store is there. The zero value
+		// means the opposite, and the footer renders the two differently.
+		Enabled:     true,
+		Path:        st.Path,
+		SizeBytes:   st.SizeBytes,
+		Samples:     st.Samples,
+		Jobs:        st.Jobs,
+		Phases:      st.Phases,
+		ChurnEvents: st.ChurnEvents,
+		Rows:        st.Rows,
+		Oldest:      st.Oldest,
+	}, nil
+}
 
 // scopeMetrics is everything the overview and set-detail charts read. They are
 // fetched in one call because the store answers them from a single scan.

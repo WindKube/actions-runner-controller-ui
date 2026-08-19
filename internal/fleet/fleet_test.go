@@ -252,6 +252,32 @@ func TestFormatGiB(t *testing.T) {
 	}
 }
 
+// The SQLite footer reports one file whose size spans four orders of magnitude
+// over an install's life: kibibytes on the first boot, gibibytes after thirteen
+// months of hourly rollups. A single fixed unit is unreadable at one end or the
+// other, so the unit has to follow the number.
+func TestFormatBytesScalesItsUnit(t *testing.T) {
+	t.Parallel()
+
+	cases := map[int64]string{
+		0:  "0 B",
+		-1: "0 B",
+
+		512:              "512 B",
+		4 * 1024:         "4.0 KiB",
+		12 * 1024 * 1024: "12.0 MiB",
+		3 * GiB / 2:      "1.5 GiB",
+
+		// A byte short of a mebibyte rounds to 1024.0 at one decimal place,
+		// which is a quantity nobody writes: the unit has to be promoted after
+		// rounding, not before.
+		1024*1024 - 1: "1.0 MiB",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, FormatBytes(in), "FormatBytes(%d)", in)
+	}
+}
+
 func TestByRepositoryRanksBusiestFirst(t *testing.T) {
 	t.Parallel()
 
