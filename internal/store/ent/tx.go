@@ -18,6 +18,8 @@ type Tx struct {
 	JobObservation *JobObservationClient
 	// PhaseTransition is the client for interacting with the PhaseTransition builders.
 	PhaseTransition *PhaseTransitionClient
+	// RunnerFailure is the client for interacting with the RunnerFailure builders.
+	RunnerFailure *RunnerFailureClient
 	// Sample is the client for interacting with the Sample builders.
 	Sample *SampleClient
 
@@ -154,6 +156,7 @@ func (tx *Tx) init() {
 	tx.ChurnEvent = NewChurnEventClient(tx.config)
 	tx.JobObservation = NewJobObservationClient(tx.config)
 	tx.PhaseTransition = NewPhaseTransitionClient(tx.config)
+	tx.RunnerFailure = NewRunnerFailureClient(tx.config)
 	tx.Sample = NewSampleClient(tx.config)
 }
 

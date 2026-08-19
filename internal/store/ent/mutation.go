@@ -7,6 +7,7 @@ import (
 	"arc-ui/internal/store/ent/jobobservation"
 	"arc-ui/internal/store/ent/phasetransition"
 	"arc-ui/internal/store/ent/predicate"
+	"arc-ui/internal/store/ent/runnerfailure"
 	"arc-ui/internal/store/ent/sample"
 	"context"
 	"errors"
@@ -29,6 +30,7 @@ const (
 	TypeChurnEvent      = "ChurnEvent"
 	TypeJobObservation  = "JobObservation"
 	TypePhaseTransition = "PhaseTransition"
+	TypeRunnerFailure   = "RunnerFailure"
 	TypeSample          = "Sample"
 )
 
@@ -2199,6 +2201,584 @@ func (m *PhaseTransitionMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *PhaseTransitionMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown PhaseTransition edge %s", name)
+}
+
+// RunnerFailureMutation represents an operation that mutates the RunnerFailure nodes in the graph.
+type RunnerFailureMutation struct {
+	config
+	op            Op
+	typ           string
+	id            *int
+	runner_name   *string
+	set_name      *string
+	reason        *string
+	severe        *bool
+	ts            *int64
+	addts         *int64
+	clearedFields map[string]struct{}
+	done          bool
+	oldValue      func(context.Context) (*RunnerFailure, error)
+	predicates    []predicate.RunnerFailure
+}
+
+var _ ent.Mutation = (*RunnerFailureMutation)(nil)
+
+// runnerfailureOption allows management of the mutation configuration using functional options.
+type runnerfailureOption func(*RunnerFailureMutation)
+
+// newRunnerFailureMutation creates new mutation for the RunnerFailure entity.
+func newRunnerFailureMutation(c config, op Op, opts ...runnerfailureOption) *RunnerFailureMutation {
+	m := &RunnerFailureMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeRunnerFailure,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withRunnerFailureID sets the ID field of the mutation.
+func withRunnerFailureID(id int) runnerfailureOption {
+	return func(m *RunnerFailureMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *RunnerFailure
+		)
+		m.oldValue = func(ctx context.Context) (*RunnerFailure, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().RunnerFailure.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withRunnerFailure sets the old RunnerFailure of the mutation.
+func withRunnerFailure(node *RunnerFailure) runnerfailureOption {
+	return func(m *RunnerFailureMutation) {
+		m.oldValue = func(context.Context) (*RunnerFailure, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m RunnerFailureMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m RunnerFailureMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *RunnerFailureMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *RunnerFailureMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().RunnerFailure.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetRunnerName sets the "runner_name" field.
+func (m *RunnerFailureMutation) SetRunnerName(s string) {
+	m.runner_name = &s
+}
+
+// RunnerName returns the value of the "runner_name" field in the mutation.
+func (m *RunnerFailureMutation) RunnerName() (r string, exists bool) {
+	v := m.runner_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRunnerName returns the old "runner_name" field's value of the RunnerFailure entity.
+// If the RunnerFailure object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RunnerFailureMutation) OldRunnerName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRunnerName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRunnerName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRunnerName: %w", err)
+	}
+	return oldValue.RunnerName, nil
+}
+
+// ResetRunnerName resets all changes to the "runner_name" field.
+func (m *RunnerFailureMutation) ResetRunnerName() {
+	m.runner_name = nil
+}
+
+// SetSetName sets the "set_name" field.
+func (m *RunnerFailureMutation) SetSetName(s string) {
+	m.set_name = &s
+}
+
+// SetName returns the value of the "set_name" field in the mutation.
+func (m *RunnerFailureMutation) SetName() (r string, exists bool) {
+	v := m.set_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSetName returns the old "set_name" field's value of the RunnerFailure entity.
+// If the RunnerFailure object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RunnerFailureMutation) OldSetName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSetName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSetName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSetName: %w", err)
+	}
+	return oldValue.SetName, nil
+}
+
+// ResetSetName resets all changes to the "set_name" field.
+func (m *RunnerFailureMutation) ResetSetName() {
+	m.set_name = nil
+}
+
+// SetReason sets the "reason" field.
+func (m *RunnerFailureMutation) SetReason(s string) {
+	m.reason = &s
+}
+
+// Reason returns the value of the "reason" field in the mutation.
+func (m *RunnerFailureMutation) Reason() (r string, exists bool) {
+	v := m.reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReason returns the old "reason" field's value of the RunnerFailure entity.
+// If the RunnerFailure object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RunnerFailureMutation) OldReason(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReason: %w", err)
+	}
+	return oldValue.Reason, nil
+}
+
+// ResetReason resets all changes to the "reason" field.
+func (m *RunnerFailureMutation) ResetReason() {
+	m.reason = nil
+}
+
+// SetSevere sets the "severe" field.
+func (m *RunnerFailureMutation) SetSevere(b bool) {
+	m.severe = &b
+}
+
+// Severe returns the value of the "severe" field in the mutation.
+func (m *RunnerFailureMutation) Severe() (r bool, exists bool) {
+	v := m.severe
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSevere returns the old "severe" field's value of the RunnerFailure entity.
+// If the RunnerFailure object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RunnerFailureMutation) OldSevere(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSevere is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSevere requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSevere: %w", err)
+	}
+	return oldValue.Severe, nil
+}
+
+// ResetSevere resets all changes to the "severe" field.
+func (m *RunnerFailureMutation) ResetSevere() {
+	m.severe = nil
+}
+
+// SetTs sets the "ts" field.
+func (m *RunnerFailureMutation) SetTs(i int64) {
+	m.ts = &i
+	m.addts = nil
+}
+
+// Ts returns the value of the "ts" field in the mutation.
+func (m *RunnerFailureMutation) Ts() (r int64, exists bool) {
+	v := m.ts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTs returns the old "ts" field's value of the RunnerFailure entity.
+// If the RunnerFailure object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RunnerFailureMutation) OldTs(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTs is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTs requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTs: %w", err)
+	}
+	return oldValue.Ts, nil
+}
+
+// AddTs adds i to the "ts" field.
+func (m *RunnerFailureMutation) AddTs(i int64) {
+	if m.addts != nil {
+		*m.addts += i
+	} else {
+		m.addts = &i
+	}
+}
+
+// AddedTs returns the value that was added to the "ts" field in this mutation.
+func (m *RunnerFailureMutation) AddedTs() (r int64, exists bool) {
+	v := m.addts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetTs resets all changes to the "ts" field.
+func (m *RunnerFailureMutation) ResetTs() {
+	m.ts = nil
+	m.addts = nil
+}
+
+// Where appends a list predicates to the RunnerFailureMutation builder.
+func (m *RunnerFailureMutation) Where(ps ...predicate.RunnerFailure) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the RunnerFailureMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *RunnerFailureMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.RunnerFailure, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *RunnerFailureMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *RunnerFailureMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (RunnerFailure).
+func (m *RunnerFailureMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *RunnerFailureMutation) Fields() []string {
+	fields := make([]string, 0, 5)
+	if m.runner_name != nil {
+		fields = append(fields, runnerfailure.FieldRunnerName)
+	}
+	if m.set_name != nil {
+		fields = append(fields, runnerfailure.FieldSetName)
+	}
+	if m.reason != nil {
+		fields = append(fields, runnerfailure.FieldReason)
+	}
+	if m.severe != nil {
+		fields = append(fields, runnerfailure.FieldSevere)
+	}
+	if m.ts != nil {
+		fields = append(fields, runnerfailure.FieldTs)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *RunnerFailureMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case runnerfailure.FieldRunnerName:
+		return m.RunnerName()
+	case runnerfailure.FieldSetName:
+		return m.SetName()
+	case runnerfailure.FieldReason:
+		return m.Reason()
+	case runnerfailure.FieldSevere:
+		return m.Severe()
+	case runnerfailure.FieldTs:
+		return m.Ts()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *RunnerFailureMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case runnerfailure.FieldRunnerName:
+		return m.OldRunnerName(ctx)
+	case runnerfailure.FieldSetName:
+		return m.OldSetName(ctx)
+	case runnerfailure.FieldReason:
+		return m.OldReason(ctx)
+	case runnerfailure.FieldSevere:
+		return m.OldSevere(ctx)
+	case runnerfailure.FieldTs:
+		return m.OldTs(ctx)
+	}
+	return nil, fmt.Errorf("unknown RunnerFailure field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *RunnerFailureMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case runnerfailure.FieldRunnerName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRunnerName(v)
+		return nil
+	case runnerfailure.FieldSetName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSetName(v)
+		return nil
+	case runnerfailure.FieldReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReason(v)
+		return nil
+	case runnerfailure.FieldSevere:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSevere(v)
+		return nil
+	case runnerfailure.FieldTs:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTs(v)
+		return nil
+	}
+	return fmt.Errorf("unknown RunnerFailure field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *RunnerFailureMutation) AddedFields() []string {
+	var fields []string
+	if m.addts != nil {
+		fields = append(fields, runnerfailure.FieldTs)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *RunnerFailureMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case runnerfailure.FieldTs:
+		return m.AddedTs()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *RunnerFailureMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case runnerfailure.FieldTs:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddTs(v)
+		return nil
+	}
+	return fmt.Errorf("unknown RunnerFailure numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *RunnerFailureMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *RunnerFailureMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *RunnerFailureMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown RunnerFailure nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *RunnerFailureMutation) ResetField(name string) error {
+	switch name {
+	case runnerfailure.FieldRunnerName:
+		m.ResetRunnerName()
+		return nil
+	case runnerfailure.FieldSetName:
+		m.ResetSetName()
+		return nil
+	case runnerfailure.FieldReason:
+		m.ResetReason()
+		return nil
+	case runnerfailure.FieldSevere:
+		m.ResetSevere()
+		return nil
+	case runnerfailure.FieldTs:
+		m.ResetTs()
+		return nil
+	}
+	return fmt.Errorf("unknown RunnerFailure field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *RunnerFailureMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *RunnerFailureMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *RunnerFailureMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *RunnerFailureMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *RunnerFailureMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *RunnerFailureMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *RunnerFailureMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown RunnerFailure unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *RunnerFailureMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown RunnerFailure edge %s", name)
 }
 
 // SampleMutation represents an operation that mutates the Sample nodes in the graph.

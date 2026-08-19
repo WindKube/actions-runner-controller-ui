@@ -13,6 +13,8 @@ import (
 
 	"arc-ui/internal/store/ent/jobobservation"
 	"arc-ui/internal/store/ent/phasetransition"
+	"arc-ui/internal/store/ent/predicate"
+	"arc-ui/internal/store/ent/runnerfailure"
 )
 
 // defaultPoints is what a Range with no Points asks for: enough to fill the
@@ -381,6 +383,58 @@ func (s *Store) JobsForSet(ctx context.Context, setName string, limit int) ([]Jo
 		})
 	}
 	return out, nil
+}
+
+// Failures returns the newest failures in the window, capped at limit, together
+// with how many the window holds in total.
+//
+// The total is counted rather than derived from the page because the lane shows
+// a handful of rows and says how many there are: a "+41 more" footer computed
+// from a page of six would always read "+0 more". An empty setName means the
+// whole fleet.
+func (s *Store) Failures(
+	ctx context.Context, setName string, r Range, limit int,
+) ([]FailureRecord, int64, error) {
+	if limit <= 0 {
+		limit = 6
+	}
+
+	where := []predicate.RunnerFailure{
+		runnerfailure.TsGTE(r.From.Unix()),
+		runnerfailure.TsLT(r.To.Unix()),
+	}
+	if setName != "" {
+		where = append(where, runnerfailure.SetNameEQ(setName))
+	}
+
+	total, err := s.client.RunnerFailure.Query().Where(where...).Count(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count failures for set %q: %w", setName, err)
+	}
+
+	rows, err := s.client.RunnerFailure.Query().
+		Where(where...).
+		// ID breaks ties so that failures sharing a timestamp — routine, since
+		// a whole scale set fails together on a bad image — come back in a
+		// stable order rather than reshuffling between renders.
+		Order(runnerfailure.ByTs(entsql.OrderDesc()), runnerfailure.ByID(entsql.OrderDesc())).
+		Limit(limit).
+		All(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query failures for set %q: %w", setName, err)
+	}
+
+	out := make([]FailureRecord, 0, len(rows))
+	for _, f := range rows {
+		out = append(out, FailureRecord{
+			Runner: f.RunnerName,
+			Set:    f.SetName,
+			Reason: f.Reason,
+			Severe: f.Severe,
+			At:     fromUnix(f.Ts),
+		})
+	}
+	return out, int64(total), nil
 }
 
 // PhasesForRunner returns the lifecycle phases observed for one runner,

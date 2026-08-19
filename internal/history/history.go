@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"arc-ui/internal/fleet"
 	"arc-ui/internal/store"
 	"arc-ui/internal/web"
 )
@@ -33,6 +34,7 @@ type Queries interface {
 	Churn(ctx context.Context, setName string, r store.Range) (created, terminated []store.Point, err error)
 	Throughput(ctx context.Context, setName string, r store.Range) (ok, failed []store.Point, err error)
 	RepoConsumption(ctx context.Context, r store.Range) ([]store.RepoTotal, error)
+	Failures(ctx context.Context, setName string, r store.Range, limit int) ([]store.FailureRecord, int64, error)
 	Stats(ctx context.Context) (store.Stats, error)
 }
 
@@ -59,6 +61,31 @@ type statsCache struct {
 
 	at  time.Time
 	val web.StoreStats
+}
+
+// Failures returns the newest failures in the window plus the window's total.
+func (a Adapter) Failures(
+	ctx context.Context, scope web.Scope, w web.Window, limit int,
+) (web.FailureWindow, error) {
+	rows, total, err := a.Q.Failures(ctx, string(scope), rng(w), limit)
+	if err != nil {
+		return web.FailureWindow{}, err
+	}
+
+	out := web.FailureWindow{
+		Failures: make([]fleet.Failure, 0, len(rows)),
+		Total:    int(total),
+	}
+	for _, f := range rows {
+		out.Failures = append(out.Failures, fleet.Failure{
+			Runner: f.Runner,
+			Set:    f.Set,
+			Reason: f.Reason,
+			At:     f.At,
+			Severe: f.Severe,
+		})
+	}
+	return out, nil
 }
 
 // Stats reports what the history is costing on disk, memoised for statsTTL.

@@ -108,7 +108,9 @@ func TestOpenCreatesParentDirectoryAndMigrates(t *testing.T) {
 	require.NoError(t, s.Ping(t.Context()), "Ping")
 
 	// Migrations applied means every table the store writes to answers.
-	for _, table := range []string{"samples", "job_observations", "phase_transitions", "churn_events"} {
+	for _, table := range []string{
+		"samples", "job_observations", "phase_transitions", "churn_events", "runner_failures",
+	} {
 		var n int
 		assert.NoError(t, s.db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM "+table).Scan(&n), "table %s missing", table)
 	}
@@ -1041,12 +1043,19 @@ func TestStatsCountsRows(t *testing.T) {
 	t.Parallel()
 
 	s := newStore(t)
-	require.NoError(t, s.RecordSnapshot(t.Context(), snapshot(base, busyRunner("runner-a", base, 1))), "RecordSnapshot")
+	require.NoError(t, s.RecordSnapshot(t.Context(), snapshot(base,
+		busyRunner("runner-a", base, 1),
+		failedRunner("runner-b", "Evicted", base, true),
+	)), "RecordSnapshot")
 
 	st, err := s.Stats(t.Context())
 	require.NoError(t, err, "Stats")
 	assert.NotZero(t, st.Samples, "no samples counted")
-	assert.Equal(t, st.Samples+st.Jobs+st.Phases+st.ChurnEvents, st.Rows, "Rows should be the sum of the per-table counts")
+	assert.NotZero(t, st.Failures, "no failures counted")
+	// Every table the store writes to has to be in the footer's total, or the
+	// panel understates a database it is there to report the size of.
+	assert.Equal(t, st.Samples+st.Jobs+st.Phases+st.ChurnEvents+st.Failures, st.Rows,
+		"Rows should be the sum of the per-table counts")
 	assert.False(t, st.Oldest.IsZero(), "Oldest should be set once samples exist")
 	assert.NotEmpty(t, st.Path, "Path should be reported")
 }
@@ -1089,4 +1098,140 @@ func TestCompactedHistoryIsQueryable(t *testing.T) {
 	for _, p := range pts {
 		require.InDelta(t, 2, p.Value, 1e-9, "busy = %v at %s, want 2 throughout", p.Value, p.At)
 	}
+}
+
+// failedRunner is a runner whose pod is visibly broken.
+func failedRunner(name, reason string, at time.Time, severe bool) fleet.Runner {
+	state := fleet.StateFailed
+	if !severe {
+		state = fleet.StateIdle
+	}
+	return fleet.Runner{
+		Name:          name,
+		Namespace:     "arc-runners",
+		SetName:       "linux-x64",
+		State:         state,
+		CreatedAt:     at.Add(-2 * time.Minute),
+		FailureReason: reason,
+		FailedAt:      at,
+	}
+}
+
+// The failure lane was derived from the live snapshot, so a failure disappeared
+// the instant ARC deleted the EphemeralRunner — which for a crash-looping runner
+// is seconds. Persisting it is the difference between a lane that reports the
+// selected window and one that reports only whatever is broken this instant.
+func TestFailuresOutliveTheRunnerThatFailed(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	failedAt := base.Add(-time.Minute)
+	require.NoError(t, s.RecordSnapshot(ctx,
+		snapshot(base, failedRunner("runner-x", "ImagePullBackOff", failedAt, true))), "record the failure")
+	// ARC deletes a finished ephemeral runner, so the next scrape has no trace
+	// of it at all.
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(base.Add(15*time.Second))), "record its absence")
+
+	got, total, err := s.Failures(ctx, "", Range{From: base.Add(-time.Hour), To: base.Add(time.Hour)}, 10)
+	require.NoError(t, err, "Failures")
+
+	require.Len(t, got, 1, "want the failure kept after the runner disappeared")
+	assert.Equal(t, "runner-x", got[0].Runner, "runner")
+	assert.Equal(t, "linux-x64", got[0].Set, "set")
+	assert.Equal(t, "ImagePullBackOff", got[0].Reason, "reason")
+	assert.True(t, got[0].Severe, "a runner in the failed state is a severe failure")
+	assert.Equal(t, failedAt.Unix(), got[0].At.Unix(),
+		"want the observed failure time, not the scrape that noticed it")
+	assert.Equal(t, int64(1), total, "want the window's total alongside the page")
+}
+
+// A broken runner keeps its reason for every scrape of its life. One row per
+// scrape would bury every other failure in the window under the noisiest one.
+func TestARepeatedFailureIsRecordedOnce(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	for i := range 4 {
+		at := base.Add(time.Duration(i) * 15 * time.Second)
+		require.NoError(t, s.RecordSnapshot(ctx,
+			snapshot(at, failedRunner("runner-x", "ImagePullBackOff", base, true))), "scrape %d", i)
+	}
+
+	got, total, err := s.Failures(ctx, "", Range{From: base.Add(-time.Hour), To: base.Add(time.Hour)}, 10)
+	require.NoError(t, err, "Failures")
+
+	assert.Len(t, got, 1, "four scrapes of one broken runner recorded %d rows", len(got))
+	assert.Equal(t, int64(1), total, "total")
+}
+
+// The lane shows a handful of rows but says how many there are, so the count has
+// to come from the window rather than from the page.
+func TestFailuresAreNewestFirstAndCappedWithoutCappingTheTotal(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(base,
+		failedRunner("runner-old", "Evicted", base.Add(-10*time.Minute), true),
+		failedRunner("runner-mid", "OOMKilled", base.Add(-5*time.Minute), true),
+		failedRunner("runner-new", "never registered", base.Add(-time.Minute), false),
+	)), "RecordSnapshot")
+
+	got, total, err := s.Failures(ctx, "", Range{From: base.Add(-time.Hour), To: base.Add(time.Hour)}, 2)
+	require.NoError(t, err, "Failures")
+
+	require.Len(t, got, 2, "want the page capped at the limit")
+	assert.Equal(t, []string{"runner-new", "runner-mid"},
+		[]string{got[0].Runner, got[1].Runner}, "want newest first")
+	assert.False(t, got[0].Severe, "an idle runner with a reason is not a severe failure")
+	assert.Equal(t, int64(3), total, "the total must count the window, not the page")
+}
+
+// A set filter scopes the lane the same way it scopes the charts.
+func TestFailuresCanBeScopedToOneSet(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	other := failedRunner("runner-y", "Evicted", base, true)
+	other.SetName = "arm64"
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(base,
+		failedRunner("runner-x", "OOMKilled", base, true), other)), "RecordSnapshot")
+
+	got, total, err := s.Failures(ctx, "arm64", Range{From: base.Add(-time.Hour), To: base.Add(time.Hour)}, 10)
+	require.NoError(t, err, "Failures")
+
+	require.Len(t, got, 1, "want only the named set's failures")
+	assert.Equal(t, "runner-y", got[0].Runner, "runner")
+	assert.Equal(t, int64(1), total, "total must be scoped too")
+}
+
+// Failures borrow the 5-minute tier's window, which is the longest range the
+// lane can be asked for. Without a sweep they would be the one table in this
+// database that grows forever.
+func TestRetentionExpiresFailures(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	stale := base.Add(-defaultRetention.Scope5m - time.Hour)
+	require.NoError(t, s.RecordSnapshot(ctx,
+		snapshot(stale, failedRunner("runner-stale", "Evicted", stale, true))), "record a stale failure")
+	require.NoError(t, s.RecordSnapshot(ctx,
+		snapshot(base, failedRunner("runner-fresh", "Evicted", base, true))), "record a fresh failure")
+
+	require.NoError(t, s.Compact(ctx, base, defaultRetention), "Compact")
+
+	got, _, err := s.Failures(ctx, "", Range{From: stale.Add(-time.Hour), To: base.Add(time.Hour)}, 10)
+	require.NoError(t, err, "Failures")
+
+	require.Len(t, got, 1, "want only the failure inside the window")
+	assert.Equal(t, "runner-fresh", got[0].Runner, "the wrong row survived")
 }

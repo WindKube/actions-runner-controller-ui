@@ -224,6 +224,21 @@ func previewEvents() []fleet.Event {
 // alignment bugs this preview exists to catch.
 type previewHistory struct{}
 
+// Failures is a lane with more in the window than fits on it, which is the
+// state the "+N more" footer exists for.
+func (previewHistory) Failures(_ context.Context, _ Scope, _ Window, limit int) (FailureWindow, error) {
+	rows := []fleet.Failure{
+		{Runner: "arc-ubuntu-2xl-q4m8t", Set: "arc-ubuntu-2xl", Reason: "ImagePullBackOff", At: previewNow.Add(-4 * time.Minute), Severe: true},
+		{Runner: "arc-ubuntu-2xl-h9z1w", Set: "arc-ubuntu-2xl", Reason: "OOMKilled", At: previewNow.Add(-17 * time.Minute), Severe: true},
+		{Runner: "arc-arm64-graviton-b2k7d", Set: "arc-arm64-graviton", Reason: "Evicted", At: previewNow.Add(-38 * time.Minute), Severe: true},
+		{Runner: "arc-ubuntu-2xl-x7p3r", Set: "arc-ubuntu-2xl", Reason: "never registered", At: previewNow.Add(-52 * time.Minute), Severe: false},
+	}
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return FailureWindow{Failures: rows, Total: 23}, nil
+}
+
 // Stats is a plausible mid-life store: a few weeks of history on a volume that
 // is nowhere near full, so the footer renders every row with realistic widths.
 func (previewHistory) Stats(context.Context) (StoreStats, error) {

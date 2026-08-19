@@ -165,13 +165,24 @@ type Overview struct {
 	Sets     []SetRow
 	Runners  []fleet.Runner
 	Repos    []RepoBar
-	Failures []fleet.Failure
+	Failures FailureLane
 
 	// Store is the history store's own footprint, reported at the foot of the
 	// page. Nothing else on the dashboard is about the dashboard itself.
 	Store StorePanel
 
 	SetSort fleet.SetSort
+}
+
+// FailureLane is the recent-failures panel.
+type FailureLane struct {
+	Items []fleet.Failure
+	// More is how many failures the window holds beyond the ones listed. It is
+	// zero on a lane assembled without the store, which knows of no window.
+	More int
+	// Window names the range the lane covers, e.g. "last 6 hours". Empty means
+	// the lane is the live snapshot rather than a window of history.
+	Window string
 }
 
 // StorePanel is the SQLite footer's view model.
@@ -409,6 +420,14 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 	repos, _ := b.History.Repos(ctx, win, 8)
 	stats, _ := b.History.Stats(ctx)
 
+	// A store that cannot answer leaves the live snapshot, which still knows
+	// what is broken this instant. An empty lane would claim a healthy fleet at
+	// the exact moment the dashboard has least to go on.
+	lane := FailureLane{Items: fleet.Failures(runners, failureLaneRows)}
+	if stored, err := b.History.Failures(ctx, scope, win, failureLaneRows); err == nil {
+		lane = mergeFailures(stored, fleet.Failures(runners, failureLaneRows), failureLaneRows, rng.Label())
+	}
+
 	page := b.page("Fleet", snap, sig, now, []Crumb{{Label: snap.Org}, {Label: "fleet"}})
 	page.Warnings = warnings(snap, totals)
 
@@ -428,7 +447,7 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 		Sets:       setRows(fleet.GroupBySet(runners, sets)),
 		Runners:    runners,
 		Repos:      repoBars(repos, runners),
-		Failures:   fleet.Failures(runners, 6),
+		Failures:   lane,
 		Store:      storePanel(stats, now),
 		SetSort:    setSort,
 	}
@@ -975,6 +994,56 @@ func listenerTone(s fleet.Snapshot) Tone {
 		return ToneDanger
 	}
 	return ToneSuccess
+}
+
+// failureLaneRows is how many failures the lane lists. The rest of the window
+// is reported as a count, because the panel sits in a column beside two others
+// and an unbounded list would push them off the page.
+const failureLaneRows = 6
+
+// mergeFailures combines the persisted page with any live failure the store has
+// not caught up with.
+//
+// Both sources are needed. The store is authoritative for the window — it is
+// the only one that remembers runners ARC has deleted — but the recorder writes
+// from the same snapshot the page renders from, so a failure can be on screen a
+// tick before it is in the database, and a store that has stopped accepting
+// writes is exactly when the lane matters most.
+//
+// A live failure absent from the page is treated as unpersisted and counted into
+// the total. It cannot have been pushed off the page by newer rows: live
+// failures are the newest thing there is, and the page is ordered newest first.
+func mergeFailures(stored FailureWindow, live []fleet.Failure, limit int, window string) FailureLane {
+	seen := make(map[fleet.Failure]struct{}, len(stored.Failures))
+	key := func(f fleet.Failure) fleet.Failure {
+		// The stored row carries the first observation's timestamp and the live
+		// one carries the current reading, so the timestamp cannot be part of
+		// the identity. Runner and reason are what the store is keyed on too.
+		return fleet.Failure{Runner: f.Runner, Reason: f.Reason}
+	}
+
+	items := make([]fleet.Failure, 0, len(stored.Failures)+len(live))
+	for _, f := range stored.Failures {
+		seen[key(f)] = struct{}{}
+		items = append(items, f)
+	}
+
+	total := stored.Total
+	for _, f := range live {
+		if _, dup := seen[key(f)]; dup {
+			continue
+		}
+		seen[key(f)] = struct{}{}
+		items = append(items, f)
+		total++
+	}
+
+	fleet.SortFailures(items)
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+
+	return FailureLane{Items: items, More: max(0, total-len(items)), Window: window}
 }
 
 // storePanel describes the history store's own footprint.

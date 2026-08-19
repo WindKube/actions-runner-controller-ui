@@ -3,6 +3,7 @@ package web
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -371,6 +372,9 @@ func (s windowSpy) Throughput(context.Context, Scope, Window) (Counts, error) { 
 func (s windowSpy) Churn(context.Context, Scope, Window) (Counts, error)      { return Counts{}, nil }
 func (s windowSpy) Repos(context.Context, Window, int) ([]RepoHistory, error) { return nil, nil }
 func (s windowSpy) Stats(context.Context) (StoreStats, error)                 { return StoreStats{}, nil }
+func (s windowSpy) Failures(context.Context, Scope, Window, int) (FailureWindow, error) {
+	return FailureWindow{}, nil
+}
 
 func TestMissingRunnerIsNotFoundNotAnError(t *testing.T) {
 	t.Parallel()
@@ -748,4 +752,105 @@ func TestStoreFooterSaysSoWhenHistoryIsDisabled(t *testing.T) {
 	assert.Contains(t, html, "history store disabled",
 		"an absent store must be named, not rendered as zero rows")
 	assert.NotContains(t, html, "0 B", "an absent store must not report a size")
+}
+
+// failureHistory answers the lane from a fixture.
+type failureHistory struct {
+	NoHistory
+	window FailureWindow
+	err    error
+}
+
+func (h failureHistory) Failures(context.Context, Scope, Window, int) (FailureWindow, error) {
+	return h.window, h.err
+}
+
+// The store is the lane's source of truth, and its whole point is rows whose
+// runners no longer exist.
+func TestFailureLaneRendersHistoryAndTheWindowFooter(t *testing.T) {
+	t.Parallel()
+
+	b := testBuilder()
+	b.History = failureHistory{window: FailureWindow{
+		Failures: []fleet.Failure{
+			{Runner: "deleted-1", Set: "arc-ubuntu", Reason: "OOMKilled", At: now.Add(-20 * time.Minute), Severe: true},
+			{Runner: "arc-arm64-xyz", Set: "arc-arm64", Reason: "ImagePullBackOff", At: now.Add(-30 * time.Second), Severe: true},
+		},
+		Total: 41,
+	}}
+
+	html := renderOverviewWith(t, b)
+
+	assert.Contains(t, html, "deleted-1",
+		"a failure whose runner ARC has already deleted must still be listed")
+	assert.Contains(t, html, "39 more", "want the rest of the window counted in the footer")
+}
+
+// When the store cannot answer, the live snapshot is all there is — and it still
+// knows what is broken right now. An empty lane would claim a healthy fleet.
+func TestFailureLaneFallsBackToLiveWhenTheStoreQueryFails(t *testing.T) {
+	t.Parallel()
+
+	b := testBuilder()
+	b.History = failureHistory{err: errors.New("database is locked")}
+
+	html := renderOverviewWith(t, b)
+
+	assert.Contains(t, html, "arc-arm64-xyz", "want the live failure when history is unavailable")
+	assert.NotContains(t, html, "more in this window",
+		"a fallback lane knows nothing about a window total and must not claim one")
+}
+
+// The recorder writes on the same snapshot the page renders from, so a brand new
+// failure can be on screen a tick before it is in the database — and a store
+// that has stopped accepting writes is exactly when the lane matters most.
+func TestMergeFailuresAddsLiveFailuresTheStoreHasNotCaughtUpWith(t *testing.T) {
+	t.Parallel()
+
+	stored := FailureWindow{
+		Failures: []fleet.Failure{
+			{Runner: "old", Reason: "Evicted", At: now.Add(-time.Hour), Severe: true},
+		},
+		Total: 1,
+	}
+	live := []fleet.Failure{
+		{Runner: "brand-new", Reason: "ImagePullBackOff", At: now.Add(-time.Second), Severe: true},
+	}
+
+	got := mergeFailures(stored, live, 6, "last hour")
+
+	require.Len(t, got.Items, 2, "want both the persisted and the unpersisted failure")
+	assert.Equal(t, "brand-new", got.Items[0].Runner, "want newest first across both sources")
+	assert.Zero(t, got.More, "two of two shown leaves nothing more to count")
+}
+
+func TestMergeFailuresDoesNotListAStoredFailureTwice(t *testing.T) {
+	t.Parallel()
+
+	failure := fleet.Failure{Runner: "runner-x", Reason: "OOMKilled", At: now.Add(-time.Minute), Severe: true}
+	stored := FailureWindow{Failures: []fleet.Failure{failure}, Total: 1}
+
+	got := mergeFailures(stored, []fleet.Failure{failure}, 6, "last hour")
+
+	assert.Len(t, got.Items, 1, "the same failure came back from both sources and was listed twice")
+	assert.Zero(t, got.More, "more")
+}
+
+func TestMergeFailuresCapsThePageWithoutCappingTheCount(t *testing.T) {
+	t.Parallel()
+
+	stored := FailureWindow{
+		Failures: []fleet.Failure{
+			{Runner: "a", Reason: "Evicted", At: now.Add(-time.Minute)},
+			{Runner: "b", Reason: "Evicted", At: now.Add(-2 * time.Minute)},
+		},
+		Total: 41,
+	}
+
+	got := mergeFailures(stored, nil, 1, "last 6 hours")
+
+	require.Len(t, got.Items, 1, "want the page capped")
+	assert.Equal(t, "a", got.Items[0].Runner, "want the newest kept")
+	assert.Equal(t, 40, got.More, "want the window's remainder, not the page's")
+	assert.Equal(t, "last 6 hours", got.Window, "the lane has to say which window it covers")
 }

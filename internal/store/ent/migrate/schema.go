@@ -114,6 +114,38 @@ var (
 			},
 		},
 	}
+	// RunnerFailuresColumns holds the columns for the "runner_failures" table.
+	RunnerFailuresColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "runner_name", Type: field.TypeString},
+		{Name: "set_name", Type: field.TypeString, Default: ""},
+		{Name: "reason", Type: field.TypeString},
+		{Name: "severe", Type: field.TypeBool, Default: false},
+		{Name: "ts", Type: field.TypeInt64},
+	}
+	// RunnerFailuresTable holds the schema information for the "runner_failures" table.
+	RunnerFailuresTable = &schema.Table{
+		Name:       "runner_failures",
+		Columns:    RunnerFailuresColumns,
+		PrimaryKey: []*schema.Column{RunnerFailuresColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "runnerfailure_runner_name_reason",
+				Unique:  true,
+				Columns: []*schema.Column{RunnerFailuresColumns[1], RunnerFailuresColumns[3]},
+			},
+			{
+				Name:    "runnerfailure_set_name_ts",
+				Unique:  false,
+				Columns: []*schema.Column{RunnerFailuresColumns[2], RunnerFailuresColumns[5]},
+			},
+			{
+				Name:    "runnerfailure_ts",
+				Unique:  false,
+				Columns: []*schema.Column{RunnerFailuresColumns[5]},
+			},
+		},
+	}
 	// SamplesColumns holds the columns for the "samples" table.
 	SamplesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -147,6 +179,7 @@ var (
 		ChurnEventsTable,
 		JobObservationsTable,
 		PhaseTransitionsTable,
+		RunnerFailuresTable,
 		SamplesTable,
 	}
 )

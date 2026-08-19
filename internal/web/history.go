@@ -3,6 +3,8 @@ package web
 import (
 	"context"
 	"time"
+
+	"arc-ui/internal/fleet"
 )
 
 // Window is one bucketed query over the history store.
@@ -204,9 +206,22 @@ type History interface {
 	// Repos returns per-repository consumption over the window, busiest first.
 	Repos(ctx context.Context, w Window, limit int) ([]RepoHistory, error)
 
+	// Failures returns the newest failures in the window, capped at limit.
+	Failures(ctx context.Context, scope Scope, w Window, limit int) (FailureWindow, error)
+
 	// Stats reports what the history is costing on disk. It is the only
 	// question here that is not about a time window.
 	Stats(ctx context.Context) (StoreStats, error)
+}
+
+// FailureWindow is the failure lane's contents.
+//
+// Failures is a page and Total counts the window, which are different numbers
+// on any fleet worth looking at: "six shown of forty-one" is the whole reason
+// the lane has a footer.
+type FailureWindow struct {
+	Failures []fleet.Failure
+	Total    int
 }
 
 // StoreStats is what the SQLite footer reports.
@@ -257,6 +272,11 @@ func (NoHistory) Churn(context.Context, Scope, Window) (Counts, error) { return 
 
 // Repos returns nothing.
 func (NoHistory) Repos(context.Context, Window, int) ([]RepoHistory, error) { return nil, nil }
+
+// Failures returns nothing.
+func (NoHistory) Failures(context.Context, Scope, Window, int) (FailureWindow, error) {
+	return FailureWindow{}, nil
+}
 
 // Stats reports a store that is not there.
 func (NoHistory) Stats(context.Context) (StoreStats, error) { return StoreStats{}, nil }

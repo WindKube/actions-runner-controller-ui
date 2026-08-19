@@ -12,6 +12,7 @@ import (
 	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
 	"arc-ui/internal/store/ent/phasetransition"
+	"arc-ui/internal/store/ent/runnerfailure"
 	"arc-ui/internal/store/ent/sample"
 )
 
@@ -83,6 +84,7 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 		jobs     []*ent.JobObservationCreate
 		phases   []*ent.PhaseTransitionCreate
 		churn    []*ent.ChurnEventCreate
+		failures []*ent.RunnerFailureCreate
 		switched []jobClose
 		cur      = make(map[string]*runnerState, len(snap.Runners))
 	)
@@ -98,6 +100,22 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 		}
 
 		addScope(ScopeRunner, r.Name, runnerMetrics(r))
+
+		if r.FailureReason != "" {
+			// The observed failure time, not this scrape: a pod that broke ten
+			// minutes ago must land in the bucket it broke in, or the lane
+			// reports the moment the dashboard restarted instead.
+			failedAt := r.FailedAt
+			if failedAt.IsZero() {
+				failedAt = at
+			}
+			failures = append(failures, s.client.RunnerFailure.Create().
+				SetRunnerName(r.Name).
+				SetSetName(r.SetName).
+				SetReason(r.FailureReason).
+				SetSevere(r.State == fleet.StateFailed).
+				SetTs(failedAt.Unix()))
+		}
 
 		next := &runnerState{set: r.SetName, state: r.State, job: r.Job}
 
@@ -245,6 +263,7 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 		jobs:       jobs,
 		phases:     phases,
 		churn:      churn,
+		failures:   failures,
 		ts:         ts,
 		goneOK:     goneOK,
 		goneFailed: goneFailed,
@@ -287,6 +306,7 @@ type snapshotWrite struct {
 	jobs       []*ent.JobObservationCreate
 	phases     []*ent.PhaseTransitionCreate
 	churn      []*ent.ChurnEventCreate
+	failures   []*ent.RunnerFailureCreate
 	ts         int64
 	goneOK     []string
 	goneFailed []string
@@ -360,6 +380,33 @@ func (w snapshotWrite) exec(ctx context.Context, tx *ent.Tx) error {
 			Exec(ctx)
 		if err != nil {
 			return fmt.Errorf("write churn events: %w", err)
+		}
+	}
+
+	if len(w.failures) > 0 {
+		// ts is deliberately left alone on conflict: the first observation of a
+		// failure is the honest one, and every later scrape of the same broken
+		// runner reports the same reason with a newer scrape behind it.
+		//
+		// severe only ever ratchets up. A runner can be seen with a reason while
+		// still idle and reach the failed state a scrape later; taking the
+		// incoming value would let the reverse — the pod recovering enough to
+		// look idle again — quietly downgrade a failure that did happen.
+		err := tx.RunnerFailure.CreateBulk(w.failures...).
+			OnConflict(entsql.ConflictColumns(
+				runnerfailure.FieldRunnerName, runnerfailure.FieldReason,
+			)).
+			Update(func(u *ent.RunnerFailureUpsert) {
+				u.UpdateSetName()
+				u.Set(runnerfailure.FieldSevere, entsql.ExprFunc(func(b *entsql.Builder) {
+					b.Ident(runnerfailure.FieldSevere).
+						WriteString(" OR excluded.").
+						Ident(runnerfailure.FieldSevere)
+				}))
+			}).
+			Exec(ctx)
+		if err != nil {
+			return fmt.Errorf("write runner failures: %w", err)
 		}
 	}
 

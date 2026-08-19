@@ -242,25 +242,35 @@ templ ReposPanel(o Overview) {
 
 // FailuresPanel is the recent-failure lane.
 templ FailuresPanel(o Overview) {
-	@Card("failures", "recent failures", "") {
-		if len(o.Failures) == 0 {
+	@Card("failures", "recent failures", o.Failures.Window) {
+		if len(o.Failures.Items) == 0 {
 			<div class="flex items-center gap-2 text-[11.5px] text-fg-subtle py-2">
 				@Dot(ToneSuccess)
-				no failures among the matching runners
+				no failures recorded in this window
 			</div>
 		} else {
 			<ul class="space-y-2">
-				for _, f := range o.Failures {
+				for _, f := range o.Failures.Items {
 					<li class="flex items-start gap-2">
 						@Dot(failureTone(f))
 						<div class="min-w-0 flex-1">
 							<a href={ templ.SafeURL("/runners/" + f.Runner) } class="block font-mono text-[11.5px] text-fg hover:underline truncate">{ f.Runner }</a>
 							<div class="text-[11px] text-danger truncate" title={ f.Reason }>{ f.Reason }</div>
 						</div>
-						<span class="text-[10.5px] text-fg-subtle font-mono shrink-0">{ fleet.FormatRelative(f.At, o.Now) }</span>
+						<div class="text-right shrink-0">
+							<span class="block text-[10.5px] text-fg-subtle font-mono">{ fleet.FormatRelative(f.At, o.Now) }</span>
+							if f.Set != "" {
+								<span class="block text-[10px] text-fg-subtle font-mono truncate">{ f.Set }</span>
+							}
+						</div>
 					</li>
 				}
 			</ul>
+			if o.Failures.More > 0 {
+				<div class="mt-2.5 pt-2 border-t border-muted text-[10.5px] text-fg-subtle font-mono">
+					+{ fmt.Sprintf("%d", o.Failures.More) } more in this window
+				</div>
+			}
 		}
 	}
 }

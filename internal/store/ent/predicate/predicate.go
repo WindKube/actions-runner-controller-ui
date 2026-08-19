@@ -15,5 +15,8 @@ type JobObservation func(*sql.Selector)
 // PhaseTransition is the predicate function for phasetransition builders.
 type PhaseTransition func(*sql.Selector)
 
+// RunnerFailure is the predicate function for runnerfailure builders.
+type RunnerFailure func(*sql.Selector)
+
 // Sample is the predicate function for sample builders.
 type Sample func(*sql.Selector)

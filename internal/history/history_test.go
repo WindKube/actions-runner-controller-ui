@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"arc-ui/internal/store"
+	"arc-ui/internal/web"
 )
 
 // countingQueries answers the store contract with fixtures and counts how often
@@ -18,6 +19,13 @@ type countingQueries struct {
 	stats      store.Stats
 	statsErr   error
 	statsCalls int
+
+	failures      []store.FailureRecord
+	failuresTotal int64
+	failuresErr   error
+	// gotSetName records the scope the last Failures call was made with.
+	gotSetName string
+	gotLimit   int
 }
 
 func (q *countingQueries) Series(context.Context, store.Scope, string, []store.Metric, store.Range) (map[store.Metric][]store.Point, error) {
@@ -34,6 +42,11 @@ func (q *countingQueries) Throughput(context.Context, string, store.Range) ([]st
 
 func (q *countingQueries) RepoConsumption(context.Context, store.Range) ([]store.RepoTotal, error) {
 	return nil, nil
+}
+
+func (q *countingQueries) Failures(_ context.Context, setName string, _ store.Range, limit int) ([]store.FailureRecord, int64, error) {
+	q.gotSetName, q.gotLimit = setName, limit
+	return q.failures, q.failuresTotal, q.failuresErr
 }
 
 func (q *countingQueries) Stats(context.Context) (store.Stats, error) {
@@ -140,4 +153,50 @@ func TestStatsMapsEveryCountAndMarksTheStoreEnabled(t *testing.T) {
 	assert.Equal(t, int64(99), got.ChurnEvents, "churn events")
 	assert.Equal(t, int64(1234715), got.Rows, "total rows")
 	assert.Equal(t, fixedStats().Oldest, got.Oldest, "oldest sample")
+}
+
+// The lane shows a page and states a total, and the two are different numbers:
+// six rows out of forty-one is the whole point of the footer.
+func TestFailuresCarryTheirSetAndTheWindowTotal(t *testing.T) {
+	t.Parallel()
+
+	failedAt := time.Date(2026, 8, 19, 11, 30, 0, 0, time.UTC)
+	q := &countingQueries{
+		failures: []store.FailureRecord{
+			{Runner: "runner-x", Set: "linux-x64", Reason: "ImagePullBackOff", Severe: true, At: failedAt},
+		},
+		failuresTotal: 41,
+	}
+
+	got, err := New(q).Failures(context.Background(), web.FleetScope, window(), 6)
+	require.NoError(t, err, "Failures")
+
+	assert.Equal(t, 41, got.Total, "want the window total, not the page size")
+	require.Len(t, got.Failures, 1, "want the page")
+	assert.Equal(t, "runner-x", got.Failures[0].Runner, "runner")
+	assert.Equal(t, "linux-x64", got.Failures[0].Set, "set")
+	assert.Equal(t, "ImagePullBackOff", got.Failures[0].Reason, "reason")
+	assert.True(t, got.Failures[0].Severe, "severity did not survive the mapping")
+	assert.Equal(t, failedAt, got.Failures[0].At, "timestamp")
+}
+
+// A set filter scopes the lane the same way it scopes every chart on the page.
+func TestFailuresScopeBecomesTheSetName(t *testing.T) {
+	t.Parallel()
+
+	q := &countingQueries{}
+	a := New(q)
+
+	_, err := a.Failures(context.Background(), web.FleetScope, window(), 6)
+	require.NoError(t, err, "fleet Failures")
+	assert.Empty(t, q.gotSetName, "the fleet scope must not name a set")
+
+	_, err = a.Failures(context.Background(), web.Set("arm64"), window(), 6)
+	require.NoError(t, err, "set Failures")
+	assert.Equal(t, "arm64", q.gotSetName, "a set scope must reach the store as its name")
+}
+
+func window() web.Window {
+	to := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	return web.Window{From: to.Add(-6 * time.Hour), To: to, Points: 60}
 }

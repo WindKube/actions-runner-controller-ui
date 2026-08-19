@@ -230,6 +230,17 @@ func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention
 			retention: ret.Scope1m,
 			cutoff:    unixCutoff(now, ret.Scope1m),
 		},
+		{
+			// Failures follow the 5-minute tier because that window is the
+			// longest range the failure lane can be asked for. Without a sweep
+			// this would be the one table in the database that grows forever:
+			// nothing else deletes it, and a scale set with a bad image writes a
+			// row per runner it burns through.
+			what:      "runner failures",
+			q:         `DELETE FROM runner_failures WHERE ts < ?`,
+			retention: ret.Scope5m,
+			cutoff:    unixCutoff(now, ret.Scope5m),
+		},
 	}
 
 	var total int64
