@@ -53,14 +53,18 @@ override:
   # internal/config used to be listed here and no longer is: it has tests now
   # and clears the 50% floor on its own. That is the intended lifecycle for
   # every entry in this section — delete it, do not nudge the number up.
-  # internal/history is the next one worth doing; its retention window encodes
-  # decisions nothing else in the tree checks.
-  - path: ^internal/history
-    threshold: 0
   - path: ^internal/logging
     threshold: 0
   - path: ^internal/telemetry
     threshold: 0
+
+  # internal/history has tests now, so it is a ratchet rather than an exemption:
+  # set just under today's 29.3%. It stays listed because most of the package is
+  # the mapping between the store's rows and the view's types, and the half that
+  # is covered is the half with decisions in it — the stats cache and the
+  # failure window. The rest goes up when the series mapping gets tests.
+  - path: ^internal/history
+    threshold: 25
 
   # --- single files inside packages that otherwise clear the floor ----------
   # clients.go builds real clientsets from a kubeconfig, so nothing short of a
