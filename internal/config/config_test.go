@@ -99,3 +99,16 @@ func TestAllNamespaces(t *testing.T) {
 	assert.Empty(t, cfg.Namespaces)
 	assert.True(t, cfg.AllNamespaces(), "a blank ARC_UI_NAMESPACES means all namespaces")
 }
+
+// TestLoadRejectsRelativeListenerMetricsPath ensures the path is absolute,
+// preventing relative paths like "metrics" from producing malformed URLs when
+// the collector constructs listener endpoints from pod IPs.
+func TestLoadRejectsRelativeListenerMetricsPath(t *testing.T) {
+	t.Setenv("ARC_UI_LISTENER_METRICS_PATH", "metrics")
+
+	_, _, err := Load()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ARC_UI_LISTENER_METRICS_PATH")
+	assert.Contains(t, err.Error(), "must begin with /")
+}

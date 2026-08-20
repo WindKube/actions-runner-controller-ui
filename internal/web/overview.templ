@@ -34,6 +34,37 @@ templ OverviewPage(o Overview) {
 			@ChurnPanel(o)
 		</div>
 	</div>
+	<div class="mt-3">
+		@StoreFooter(o)
+	</div>
+}
+
+// StoreFooter reports the history store's own footprint at the foot of the
+// page. The row counts are laid out in columns rather than as a KV list because
+// they are read against one another — which table is growing — not looked up
+// one at a time.
+templ StoreFooter(o Overview) {
+	@Card("store", "history store", storeSubtitle(o.Store)) {
+		if !o.Store.Enabled {
+			@Empty("history store disabled — nothing is being recorded")
+		} else {
+			<div class="grid gap-x-6 grid-cols-2 md:grid-cols-4">
+				for _, kv := range o.Store.Rows {
+					@KVRow(kv)
+				}
+			</div>
+		}
+	}
+}
+
+// storeSubtitle puts the size in the card header, where the strip's other
+// headline numbers live, so the one number an operator is watching for is
+// visible without reading the grid.
+func storeSubtitle(p StorePanel) string {
+	if !p.Enabled || len(p.Rows) == 0 {
+		return ""
+	}
+	return p.Rows[0].Value
 }
 
 // Tiles is the KPI strip.
@@ -211,25 +242,35 @@ templ ReposPanel(o Overview) {
 
 // FailuresPanel is the recent-failure lane.
 templ FailuresPanel(o Overview) {
-	@Card("failures", "recent failures", "") {
-		if len(o.Failures) == 0 {
+	@Card("failures", "recent failures", o.Failures.Window) {
+		if len(o.Failures.Items) == 0 {
 			<div class="flex items-center gap-2 text-[11.5px] text-fg-subtle py-2">
 				@Dot(ToneSuccess)
-				no failures among the matching runners
+				no failures recorded in this window
 			</div>
 		} else {
 			<ul class="space-y-2">
-				for _, f := range o.Failures {
+				for _, f := range o.Failures.Items {
 					<li class="flex items-start gap-2">
 						@Dot(failureTone(f))
 						<div class="min-w-0 flex-1">
 							<a href={ templ.SafeURL("/runners/" + f.Runner) } class="block font-mono text-[11.5px] text-fg hover:underline truncate">{ f.Runner }</a>
 							<div class="text-[11px] text-danger truncate" title={ f.Reason }>{ f.Reason }</div>
 						</div>
-						<span class="text-[10.5px] text-fg-subtle font-mono shrink-0">{ fleet.FormatRelative(f.At, o.Now) }</span>
+						<div class="text-right shrink-0">
+							<span class="block text-[10.5px] text-fg-subtle font-mono">{ fleet.FormatRelative(f.At, o.Now) }</span>
+							if f.Set != "" {
+								<span class="block text-[10px] text-fg-subtle font-mono truncate">{ f.Set }</span>
+							}
+						</div>
 					</li>
 				}
 			</ul>
+			if o.Failures.More > 0 {
+				<div class="mt-2.5 pt-2 border-t border-muted text-[10.5px] text-fg-subtle font-mono">
+					+{ fmt.Sprintf("%d", o.Failures.More) } more in this window
+				</div>
+			}
 		}
 	}
 }

@@ -3,6 +3,8 @@ package web
 import (
 	"context"
 	"time"
+
+	"arc-ui/internal/fleet"
 )
 
 // Window is one bucketed query over the history store.
@@ -203,6 +205,50 @@ type History interface {
 
 	// Repos returns per-repository consumption over the window, busiest first.
 	Repos(ctx context.Context, w Window, limit int) ([]RepoHistory, error)
+
+	// Failures returns the newest failures in the window, capped at limit.
+	Failures(ctx context.Context, scope Scope, w Window, limit int) (FailureWindow, error)
+
+	// Stats reports what the history is costing on disk. It is the only
+	// question here that is not about a time window.
+	Stats(ctx context.Context) (StoreStats, error)
+}
+
+// FailureWindow is the failure lane's contents.
+//
+// Failures is a page and Total counts the window, which are different numbers
+// on any fleet worth looking at: "six shown of forty-one" is the whole reason
+// the lane has a footer.
+type FailureWindow struct {
+	Failures []fleet.Failure
+	Total    int
+}
+
+// StoreStats is what the SQLite footer reports.
+//
+// The file it describes is the one moving part of this dashboard nobody else
+// monitors: it grows on a volume that was sized once at install time, and the
+// first symptom of that volume filling is the history quietly stopping.
+type StoreStats struct {
+	// Enabled is false when the dashboard is running without a history store.
+	// That is a supported configuration, so the panel has to distinguish it
+	// from a store that exists and happens to be empty — zeros would read as
+	// the latter.
+	Enabled bool
+
+	Path      string
+	SizeBytes int64
+
+	Samples     int64
+	Jobs        int64
+	Phases      int64
+	ChurnEvents int64
+	Failures    int64
+	Rows        int64
+
+	// Oldest is the timestamp of the oldest surviving sample, which is the
+	// honest answer to "how far back can I look".
+	Oldest time.Time
 }
 
 // NoHistory satisfies History with empty results. It is what the dashboard
@@ -227,6 +273,14 @@ func (NoHistory) Churn(context.Context, Scope, Window) (Counts, error) { return 
 
 // Repos returns nothing.
 func (NoHistory) Repos(context.Context, Window, int) ([]RepoHistory, error) { return nil, nil }
+
+// Failures returns nothing.
+func (NoHistory) Failures(context.Context, Scope, Window, int) (FailureWindow, error) {
+	return FailureWindow{}, nil
+}
+
+// Stats reports a store that is not there.
+func (NoHistory) Stats(context.Context) (StoreStats, error) { return StoreStats{}, nil }
 
 // at reads a series defensively: a store that returns a short or absent slice
 // for one dimension must not panic the whole page.

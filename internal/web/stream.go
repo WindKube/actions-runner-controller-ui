@@ -155,6 +155,7 @@ func (h *Handler) StreamOverview(w http.ResponseWriter, r *http.Request) {
 			"runners":     RunnersPanel(o),
 			"repos":       ReposPanel(o),
 			"failures":    FailuresPanel(o),
+			"store":       StoreFooter(o),
 			"health":      HealthStrip(o.Page),
 		}, true
 	})

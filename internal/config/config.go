@@ -50,9 +50,18 @@ type Config struct {
 	// own default resolution is 15s, so polling faster returns byte-identical
 	// data and only burns API server quota.
 	ScrapeInterval time.Duration `env:"ARC_UI_SCRAPE_INTERVAL" envDefault:"15s"`
-	// ListenerMetricsURL is the ARC listener's Prometheus endpoint. Optional:
-	// ARC ships with metrics disabled, and the dashboard degrades without it.
+	// ListenerMetricsURL is one ARC listener metrics endpoint, or an aggregator
+	// in front of several. Setting it disables discovery: it names a single
+	// endpoint to scrape, which is what a Prometheus /federate URL or a proxy
+	// needs. Left empty, the listener pods are discovered from the controller
+	// namespace instead, which is what a stock install wants — ARC runs one
+	// listener per scale set and each serves only its own series, so one URL
+	// covers one scale set out of however many there are.
 	ListenerMetricsURL string `env:"ARC_UI_LISTENER_METRICS_URL"`
+	// ListenerMetricsPath is the path discovered listeners serve metrics on. It
+	// mirrors the controller chart's metrics.listenerEndpoint, which is
+	// configurable and which the pod does not advertise anywhere.
+	ListenerMetricsPath string `env:"ARC_UI_LISTENER_METRICS_PATH" envDefault:"/metrics"`
 
 	DBPath string `env:"ARC_UI_DB_PATH" envDefault:"/data/arc-ui.db"`
 
@@ -112,6 +121,9 @@ func Load() (Config, []Warning, error) {
 	}
 	if cfg.KubeQPS <= 0 || cfg.KubeBurst <= 0 {
 		return Config{}, warns, fmt.Errorf("ARC_UI_KUBE_QPS and ARC_UI_KUBE_BURST must be positive")
+	}
+	if cfg.ListenerMetricsPath != "" && !strings.HasPrefix(cfg.ListenerMetricsPath, "/") {
+		return Config{}, warns, fmt.Errorf("ARC_UI_LISTENER_METRICS_PATH=%q must begin with /", cfg.ListenerMetricsPath)
 	}
 
 	// Both halves of the shutdown sequence are fed to time.After and

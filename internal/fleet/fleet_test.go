@@ -252,6 +252,32 @@ func TestFormatGiB(t *testing.T) {
 	}
 }
 
+// The SQLite footer reports one file whose size spans four orders of magnitude
+// over an install's life: kibibytes on the first boot, gibibytes after thirteen
+// months of hourly rollups. A single fixed unit is unreadable at one end or the
+// other, so the unit has to follow the number.
+func TestFormatBytesScalesItsUnit(t *testing.T) {
+	t.Parallel()
+
+	cases := map[int64]string{
+		0:  "0 B",
+		-1: "0 B",
+
+		512:              "512 B",
+		4 * 1024:         "4.0 KiB",
+		12 * 1024 * 1024: "12.0 MiB",
+		3 * GiB / 2:      "1.5 GiB",
+
+		// A byte short of a mebibyte rounds to 1024.0 at one decimal place,
+		// which is a quantity nobody writes: the unit has to be promoted after
+		// rounding, not before.
+		1024*1024 - 1: "1.0 MiB",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, FormatBytes(in), "FormatBytes(%d)", in)
+	}
+}
+
 func TestByRepositoryRanksBusiestFirst(t *testing.T) {
 	t.Parallel()
 
@@ -279,4 +305,35 @@ func TestFailuresNewestFirstAndCapped(t *testing.T) {
 
 	require.Len(t, got, 2)
 	assert.Equal(t, "new", got[0].Runner, "newest failure should sort first")
+}
+
+// The lane is fleet-wide, so a row that names only the runner leaves an
+// operator to guess which scale set is burning through pods.
+func TestFailuresCarryTheirSetName(t *testing.T) {
+	t.Parallel()
+
+	got := Failures([]Runner{
+		{Name: "r1", SetName: "linux-x64", FailureReason: "OOMKilled", FailedAt: now, State: StateFailed},
+	}, 6)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "linux-x64", got[0].Set, "want the failing runner's set on the row")
+}
+
+// SortFailures is the lane's order, exported because the same ordering has to
+// apply to rows that were merged from two sources rather than derived from one
+// runner list.
+func TestSortFailuresPutsNewestFirstAndUndatedLast(t *testing.T) {
+	t.Parallel()
+
+	in := []Failure{
+		{Runner: "undated"},
+		{Runner: "old", At: now.Add(-time.Hour)},
+		{Runner: "new", At: now.Add(-time.Minute)},
+	}
+
+	SortFailures(in)
+
+	assert.Equal(t, []string{"new", "old", "undated"},
+		[]string{in[0].Runner, in[1].Runner, in[2].Runner}, "wrong order")
 }

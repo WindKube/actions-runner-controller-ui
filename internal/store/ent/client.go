@@ -14,6 +14,7 @@ import (
 	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
 	"arc-ui/internal/store/ent/phasetransition"
+	"arc-ui/internal/store/ent/runnerfailure"
 	"arc-ui/internal/store/ent/sample"
 
 	"entgo.io/ent"
@@ -32,6 +33,8 @@ type Client struct {
 	JobObservation *JobObservationClient
 	// PhaseTransition is the client for interacting with the PhaseTransition builders.
 	PhaseTransition *PhaseTransitionClient
+	// RunnerFailure is the client for interacting with the RunnerFailure builders.
+	RunnerFailure *RunnerFailureClient
 	// Sample is the client for interacting with the Sample builders.
 	Sample *SampleClient
 }
@@ -48,6 +51,7 @@ func (c *Client) init() {
 	c.ChurnEvent = NewChurnEventClient(c.config)
 	c.JobObservation = NewJobObservationClient(c.config)
 	c.PhaseTransition = NewPhaseTransitionClient(c.config)
+	c.RunnerFailure = NewRunnerFailureClient(c.config)
 	c.Sample = NewSampleClient(c.config)
 }
 
@@ -144,6 +148,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ChurnEvent:      NewChurnEventClient(cfg),
 		JobObservation:  NewJobObservationClient(cfg),
 		PhaseTransition: NewPhaseTransitionClient(cfg),
+		RunnerFailure:   NewRunnerFailureClient(cfg),
 		Sample:          NewSampleClient(cfg),
 	}, nil
 }
@@ -167,6 +172,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ChurnEvent:      NewChurnEventClient(cfg),
 		JobObservation:  NewJobObservationClient(cfg),
 		PhaseTransition: NewPhaseTransitionClient(cfg),
+		RunnerFailure:   NewRunnerFailureClient(cfg),
 		Sample:          NewSampleClient(cfg),
 	}, nil
 }
@@ -199,6 +205,7 @@ func (c *Client) Use(hooks ...Hook) {
 	c.ChurnEvent.Use(hooks...)
 	c.JobObservation.Use(hooks...)
 	c.PhaseTransition.Use(hooks...)
+	c.RunnerFailure.Use(hooks...)
 	c.Sample.Use(hooks...)
 }
 
@@ -208,6 +215,7 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 	c.ChurnEvent.Intercept(interceptors...)
 	c.JobObservation.Intercept(interceptors...)
 	c.PhaseTransition.Intercept(interceptors...)
+	c.RunnerFailure.Intercept(interceptors...)
 	c.Sample.Intercept(interceptors...)
 }
 
@@ -220,6 +228,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.JobObservation.mutate(ctx, m)
 	case *PhaseTransitionMutation:
 		return c.PhaseTransition.mutate(ctx, m)
+	case *RunnerFailureMutation:
+		return c.RunnerFailure.mutate(ctx, m)
 	case *SampleMutation:
 		return c.Sample.mutate(ctx, m)
 	default:
@@ -626,6 +636,139 @@ func (c *PhaseTransitionClient) mutate(ctx context.Context, m *PhaseTransitionMu
 	}
 }
 
+// RunnerFailureClient is a client for the RunnerFailure schema.
+type RunnerFailureClient struct {
+	config
+}
+
+// NewRunnerFailureClient returns a client for the RunnerFailure from the given config.
+func NewRunnerFailureClient(c config) *RunnerFailureClient {
+	return &RunnerFailureClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `runnerfailure.Hooks(f(g(h())))`.
+func (c *RunnerFailureClient) Use(hooks ...Hook) {
+	c.hooks.RunnerFailure = append(c.hooks.RunnerFailure, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `runnerfailure.Intercept(f(g(h())))`.
+func (c *RunnerFailureClient) Intercept(interceptors ...Interceptor) {
+	c.inters.RunnerFailure = append(c.inters.RunnerFailure, interceptors...)
+}
+
+// Create returns a builder for creating a RunnerFailure entity.
+func (c *RunnerFailureClient) Create() *RunnerFailureCreate {
+	mutation := newRunnerFailureMutation(c.config, OpCreate)
+	return &RunnerFailureCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of RunnerFailure entities.
+func (c *RunnerFailureClient) CreateBulk(builders ...*RunnerFailureCreate) *RunnerFailureCreateBulk {
+	return &RunnerFailureCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *RunnerFailureClient) MapCreateBulk(slice any, setFunc func(*RunnerFailureCreate, int)) *RunnerFailureCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &RunnerFailureCreateBulk{err: fmt.Errorf("calling to RunnerFailureClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*RunnerFailureCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &RunnerFailureCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for RunnerFailure.
+func (c *RunnerFailureClient) Update() *RunnerFailureUpdate {
+	mutation := newRunnerFailureMutation(c.config, OpUpdate)
+	return &RunnerFailureUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *RunnerFailureClient) UpdateOne(_m *RunnerFailure) *RunnerFailureUpdateOne {
+	mutation := newRunnerFailureMutation(c.config, OpUpdateOne, withRunnerFailure(_m))
+	return &RunnerFailureUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *RunnerFailureClient) UpdateOneID(id int) *RunnerFailureUpdateOne {
+	mutation := newRunnerFailureMutation(c.config, OpUpdateOne, withRunnerFailureID(id))
+	return &RunnerFailureUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for RunnerFailure.
+func (c *RunnerFailureClient) Delete() *RunnerFailureDelete {
+	mutation := newRunnerFailureMutation(c.config, OpDelete)
+	return &RunnerFailureDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *RunnerFailureClient) DeleteOne(_m *RunnerFailure) *RunnerFailureDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *RunnerFailureClient) DeleteOneID(id int) *RunnerFailureDeleteOne {
+	builder := c.Delete().Where(runnerfailure.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &RunnerFailureDeleteOne{builder}
+}
+
+// Query returns a query builder for RunnerFailure.
+func (c *RunnerFailureClient) Query() *RunnerFailureQuery {
+	return &RunnerFailureQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeRunnerFailure},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a RunnerFailure entity by its id.
+func (c *RunnerFailureClient) Get(ctx context.Context, id int) (*RunnerFailure, error) {
+	return c.Query().Where(runnerfailure.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *RunnerFailureClient) GetX(ctx context.Context, id int) *RunnerFailure {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *RunnerFailureClient) Hooks() []Hook {
+	return c.hooks.RunnerFailure
+}
+
+// Interceptors returns the client interceptors.
+func (c *RunnerFailureClient) Interceptors() []Interceptor {
+	return c.inters.RunnerFailure
+}
+
+func (c *RunnerFailureClient) mutate(ctx context.Context, m *RunnerFailureMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&RunnerFailureCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&RunnerFailureUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&RunnerFailureUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&RunnerFailureDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown RunnerFailure mutation op: %q", m.Op())
+	}
+}
+
 // SampleClient is a client for the Sample schema.
 type SampleClient struct {
 	config
@@ -762,9 +905,10 @@ func (c *SampleClient) mutate(ctx context.Context, m *SampleMutation) (Value, er
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		ChurnEvent, JobObservation, PhaseTransition, Sample []ent.Hook
+		ChurnEvent, JobObservation, PhaseTransition, RunnerFailure, Sample []ent.Hook
 	}
 	inters struct {
-		ChurnEvent, JobObservation, PhaseTransition, Sample []ent.Interceptor
+		ChurnEvent, JobObservation, PhaseTransition, RunnerFailure,
+		Sample []ent.Interceptor
 	}
 )

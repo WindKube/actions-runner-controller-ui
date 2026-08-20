@@ -3,6 +3,7 @@ package web
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -90,14 +91,30 @@ func testBuilder() *Builder {
 // renderOverview renders the unfiltered fleet overview as a complete document.
 func renderOverview(t *testing.T) string {
 	t.Helper()
+	return renderOverviewWith(t, testBuilder())
+}
 
-	o := testBuilder().Overview(context.Background(), Signals{}, now)
+// renderOverviewWith renders the overview from a caller-supplied builder, for
+// the tests that need a history other than NoHistory.
+func renderOverviewWith(t *testing.T, b *Builder) string {
+	t.Helper()
+
+	o := b.Overview(context.Background(), Signals{}, now)
 	o.Stream = "/stream"
 
 	var sb strings.Builder
 	require.NoError(t, Document(o.Page, OverviewPage(o)).Render(context.Background(), &sb), "render")
 	return sb.String()
 }
+
+// statsHistory is NoHistory with a store-statistics answer, so the footer can
+// be rendered without a database anywhere in sight.
+type statsHistory struct {
+	NoHistory
+	stats StoreStats
+}
+
+func (h statsHistory) Stats(context.Context) (StoreStats, error) { return h.stats, nil }
 
 func TestOverviewRendersEveryPatchTarget(t *testing.T) {
 	t.Parallel()
@@ -109,7 +126,7 @@ func TestOverviewRendersEveryPatchTarget(t *testing.T) {
 	for _, id := range []string{
 		"filterbar", "tiles", "history", "utilization", "resources",
 		"throughput", "churn", "runnersets", "runners", "repos",
-		"failures", "health", "live-indicator",
+		"failures", "store", "health", "live-indicator",
 	} {
 		assert.Contains(t, html, `id="`+id+`"`, "missing patch target id=%q", id)
 	}
@@ -354,6 +371,10 @@ func (s windowSpy) Runner(_ context.Context, _ string, w Window) (RunnerSeries, 
 func (s windowSpy) Throughput(context.Context, Scope, Window) (Counts, error) { return Counts{}, nil }
 func (s windowSpy) Churn(context.Context, Scope, Window) (Counts, error)      { return Counts{}, nil }
 func (s windowSpy) Repos(context.Context, Window, int) ([]RepoHistory, error) { return nil, nil }
+func (s windowSpy) Stats(context.Context) (StoreStats, error)                 { return StoreStats{}, nil }
+func (s windowSpy) Failures(context.Context, Scope, Window, int) (FailureWindow, error) {
+	return FailureWindow{}, nil
+}
 
 func TestMissingRunnerIsNotFoundNotAnError(t *testing.T) {
 	t.Parallel()
@@ -615,4 +636,250 @@ func TestAssetsConditionalRequestKeepsCachingHeaders(t *testing.T) {
 	assert.Equal(t, etag, second.Header().Get("ETag"), "the 304 dropped the ETag")
 	assert.Contains(t, second.Header().Get("Cache-Control"), "immutable",
 		"the 304 dropped Cache-Control")
+}
+
+// The requested-resources line is drawn from a series the store has kept all
+// along, yet resourceChart drew only its newest value, flat across the whole
+// window. A fleet that grew from 2 cores to 6 an instant ago then claimed to
+// have reserved 6 cores for the entire hour — a reservation that never
+// happened, on the one panel whose whole job is comparing usage against what
+// was actually reserved at the time.
+func TestRequestLineFollowsHistoryNotOnlyItsNewestValue(t *testing.T) {
+	t.Parallel()
+
+	used := []float64{1, 1, 1, 4}
+	request := []float64{2, 2, 2, 6}
+
+	c := resourceChart("cpu", used, request, Range1h, strokeCPU, fillCPU, ToneCPU, fleet.FormatCores)
+
+	require.Len(t, c.Refs, 1, "want the requested reference line")
+	ys := polylineYs(t, c.Refs[0].Points)
+	require.Len(t, ys, len(request), "want one point per sample, got %v", ys)
+	// SVG y grows downward, so the smaller early request sits lower on the plot
+	// than the larger closing one.
+	assert.Greater(t, ys[0], ys[3],
+		"the early 2-core request must sit below the closing 6-core one, got %v", ys)
+}
+
+// polylineYs pulls the y coordinate out of each "x,y" pair of a points string.
+func polylineYs(t *testing.T, points string) []float64 {
+	t.Helper()
+
+	fields := strings.Fields(points)
+	out := make([]float64, 0, len(fields))
+	for _, pair := range fields {
+		_, y, ok := strings.Cut(pair, ",")
+		require.True(t, ok, "malformed point %q in %q", pair, points)
+		v, err := strconv.ParseFloat(y, 64)
+		require.NoError(t, err, "parse y of %q", pair)
+		out = append(out, v)
+	}
+	return out
+}
+
+// A fleet scaled to nothing right now still reserved resources for the rest of
+// the window, and that history is the only thing on the panel worth looking at.
+// Gating the line on its newest value alone blanks it every night.
+func TestRequestLineSurvivesAFleetThatIsIdleRightNow(t *testing.T) {
+	t.Parallel()
+
+	used := []float64{1, 1, 1, 0}
+	request := []float64{2, 2, 2, 0}
+
+	c := resourceChart("cpu", used, request, Range1h, strokeCPU, fillCPU, ToneCPU, fleet.FormatCores)
+
+	require.Len(t, c.Refs, 1, "want the requested line kept for the history in the window")
+	assert.Len(t, polylineYs(t, c.Refs[0].Points), len(request),
+		"want one point per sample even though the newest is zero")
+}
+
+// Row counts in the store footer run to seven and eight digits. Unseparated,
+// 1234567 and 12345678 are the same shape at a glance, which is the one thing a
+// capacity readout must not be.
+func TestThousandsSeparatesLongCounts(t *testing.T) {
+	t.Parallel()
+
+	cases := map[int64]string{
+		0:         "0",
+		7:         "7",
+		999:       "999",
+		1000:      "1,000",
+		12345:     "12,345",
+		1234567:   "1,234,567",
+		123456789: "123,456,789",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, Thousands(in), "Thousands(%d)", in)
+	}
+}
+
+// The SQLite file is the one moving part of this dashboard nobody else
+// monitors: it grows on a PVC sized once at install time, and the first symptom
+// of a full volume is the history quietly stopping. The footer is the only
+// place its size is ever reported.
+func TestStoreFooterReportsSizeAndRowCounts(t *testing.T) {
+	t.Parallel()
+
+	b := testBuilder()
+	b.History = statsHistory{stats: StoreStats{
+		Enabled:     true,
+		Path:        "/data/arc-ui.db",
+		SizeBytes:   12 * 1024 * 1024,
+		Samples:     1234567,
+		Jobs:        42,
+		Phases:      7,
+		ChurnEvents: 99,
+		Failures:    8317,
+		Rows:        1243032,
+		Oldest:      now.Add(-72 * time.Hour),
+	}}
+
+	html := renderOverviewWith(t, b)
+
+	assert.Contains(t, html, `id="store"`, "the footer must be a patchable region")
+	assert.Contains(t, html, "12.0 MiB", "want the size on disk")
+	assert.Contains(t, html, "1,234,567", "want the sample count, separated")
+	assert.Contains(t, html, "/data/arc-ui.db", "want the file the numbers describe")
+	// Every table the retention sweep owns has to be here, or the components
+	// stop adding up to the total the same panel prints and the panel becomes
+	// unreadable as the retention readout it is meant to be. Failures were the
+	// one counted into Rows but missing from the rows on screen.
+	assert.Contains(t, html, "8,317", "want the persisted failure count")
+}
+
+// Running without a writable volume is a supported configuration, and the
+// footer is then reporting on a store that does not exist. Zeros would read as
+// an empty database rather than an absent one.
+func TestStoreFooterSaysSoWhenHistoryIsDisabled(t *testing.T) {
+	t.Parallel()
+
+	html := renderOverview(t)
+
+	assert.Contains(t, html, "history store disabled",
+		"an absent store must be named, not rendered as zero rows")
+	assert.NotContains(t, html, "0 B", "an absent store must not report a size")
+}
+
+// failureHistory answers the lane from a fixture.
+type failureHistory struct {
+	NoHistory
+	window FailureWindow
+	err    error
+}
+
+func (h failureHistory) Failures(context.Context, Scope, Window, int) (FailureWindow, error) {
+	return h.window, h.err
+}
+
+// The store is the lane's source of truth, and its whole point is rows whose
+// runners no longer exist.
+func TestFailureLaneRendersHistoryAndTheWindowFooter(t *testing.T) {
+	t.Parallel()
+
+	b := testBuilder()
+	b.History = failureHistory{window: FailureWindow{
+		Failures: []fleet.Failure{
+			{Runner: "deleted-1", Set: "arc-ubuntu", Reason: "OOMKilled", At: now.Add(-20 * time.Minute), Severe: true},
+			{Runner: "arc-arm64-xyz", Set: "arc-arm64", Reason: "ImagePullBackOff", At: now.Add(-30 * time.Second), Severe: true},
+		},
+		Total: 41,
+	}}
+
+	html := renderOverviewWith(t, b)
+
+	assert.Contains(t, html, "deleted-1",
+		"a failure whose runner ARC has already deleted must still be listed")
+	assert.Contains(t, html, "39 more", "want the rest of the window counted in the footer")
+}
+
+// When the store cannot answer, the live snapshot is all there is — and it still
+// knows what is broken right now. An empty lane would claim a healthy fleet.
+func TestFailureLaneFallsBackToLiveWhenTheStoreQueryFails(t *testing.T) {
+	t.Parallel()
+
+	b := testBuilder()
+	b.History = failureHistory{err: errors.New("database is locked")}
+
+	html := renderOverviewWith(t, b)
+
+	assert.Contains(t, html, "arc-arm64-xyz", "want the live failure when history is unavailable")
+	assert.NotContains(t, html, "more in this window",
+		"a fallback lane knows nothing about a window total and must not claim one")
+}
+
+// The recorder writes on the same snapshot the page renders from, so a brand new
+// failure can be on screen a tick before it is in the database — and a store
+// that has stopped accepting writes is exactly when the lane matters most.
+func TestMergeFailuresAddsLiveFailuresTheStoreHasNotCaughtUpWith(t *testing.T) {
+	t.Parallel()
+
+	stored := FailureWindow{
+		Failures: []fleet.Failure{
+			{Runner: "old", Reason: "Evicted", At: now.Add(-time.Hour), Severe: true},
+		},
+		Total: 1,
+	}
+	live := []fleet.Failure{
+		{Runner: "brand-new", Reason: "ImagePullBackOff", At: now.Add(-time.Second), Severe: true},
+	}
+
+	got := mergeFailures(stored, live, 6, "last hour")
+
+	require.Len(t, got.Items, 2, "want both the persisted and the unpersisted failure")
+	assert.Equal(t, "brand-new", got.Items[0].Runner, "want newest first across both sources")
+	assert.Zero(t, got.More, "two of two shown leaves nothing more to count")
+}
+
+func TestMergeFailuresDoesNotListAStoredFailureTwice(t *testing.T) {
+	t.Parallel()
+
+	failure := fleet.Failure{Runner: "runner-x", Reason: "OOMKilled", At: now.Add(-time.Minute), Severe: true}
+	stored := FailureWindow{Failures: []fleet.Failure{failure}, Total: 1}
+
+	got := mergeFailures(stored, []fleet.Failure{failure}, 6, "last hour")
+
+	assert.Len(t, got.Items, 1, "the same failure came back from both sources and was listed twice")
+	assert.Zero(t, got.More, "more")
+}
+
+func TestMergeFailuresCapsThePageWithoutCappingTheCount(t *testing.T) {
+	t.Parallel()
+
+	stored := FailureWindow{
+		Failures: []fleet.Failure{
+			{Runner: "a", Reason: "Evicted", At: now.Add(-time.Minute)},
+			{Runner: "b", Reason: "Evicted", At: now.Add(-2 * time.Minute)},
+		},
+		Total: 41,
+	}
+
+	got := mergeFailures(stored, nil, 1, "last 6 hours")
+
+	require.Len(t, got.Items, 1, "want the page capped")
+	assert.Equal(t, "a", got.Items[0].Runner, "want the newest kept")
+	assert.Equal(t, 40, got.More, "want the window's remainder, not the page's")
+	assert.Equal(t, "last 6 hours", got.Window, "the lane has to say which window it covers")
+}
+
+// A source that answered only partly is neither healthy nor an outage. Green
+// hides that some of the fleet has no queue depth at all; red claims an outage
+// that is not happening. Both readings send an operator to the wrong place.
+func TestPartlyAvailableSourceIsReportedAsDegraded(t *testing.T) {
+	t.Parallel()
+
+	const reason = "17 of 20 listeners scraped; arc-arm64-listener: connection refused"
+
+	src := fleet.Source{Name: fleet.SourceListener, Available: true, Reason: reason, CheckedAt: now}
+	assert.Equal(t, reason, SourceValue(src, "ok"), "a degraded source must show why, not \"ok\"")
+	assert.Equal(t, ToneAttention, SourceTone(src), "a degraded source is neither success nor danger")
+
+	snap := sampleSnapshot()
+	snap.Sources = append(snap.Sources, src)
+	b := testBuilder()
+	b.Fleet = SnapshotFunc(func() fleet.Snapshot { return snap })
+
+	html := renderOverviewWith(t, b)
+
+	assert.Contains(t, html, "17 of 20 listeners scraped",
+		"a partial scrape has to reach the page; it is the only sign those sets are missing")
 }

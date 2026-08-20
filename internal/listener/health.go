@@ -45,15 +45,29 @@ func (h *healthTracker) ok(log zerolog.Logger) {
 	h.reason = ""
 }
 
-// fail records a failed scrape. The same error repeating is not news; a
-// different error is, because it usually means the failure mode changed
+// fail records a scrape where nothing answered. The same error repeating is not
+// news; a different error is, because it usually means the failure mode changed
 // (connection refused, then 404, then unparseable body).
 func (h *healthTracker) fail(log zerolog.Logger, reason string) {
+	h.down(log, "source unavailable", reason)
+}
+
+// degrade records a scrape where some listeners answered and some did not.
+//
+// It shares fail's state machine, so a fleet that loses one listener says so
+// once rather than every interval — but not its wording: a fleet with nineteen
+// healthy listeners is not an unavailable source, and logging it as one is how
+// an operator learns to distrust the line.
+func (h *healthTracker) degrade(log zerolog.Logger, reason string) {
+	h.down(log, "source degraded", reason)
+}
+
+func (h *healthTracker) down(log zerolog.Logger, msg, reason string) {
 	if h.state == healthDown && h.reason == reason {
 		log.Debug().Str("error", reason).Msg("scrape still failing")
 		return
 	}
-	log.Warn().Str("error", reason).Msg("source unavailable")
+	log.Warn().Str("error", reason).Msg(msg)
 	h.state = healthDown
 	h.reason = reason
 }

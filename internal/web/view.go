@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -460,6 +461,31 @@ func UsageGiB(r fleet.Resources) string {
 	return fleet.FormatGiB(r.Used)
 }
 
+// Thousands groups a count with comma separators, e.g. "1,234,567".
+//
+// The store footer reports row counts that reach eight digits. Unseparated,
+// 1234567 and 12345678 are the same shape at a glance, and telling those two
+// apart is the entire job of a capacity readout.
+func Thousands(n int64) string {
+	digits := strconv.FormatInt(n, 10)
+
+	sign := ""
+	if strings.HasPrefix(digits, "-") {
+		sign, digits = "-", digits[1:]
+	}
+
+	var sb strings.Builder
+	for i, d := range digits {
+		// A separator goes before every digit whose distance from the end is a
+		// multiple of three, except at the very start.
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteRune(d)
+	}
+	return sign + sb.String()
+}
+
 // Pct renders a fraction as a whole percentage.
 func Pct(f float64) string { return fmt.Sprintf("%.0f%%", f*100) }
 
@@ -494,7 +520,12 @@ func JobSummary(r fleet.Runner) string {
 
 // SourceTone colours a data source in the control-plane strip.
 func SourceTone(s fleet.Source) Tone {
-	if s.Available {
+	switch {
+	case s.Available && s.Reason != "":
+		// Degraded: neither the green that says "nothing to look at" nor the red
+		// that says "this is down", because it is genuinely in between.
+		return ToneAttention
+	case s.Available:
 		return ToneSuccess
 	}
 	return ToneDanger
@@ -503,11 +534,14 @@ func SourceTone(s fleet.Source) Tone {
 // SourceValue is the text shown for a data source, favouring the failure
 // reason when there is one — an operator needs to know *why* a panel is empty.
 func SourceValue(s fleet.Source, okText string) string {
-	if s.Available {
-		return okText
-	}
+	// A reason on an available source means it answered only partly — a fleet
+	// whose listeners are half reachable, say. Reporting that as okText hides
+	// the half that is missing, and the panels it feeds give no other sign.
 	if s.Reason != "" {
 		return s.Reason
+	}
+	if s.Available {
+		return okText
 	}
 	return "unavailable"
 }

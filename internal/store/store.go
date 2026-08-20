@@ -220,11 +220,24 @@ type Stats struct {
 	Jobs        int64
 	Phases      int64
 	ChurnEvents int64
+	Failures    int64
 	Rows        int64
 
 	// Oldest is the timestamp of the oldest surviving sample in any tier,
 	// which is the honest answer to "how far back can I look".
 	Oldest time.Time
+}
+
+// FailureRecord is one persisted runner failure.
+type FailureRecord struct {
+	Runner string
+	Set    string
+	Reason string
+	// Severe distinguishes a runner that will never work from one that merely
+	// exited non-zero.
+	Severe bool
+	// At is when the failure was observed, not when it was recorded.
+	At time.Time
 }
 
 // Store is the SQLite-backed history of the fleet.
@@ -385,6 +398,7 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		{"job_observations", &st.Jobs},
 		{"phase_transitions", &st.Phases},
 		{"churn_events", &st.ChurnEvents},
+		{"runner_failures", &st.Failures},
 	}
 	for _, c := range counts {
 		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+c.table).Scan(c.into); err != nil {

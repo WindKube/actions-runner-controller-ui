@@ -233,10 +233,30 @@ func (e Event) Warning() bool { return e.Type == "Warning" }
 // optional: the dashboard boots and serves with all of them broken, naming the
 // failures in the control-plane strip rather than rendering zeros.
 type Source struct {
-	Name      string
+	Name string
+	// Available is whether the source answered at all.
 	Available bool
+	// Reason explains a source that is unavailable — or, when Available is
+	// true, one that answered only partly. A fleet whose listeners are half
+	// reachable has real queue depth for half its sets, and painting that as an
+	// outage would be as wrong as painting it as healthy.
 	Reason    string
 	CheckedAt time.Time
+}
+
+// ListenerTarget is one ARC listener metrics endpoint to scrape.
+//
+// It lives here rather than in the scraper because the two sides must not import
+// each other: the collector discovers targets from its pod cache and the scraper
+// consumes them, and this package is the vocabulary they already share.
+type ListenerTarget struct {
+	// Set and Namespace name the scale set this listener serves. They are not
+	// used to key anything — the exposition carries its own labels — but they
+	// are what makes a per-target error message mean something.
+	Set       string
+	Namespace string
+	Pod       string
+	URL       string
 }
 
 // Names of the data sources reported in the control-plane strip.
@@ -408,6 +428,35 @@ func FormatGiB(bytes float64) string {
 		return fmt.Sprintf("%.1fGi", gib)
 	}
 	return fmt.Sprintf("%.0fGi", bytes/GiB)
+}
+
+// FormatBytes renders a byte count with the largest unit that leaves a
+// readable mantissa, e.g. "512 B", "4.0 KiB", "12.0 MiB", "1.5 GiB".
+//
+// The SQLite file this reports on spans four orders of magnitude over an
+// install's life — kibibytes on first boot, gibibytes after thirteen months of
+// hourly rollups — so a fixed unit is unreadable at one end or the other.
+//
+// Promotion happens after rounding, not before: 1048575 bytes is 1023.999 KiB,
+// which one decimal place renders as "1024.0 KiB", a quantity nobody writes.
+// Binary units throughout, because the numbers are compared against ls and du.
+func FormatBytes(bytes int64) string {
+	if bytes <= 0 {
+		return "0 B"
+	}
+	if bytes < 1024 {
+		return fmt.Sprintf("%d B", bytes)
+	}
+
+	// The last unit has nothing to promote to, so it keeps whatever mantissa it
+	// has rather than reporting a number in a unit that does not exist.
+	units := []string{"KiB", "MiB", "GiB", "TiB"}
+	v, i := float64(bytes)/1024, 0
+	for i < len(units)-1 && v >= 1023.95 {
+		v /= 1024
+		i++
+	}
+	return fmt.Sprintf("%.1f %s", v, units[i])
 }
 
 // FormatCores renders a core count to one decimal place.

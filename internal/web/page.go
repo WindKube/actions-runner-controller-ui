@@ -165,9 +165,32 @@ type Overview struct {
 	Sets     []SetRow
 	Runners  []fleet.Runner
 	Repos    []RepoBar
-	Failures []fleet.Failure
+	Failures FailureLane
+
+	// Store is the history store's own footprint, reported at the foot of the
+	// page. Nothing else on the dashboard is about the dashboard itself.
+	Store StorePanel
 
 	SetSort fleet.SetSort
+}
+
+// FailureLane is the recent-failures panel.
+type FailureLane struct {
+	Items []fleet.Failure
+	// More is how many failures the window holds beyond the ones listed. It is
+	// zero on a lane assembled without the store, which knows of no window.
+	More int
+	// Window names the range the lane covers, e.g. "last 6 hours". Empty means
+	// the lane is the live snapshot rather than a window of history.
+	Window string
+}
+
+// StorePanel is the SQLite footer's view model.
+type StorePanel struct {
+	// Enabled is false when there is no history store, in which case Rows is
+	// empty and the panel explains itself rather than reporting zeros.
+	Enabled bool
+	Rows    []KV
 }
 
 // SetDetail is the per-RunnerSet view.
@@ -395,6 +418,15 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 	throughput, _ := b.History.Throughput(ctx, scope, win)
 	churn, _ := b.History.Churn(ctx, scope, win)
 	repos, _ := b.History.Repos(ctx, win, 8)
+	stats, _ := b.History.Stats(ctx)
+
+	// A store that cannot answer leaves the live snapshot, which still knows
+	// what is broken this instant. An empty lane would claim a healthy fleet at
+	// the exact moment the dashboard has least to go on.
+	lane := FailureLane{Items: fleet.Failures(runners, failureLaneRows)}
+	if stored, err := b.History.Failures(ctx, scope, win, failureLaneRows); err == nil {
+		lane = mergeFailures(stored, fleet.Failures(runners, failureLaneRows), failureLaneRows, rng.Label())
+	}
 
 	page := b.page("Fleet", snap, sig, now, []Crumb{{Label: snap.Org}, {Label: "fleet"}})
 	page.Warnings = warnings(snap, totals)
@@ -415,7 +447,8 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 		Sets:       setRows(fleet.GroupBySet(runners, sets)),
 		Runners:    runners,
 		Repos:      repoBars(repos, runners),
-		Failures:   fleet.Failures(runners, 6),
+		Failures:   lane,
+		Store:      storePanel(stats, now),
 		SetSort:    setSort,
 	}
 }
@@ -665,13 +698,23 @@ func resourceChart(title string, used, request []float64, r TimeRange, stroke, f
 		},
 	}
 
-	if req := lastOf(request); req > 0 {
+	// Any positive sample in the window earns the line, not just the newest
+	// one: a fleet that has scaled to nothing since midnight still reserved
+	// what it reserved, and that is the only thing left on the panel to read.
+	if anyPositive(request) {
 		c.Refs = append(c.Refs, RefLine{
-			Points: chart.FlatLine(req, chartW, lineH, peak),
+			// The whole series rather than its newest value flattened across
+			// the window. Requests move — sets get rescaled and the runner
+			// count they are multiplied by changes every scrape — so a flat
+			// line backdates today's reservation over an hour that never saw
+			// it, and the usage it is being compared against is real.
+			Points: chart.Plot(request, chartW, lineH, peak, "", strokeMuted).Points,
 			Stroke: strokeMuted,
-			Label:  "requested " + format(req),
+			Label:  "requested " + format(lastOf(request)),
 		})
-		c.Legend = append(c.Legend, LegendItem{Label: "requested", Tone: ToneMuted, Value: format(req)})
+		c.Legend = append(c.Legend, LegendItem{
+			Label: "requested", Tone: ToneMuted, Value: format(lastOf(request)),
+		})
 	}
 	return c
 }
@@ -741,6 +784,20 @@ func runnerLine(title string, at []time.Time, vals []float64, request, limit flo
 		})
 	}
 	return c
+}
+
+// anyPositive reports whether a series ever rose above zero in the window.
+//
+// PeakOf cannot answer this: it floors its result at 1 so callers can divide by
+// it, which makes an all-zero series indistinguishable from one that peaked at
+// one.
+func anyPositive(v []float64) bool {
+	for _, x := range v {
+		if x > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func lastOf(v []float64) float64 {
@@ -939,6 +996,88 @@ func listenerTone(s fleet.Snapshot) Tone {
 	return ToneSuccess
 }
 
+// failureLaneRows is how many failures the lane lists. The rest of the window
+// is reported as a count, because the panel sits in a column beside two others
+// and an unbounded list would push them off the page.
+const failureLaneRows = 6
+
+// mergeFailures combines the persisted page with any live failure the store has
+// not caught up with.
+//
+// Both sources are needed. The store is authoritative for the window — it is
+// the only one that remembers runners ARC has deleted — but the recorder writes
+// from the same snapshot the page renders from, so a failure can be on screen a
+// tick before it is in the database, and a store that has stopped accepting
+// writes is exactly when the lane matters most.
+//
+// A live failure absent from the page is treated as unpersisted and counted into
+// the total. It cannot have been pushed off the page by newer rows: live
+// failures are the newest thing there is, and the page is ordered newest first.
+func mergeFailures(stored FailureWindow, live []fleet.Failure, limit int, window string) FailureLane {
+	seen := make(map[fleet.Failure]struct{}, len(stored.Failures))
+	key := func(f fleet.Failure) fleet.Failure {
+		// The stored row carries the first observation's timestamp and the live
+		// one carries the current reading, so the timestamp cannot be part of
+		// the identity. Runner and reason are what the store is keyed on too.
+		return fleet.Failure{Runner: f.Runner, Reason: f.Reason}
+	}
+
+	items := make([]fleet.Failure, 0, len(stored.Failures)+len(live))
+	for _, f := range stored.Failures {
+		seen[key(f)] = struct{}{}
+		items = append(items, f)
+	}
+
+	total := stored.Total
+	for _, f := range live {
+		if _, dup := seen[key(f)]; dup {
+			continue
+		}
+		seen[key(f)] = struct{}{}
+		items = append(items, f)
+		total++
+	}
+
+	fleet.SortFailures(items)
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+
+	return FailureLane{Items: items, More: max(0, total-len(items)), Window: window}
+}
+
+// storePanel describes the history store's own footprint.
+//
+// Every count is a row the retention sweep is responsible for eventually
+// deleting, so the panel doubles as the readout for whether retention is
+// keeping up: rows climbing while the oldest sample stays put is the shape of a
+// compactor that has stopped running.
+func storePanel(s StoreStats, now time.Time) StorePanel {
+	if !s.Enabled {
+		return StorePanel{}
+	}
+
+	oldest := "—"
+	if !s.Oldest.IsZero() {
+		oldest = fleet.FormatRelative(s.Oldest, now)
+	}
+
+	return StorePanel{
+		Enabled: true,
+		Rows: []KV{
+			{Label: "on disk", Value: fleet.FormatBytes(s.SizeBytes), Mono: true},
+			{Label: "rows", Value: Thousands(s.Rows), Mono: true},
+			{Label: "samples", Value: Thousands(s.Samples), Mono: true},
+			{Label: "jobs", Value: Thousands(s.Jobs), Mono: true},
+			{Label: "phases", Value: Thousands(s.Phases), Mono: true},
+			{Label: "churn events", Value: Thousands(s.ChurnEvents), Mono: true},
+			{Label: "failures", Value: Thousands(s.Failures), Mono: true},
+			{Label: "oldest sample", Value: oldest, Mono: true},
+			{Label: "file", Value: Dash(s.Path), Mono: true},
+		},
+	}
+}
+
 // warnings surfaces conditions that make the numbers on screen less than they
 // appear. Each one explains why a panel might be empty or understated, which
 // is the difference between a dashboard an operator trusts and one they learn
@@ -954,8 +1093,11 @@ func warnings(s fleet.Snapshot, t fleet.Totals) []string {
 	if !t.QueuedKnown && len(s.Sets) > 0 {
 		out = append(out, "queue depth is unavailable: ARC listener metrics are disabled")
 	}
+	// Any source carrying a reason is worth a line, available or not: a partial
+	// answer is a source that is working for some of the fleet and silent for
+	// the rest, and silence is what the warnings exist to break.
 	for _, src := range s.Sources {
-		if !src.Available && src.Reason != "" {
+		if src.Reason != "" {
 			out = append(out, src.Name+": "+src.Reason)
 		}
 	}

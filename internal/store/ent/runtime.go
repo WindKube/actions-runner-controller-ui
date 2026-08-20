@@ -6,6 +6,7 @@ import (
 	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
 	"arc-ui/internal/store/ent/phasetransition"
+	"arc-ui/internal/store/ent/runnerfailure"
 	"arc-ui/internal/store/ent/sample"
 	"arc-ui/internal/store/ent/schema"
 )
@@ -68,6 +69,16 @@ func init() {
 	phasetransitionDescEndedAt := phasetransitionFields[4].Descriptor()
 	// phasetransition.DefaultEndedAt holds the default value on creation for the ended_at field.
 	phasetransition.DefaultEndedAt = phasetransitionDescEndedAt.Default.(int64)
+	runnerfailureFields := schema.RunnerFailure{}.Fields()
+	_ = runnerfailureFields
+	// runnerfailureDescSetName is the schema descriptor for set_name field.
+	runnerfailureDescSetName := runnerfailureFields[1].Descriptor()
+	// runnerfailure.DefaultSetName holds the default value on creation for the set_name field.
+	runnerfailure.DefaultSetName = runnerfailureDescSetName.Default.(string)
+	// runnerfailureDescSevere is the schema descriptor for severe field.
+	runnerfailureDescSevere := runnerfailureFields[3].Descriptor()
+	// runnerfailure.DefaultSevere holds the default value on creation for the severe field.
+	runnerfailure.DefaultSevere = runnerfailureDescSevere.Default.(bool)
 	sampleFields := schema.Sample{}.Fields()
 	_ = sampleFields
 	// sampleDescScopeID is the schema descriptor for scope_id field.

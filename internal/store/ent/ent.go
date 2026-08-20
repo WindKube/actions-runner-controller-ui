@@ -6,6 +6,7 @@ import (
 	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
 	"arc-ui/internal/store/ent/phasetransition"
+	"arc-ui/internal/store/ent/runnerfailure"
 	"arc-ui/internal/store/ent/sample"
 	"context"
 	"errors"
@@ -79,6 +80,7 @@ func checkColumn(t, c string) error {
 			churnevent.Table:      churnevent.ValidColumn,
 			jobobservation.Table:  jobobservation.ValidColumn,
 			phasetransition.Table: phasetransition.ValidColumn,
+			runnerfailure.Table:   runnerfailure.ValidColumn,
 			sample.Table:          sample.ValidColumn,
 		})
 	})

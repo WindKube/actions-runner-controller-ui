@@ -136,6 +136,9 @@ func GroupBySet(runners []Runner, sets []RunnerSet) []SetTotals {
 // Failure is one entry in the failure lane.
 type Failure struct {
 	Runner string
+	// Set is the scale set the runner belonged to. The lane is fleet-wide, so a
+	// row without it leaves the reader guessing which set is burning pods.
+	Set    string
 	Reason string
 	At     time.Time
 	// Severe distinguishes a runner that will never work from one that merely
@@ -152,25 +155,35 @@ func Failures(runners []Runner, limit int) []Failure {
 		}
 		out = append(out, Failure{
 			Runner: r.Name,
+			Set:    r.SetName,
 			Reason: r.FailureReason,
 			At:     r.FailedAt,
 			Severe: r.State == StateFailed,
 		})
 	}
 
-	// Newest first; failures with no timestamp sort last rather than first.
-	sort.SliceStable(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		if a.At.IsZero() != b.At.IsZero() {
-			return !a.At.IsZero()
-		}
-		return a.At.After(b.At)
-	})
+	SortFailures(out)
 
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
 	return out
+}
+
+// SortFailures orders a lane newest first, with undated failures last.
+//
+// Exported because the lane is assembled from two sources — the history store
+// and the live snapshot — and rows merged from both have to end up in the same
+// order as rows derived from one runner list, or the newest failure is not the
+// one at the top.
+func SortFailures(f []Failure) {
+	sort.SliceStable(f, func(i, j int) bool {
+		a, b := f[i], f[j]
+		if a.At.IsZero() != b.At.IsZero() {
+			return !a.At.IsZero()
+		}
+		return a.At.After(b.At)
+	})
 }
 
 // RepoUsage is one bar in "fleet consumption by repository".
