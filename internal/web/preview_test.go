@@ -250,7 +250,8 @@ func (previewHistory) Stats(context.Context) (StoreStats, error) {
 		Jobs:        18_402,
 		Phases:      91_755,
 		ChurnEvents: 36_804,
-		Rows:        3_361_848,
+		Failures:    1_142,
+		Rows:        3_362_990,
 		Oldest:      previewNow.Add(-21 * 24 * time.Hour),
 	}, nil
 }

@@ -729,7 +729,8 @@ func TestStoreFooterReportsSizeAndRowCounts(t *testing.T) {
 		Jobs:        42,
 		Phases:      7,
 		ChurnEvents: 99,
-		Rows:        1234715,
+		Failures:    8317,
+		Rows:        1243032,
 		Oldest:      now.Add(-72 * time.Hour),
 	}}
 
@@ -739,6 +740,11 @@ func TestStoreFooterReportsSizeAndRowCounts(t *testing.T) {
 	assert.Contains(t, html, "12.0 MiB", "want the size on disk")
 	assert.Contains(t, html, "1,234,567", "want the sample count, separated")
 	assert.Contains(t, html, "/data/arc-ui.db", "want the file the numbers describe")
+	// Every table the retention sweep owns has to be here, or the components
+	// stop adding up to the total the same panel prints and the panel becomes
+	// unreadable as the retention readout it is meant to be. Failures were the
+	// one counted into Rows but missing from the rows on screen.
+	assert.Contains(t, html, "8,317", "want the persisted failure count")
 }
 
 // Running without a writable volume is a supported configuration, and the
