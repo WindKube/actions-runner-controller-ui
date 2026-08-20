@@ -63,9 +63,12 @@ const maxNamedFailures = 3
 // dashboard must not be OOM-killed by a misconfiguration.
 const maxBodyBytes = 8 << 20
 
-// disabledReason explains an empty URL in the terms an operator needs to act
-// on. It names the chart values because "not configured" alone sends people
-// hunting through the dashboard's own settings, where the problem is not.
+// disabledReason explains "nothing to scrape" in the terms an operator needs to
+// act on. It names the chart values because "not configured" alone sends people
+// hunting through the dashboard's own settings, where the problem is not, and
+// it names the pod recreation because the flags only reach a listener that is
+// restarted after the controller is redeployed — an install that enables
+// metrics and stops there looks exactly like one that never enabled them.
 const disabledReason = "listener metrics endpoint not configured; ARC ships them disabled — " +
 	"uncomment the metrics: block in the gha-runner-scale-set-controller chart values, " +
 	"then recreate the listener pods so they pick up the flags"

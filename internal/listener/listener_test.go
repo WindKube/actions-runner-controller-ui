@@ -622,8 +622,10 @@ func (r *recorder) last() (fleet.Source, bool) {
 	return r.sources[len(r.sources)-1], true
 }
 
-// TestScraperEmptyURLShortCircuits covers the default ARC install, where the
-// listener's metrics are simply not exposed.
+// TestScraperEmptyURLShortCircuits covers an endpoint configured to nothing.
+// Discovery is what a default install gets — see
+// TestDiscoveringNoListenersExplainsThatMetricsAreDisabled — and the difference
+// is that this one can never start working, so it must not poll.
 func TestScraperEmptyURLShortCircuits(t *testing.T) {
 	t.Parallel()
 
@@ -646,8 +648,11 @@ func TestScraperEmptyURLShortCircuits(t *testing.T) {
 	require.True(t, ok, "no source reported")
 	assert.False(t, src.Available, "source reported available with no endpoint configured")
 	assert.Equal(t, fleet.SourceListener, src.Name, "source name")
-	// The reason has to tell an operator how to turn the metrics on.
-	for _, want := range []string{"metrics", "chart", "ARC_UI_LISTENER_METRICS_URL"} {
+	// The reason has to tell an operator how to turn the metrics on: what to
+	// enable, where, and what to do afterwards. It must not send them to
+	// ARC_UI_LISTENER_METRICS_URL — setting that scrapes one endpoint, which is
+	// not the fix for metrics ARC has not been asked to serve at all.
+	for _, want := range []string{"metrics", "chart", "recreate"} {
 		assert.Contains(t, src.Reason, want, "reason does not mention %q", want)
 	}
 	assert.False(t, src.CheckedAt.IsZero(), "CheckedAt is zero")
