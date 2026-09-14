@@ -86,11 +86,16 @@ templ RangePicker(p Page) {
 // other control in this file. The topbar is not one of the regions the stream
 // patches, so a server-rendered pressed state would still say "off" after the
 // click that turned it on, and stay wrong until the next full page load.
+//
+// aria-pressed is the exception, and is rendered both ways on purpose: the
+// static attribute is what a page whose script never ran exposes, and Datastar
+// overwrites it from the signal from the first evaluation onwards.
 templ LiveToggle(p Page) {
 	<button
 		type="button"
 		class="flex items-center gap-1.5 h-[26px] px-2 rounded-md border text-[11px] font-mono cursor-pointer shrink-0"
 		data-class="{'border-accent/40 bg-accent/15 text-accent': $live, 'border-default text-fg-subtle hover:text-fg hover:bg-inset': !$live}"
+		aria-pressed={ fmt.Sprint(p.Signals.Live) }
 		data-attr="{'aria-pressed': $live ? 'true' : 'false'}"
 		title="auto-refresh: stream live updates into this page"
 		aria-label="auto-refresh"

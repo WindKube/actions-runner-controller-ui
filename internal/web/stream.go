@@ -242,8 +242,25 @@ func (h *Handler) stream(
 
 	sse := datastar.NewSSE(w, r, datastar.WithContext(ctx))
 
-	ticks, unsubscribe := h.Hub.Subscribe()
-	defer unsubscribe()
+	// A subscription and a heartbeat are what a live stream waits on, so a
+	// paused one — now the default, and the shape of every filter click — takes
+	// neither. The live stream takes both *before* its first render, which is
+	// load-bearing rather than incidental ordering: subscribing afterwards
+	// would drop any change that landed while that render was in flight, and
+	// the client would sit on stale markup until the heartbeat.
+	var (
+		ticks <-chan hub.Tick
+		beats <-chan time.Time
+	)
+	if sig.Live {
+		sub, unsubscribe := h.Hub.Subscribe()
+		defer unsubscribe()
+		ticks = sub
+
+		heartbeat := time.NewTicker(h.heartbeat())
+		defer heartbeat.Stop()
+		beats = heartbeat.C
+	}
 
 	// Reflect the active filters in the address bar so the view can be shared
 	// or reloaded. Done once per stream, since the filters are fixed for its
@@ -251,8 +268,6 @@ func (h *Handler) stream(
 	h.replaceURL(sse, r, sig)
 
 	sent := make(map[string]string, 16)
-	heartbeat := time.NewTicker(h.heartbeat())
-	defer heartbeat.Stop()
 
 	var seq uint64
 	for {
@@ -289,7 +304,7 @@ func (h *Handler) stream(
 		case <-ctx.Done():
 			return
 		case <-ticks:
-		case <-heartbeat.C:
+		case <-beats:
 		}
 	}
 }

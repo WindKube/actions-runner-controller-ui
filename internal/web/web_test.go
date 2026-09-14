@@ -402,6 +402,22 @@ func testHandler(h *hub.Hub) *Handler {
 	}
 }
 
+// toggleTag returns the autorefresh button's opening tag. Assertions have to be
+// scoped to it: every range pill carries an aria-pressed of its own, so a bare
+// search for one across the document passes whatever the toggle actually says.
+func toggleTag(t *testing.T, doc string) string {
+	t.Helper()
+
+	label := strings.Index(doc, `aria-label="auto-refresh"`)
+	require.NotEqual(t, -1, label, "no autorefresh toggle in the document")
+	open := strings.LastIndex(doc[:label], "<button")
+	require.NotEqual(t, -1, open, "the autorefresh toggle is not a button")
+	end := strings.Index(doc[open:], ">")
+	require.NotEqual(t, -1, end, "unterminated toggle tag")
+
+	return doc[open : open+end+1]
+}
+
 // streamAt builds the URL Datastar itself requests. Signals travel as one JSON
 // query parameter on a GET, so a stream opened with ordinary parameters is not
 // the request the browser makes and would not exercise the same parsing.
@@ -547,7 +563,11 @@ func TestAutorefreshIsOffUntilItIsAskedFor(t *testing.T) {
 	// The guard on data-init is the whole feature: without it the body opens a
 	// stream on load whatever the signal says, and nothing is ever paused.
 	assert.Contains(t, doc, `data-init="$live && @get('/stream'`, "the load-time stream is not guarded by the live signal")
-	assert.Contains(t, doc, `aria-label="auto-refresh"`, "the topbar has no autorefresh toggle")
+	// data-attr only takes over once Datastar has run. A page whose script never
+	// loaded still has to say which way the toggle is set, like every other
+	// control on a dashboard that is meant to read without JavaScript.
+	assert.Contains(t, toggleTag(t, doc), `aria-pressed="false"`,
+		"the toggle does not report itself as off before its script runs")
 	assert.Contains(t, doc, ">paused<", "a paused page should say so rather than count towards stalled")
 }
 
@@ -565,6 +585,7 @@ func TestLivePageOpensItsStreamOnLoad(t *testing.T) {
 	// A shared link carrying live=1 has to come back live, or the preference
 	// survives in the URL and nowhere else.
 	assert.Contains(t, doc, `"live":true`, "the live preference did not reach the page")
+	assert.Contains(t, toggleTag(t, doc), `aria-pressed="true"`, "the toggle renders unpressed on a live page")
 	assert.Contains(t, doc, ">last event —<", "a live page should show the staleness readout, not the paused one")
 }
 
