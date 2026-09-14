@@ -11,6 +11,7 @@ import (
 
 	entsql "entgo.io/ent/dialect/sql"
 
+	"arc-ui/internal/store/ent"
 	"arc-ui/internal/store/ent/jobobservation"
 	"arc-ui/internal/store/ent/phasetransition"
 	"arc-ui/internal/store/ent/predicate"
@@ -370,16 +371,18 @@ func (s *Store) JobsForSet(ctx context.Context, setName string, limit int) ([]Jo
 	out := make([]JobRecord, 0, len(rows))
 	for _, j := range rows {
 		out = append(out, JobRecord{
-			Runner:     j.RunnerName,
-			Set:        j.SetName,
-			Repository: j.Repository,
-			Workflow:   j.Workflow,
-			Job:        j.JobName,
-			RunID:      j.RunID,
-			StartedAt:  fromUnix(j.StartedAt),
-			FinishedAt: fromUnix(j.FinishedAt),
-			Succeeded:  j.Succeeded,
-			CPUSeconds: j.CPUSeconds,
+			ID:             j.ID,
+			Runner:         j.RunnerName,
+			Set:            j.SetName,
+			Repository:     j.Repository,
+			Workflow:       j.Workflow,
+			Job:            j.JobName,
+			RunID:          j.RunID,
+			StartedAt:      fromUnix(j.StartedAt),
+			FinishedAt:     fromUnix(j.FinishedAt),
+			Succeeded:      j.Succeeded,
+			CPUSeconds:     j.CPUSeconds,
+			MemByteSeconds: j.MemByteSeconds,
 		})
 	}
 	return out, nil
@@ -458,4 +461,349 @@ func (s *Store) PhasesForRunner(ctx context.Context, runnerName string) ([]Phase
 		})
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Job and workflow-run listings
+// ---------------------------------------------------------------------------
+
+// defaultJobRows is how many rows a job or workflow listing returns when the
+// caller asks for no particular number. The tables report the window's true
+// total beside the page, so this caps rendering cost without hiding scale.
+const defaultJobRows = 100
+
+// jobWindow is the predicate deciding which jobs a window contains.
+//
+// Overlap, not start: a six-hour build is in the last hour's list if it was
+// running during it. This matches RepoConsumption, and for the same reason —
+// a list that dropped long jobs would be least useful exactly when one is
+// stuck.
+const jobWindow = `started_at < ? AND (finished_at = 0 OR finished_at >= ?)`
+
+// likeEscape is the escape character bound into every LIKE this file builds.
+const likeEscape = `\`
+
+// escapeLike neutralises the wildcards in a user's search box.
+//
+// Without it a search for "100%" matches everything after the digits, and one
+// for "job_1" silently matches "job-1" — LIKE's `_` is a single-character
+// wildcard. The backslash goes first, or it would escape the escapes added
+// after it.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, likeEscape, likeEscape+likeEscape)
+	s = strings.ReplaceAll(s, "%", likeEscape+"%")
+	s = strings.ReplaceAll(s, "_", likeEscape+"_")
+	return s
+}
+
+// jobPredicates renders a filter into SQL fragments and their bound arguments.
+//
+// Everything the user typed travels as an argument. The only text
+// concatenated here is this file's own, which is what keeps a repository named
+// after a quote character from being a query.
+func jobPredicates(f JobFilter) (clauses []string, args []any) {
+	if f.Repository != "" {
+		clauses = append(clauses, "repository = ?")
+		args = append(args, f.Repository)
+	}
+	if f.Workflow != "" {
+		clauses = append(clauses, "workflow = ?")
+		args = append(args, f.Workflow)
+	}
+	if f.Set != "" {
+		clauses = append(clauses, "set_name = ?")
+		args = append(args, f.Set)
+	}
+	if f.RunID > 0 {
+		clauses = append(clauses, "run_id = ?")
+		args = append(args, f.RunID)
+	}
+
+	switch f.Outcome {
+	case OutcomeRunning:
+		clauses = append(clauses, "finished_at = 0")
+	case OutcomeOK:
+		clauses = append(clauses, "finished_at > 0 AND succeeded")
+	case OutcomeFailed:
+		clauses = append(clauses, "finished_at > 0 AND NOT succeeded")
+	case OutcomeAny:
+	}
+
+	if q := strings.TrimSpace(f.Search); q != "" {
+		// LOWER on both sides rather than relying on LIKE's own ASCII
+		// case-folding, which does not apply to the non-ASCII characters a
+		// repository name can legally contain.
+		pattern := "%" + escapeLike(strings.ToLower(q)) + "%"
+		clauses = append(clauses, `(LOWER(workflow) LIKE ? ESCAPE '`+likeEscape+`'`+
+			` OR LOWER(job_name) LIKE ? ESCAPE '`+likeEscape+`'`+
+			` OR LOWER(repository) LIKE ? ESCAPE '`+likeEscape+`')`)
+		args = append(args, pattern, pattern, pattern)
+	}
+	return clauses, args
+}
+
+// jobWhere assembles the full WHERE clause for a windowed, filtered listing.
+func jobWhere(f JobFilter, from, to int64) (where string, args []any) {
+	args = append(args, to, from)
+	clauses, filterArgs := jobPredicates(f)
+	args = append(args, filterArgs...)
+
+	where = " WHERE " + jobWindow
+	for _, c := range clauses {
+		where += " AND " + c
+	}
+	return where, args
+}
+
+// Jobs returns the jobs overlapping the range, newest first, capped at the
+// filter's limit — together with how many the window holds in total.
+//
+// The total is counted rather than derived from the page, for the same reason
+// the failure lane counts its own: "100 of 4,312" is the number that tells an
+// operator the list is a sample, and a total taken from the page would always
+// equal the page.
+func (s *Store) Jobs(ctx context.Context, f JobFilter, r Range) ([]JobRecord, int64, error) {
+	from, to, _, ok := r.window()
+	if !ok {
+		return nil, 0, nil
+	}
+	limit := f.Limit
+	if limit <= 0 {
+		limit = defaultJobRows
+	}
+
+	where, args := jobWhere(f, from, to)
+
+	var total int64
+	// #nosec G202 -- the only concatenation is this file's own clause text
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_observations`+where, args...).
+		Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count jobs: %w", err)
+	}
+
+	// id breaks ties so that jobs sharing a start — a matrix fanning out into
+	// twenty runners in the same second — come back in a stable order instead
+	// of reshuffling between renders.
+	// #nosec G202 -- the only concatenation is this file's own clause text
+	q := `SELECT id, runner_name, set_name, repository, workflow, job_name, run_id,
+	             started_at, finished_at, succeeded, cpu_seconds, mem_byte_seconds
+	      FROM job_observations` + where + ` ORDER BY started_at DESC, id DESC LIMIT ?`
+
+	rows, err := s.db.QueryContext(ctx, q, append(args, limit)...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query jobs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]JobRecord, 0, limit)
+	for rows.Next() {
+		var (
+			j        JobRecord
+			started  int64
+			finished int64
+			cpu, mem sql.NullFloat64
+		)
+		if err := rows.Scan(&j.ID, &j.Runner, &j.Set, &j.Repository, &j.Workflow, &j.Job,
+			&j.RunID, &started, &finished, &j.Succeeded, &cpu, &mem); err != nil {
+			return nil, 0, fmt.Errorf("scan job row: %w", err)
+		}
+		j.StartedAt, j.FinishedAt = fromUnix(started), fromUnix(finished)
+		j.CPUSeconds, j.MemByteSeconds = cpu.Float64, mem.Float64
+		out = append(out, j)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("read job rows: %w", err)
+	}
+	return out, total, nil
+}
+
+// WorkflowRuns returns the workflow runs overlapping the range, newest first,
+// aggregated from their jobs — with the window's total run count beside them.
+//
+// A run is (repository, workflow, run id). Jobs ARC reported no run id for
+// collapse into the run-zero row of their workflow rather than being dropped:
+// they are real work, and hiding them would make the fleet's busiest hours
+// unaccountable on a controller that does not populate the field.
+func (s *Store) WorkflowRuns(ctx context.Context, f JobFilter, r Range) ([]WorkflowRun, int64, error) {
+	from, to, _, ok := r.window()
+	if !ok {
+		return nil, 0, nil
+	}
+	limit := f.Limit
+	if limit <= 0 {
+		limit = defaultJobRows
+	}
+
+	where, args := jobWhere(f, from, to)
+	const grouping = ` GROUP BY repository, workflow, run_id`
+
+	var total int64
+	// #nosec G202 -- the only concatenation is this file's own clause text
+	countQ := `SELECT COUNT(*) FROM (SELECT 1 FROM job_observations` + where + grouping + `)`
+	if err := s.db.QueryRowContext(ctx, countQ, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count workflow runs: %w", err)
+	}
+
+	// MAX(finished_at) is only the run's end once nothing is still going, which
+	// is why the running count comes back too rather than being inferred from
+	// a zero: MAX over a mix of finished and unfinished jobs returns the
+	// latest completion and says nothing about the ones still open.
+	// #nosec G202 -- the only concatenation is this file's own clause text
+	q := `SELECT repository, workflow, run_id,
+	             COUNT(*),
+	             SUM(CASE WHEN finished_at = 0 THEN 1 ELSE 0 END),
+	             SUM(CASE WHEN finished_at > 0 AND NOT succeeded THEN 1 ELSE 0 END),
+	             MIN(started_at), MAX(finished_at),
+	             SUM(cpu_seconds), SUM(mem_byte_seconds)
+	      FROM job_observations` + where + grouping +
+		` ORDER BY MIN(started_at) DESC, run_id DESC LIMIT ?`
+
+	rows, err := s.db.QueryContext(ctx, q, append(args, limit)...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query workflow runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]WorkflowRun, 0, limit)
+	for rows.Next() {
+		var (
+			w        WorkflowRun
+			started  int64
+			finished int64
+			cpu, mem sql.NullFloat64
+		)
+		if err := rows.Scan(&w.Repository, &w.Workflow, &w.RunID, &w.Jobs, &w.Running, &w.Failed,
+			&started, &finished, &cpu, &mem); err != nil {
+			return nil, 0, fmt.Errorf("scan workflow run row: %w", err)
+		}
+		w.StartedAt = fromUnix(started)
+		if w.Running == 0 {
+			w.FinishedAt = fromUnix(finished)
+		}
+		w.CPUSeconds, w.MemByteSeconds = cpu.Float64, mem.Float64
+		out = append(out, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("read workflow run rows: %w", err)
+	}
+	return out, total, nil
+}
+
+// Job returns one job observation by row id. The bool is false when there is
+// no such row, which the handler turns into a 404 rather than an error page.
+func (s *Store) Job(ctx context.Context, id int) (JobRecord, bool, error) {
+	j, err := s.client.JobObservation.Get(ctx, id)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return JobRecord{}, false, nil
+		}
+		return JobRecord{}, false, fmt.Errorf("query job %d: %w", id, err)
+	}
+	return JobRecord{
+		ID:             j.ID,
+		Runner:         j.RunnerName,
+		Set:            j.SetName,
+		Repository:     j.Repository,
+		Workflow:       j.Workflow,
+		Job:            j.JobName,
+		RunID:          j.RunID,
+		StartedAt:      fromUnix(j.StartedAt),
+		FinishedAt:     fromUnix(j.FinishedAt),
+		Succeeded:      j.Succeeded,
+		CPUSeconds:     j.CPUSeconds,
+		MemByteSeconds: j.MemByteSeconds,
+	}, true, nil
+}
+
+// JobSeries returns one job's resource usage over the range, bucketed to at
+// most r.Points points.
+//
+// Buckets below the storage resolution are pointless but harmless: the rows
+// are already averages at that width, so a finer grouping just returns them
+// one per bucket.
+func (s *Store) JobSeries(ctx context.Context, id int, r Range) ([]JobPoint, error) {
+	from, to, bucket, ok := r.window()
+	if !ok {
+		return nil, nil
+	}
+
+	const q = `SELECT (ts / ?) * ? AS bts, AVG(cpu_cores), AVG(mem_bytes)
+	           FROM job_samples
+	           WHERE job_id = ? AND ts >= ? AND ts < ?
+	           GROUP BY bts
+	           ORDER BY bts`
+
+	rows, err := s.db.QueryContext(ctx, q, bucket, bucket, id, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("query samples for job %d: %w", id, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []JobPoint
+	for rows.Next() {
+		var (
+			bts      int64
+			cpu, mem sql.NullFloat64
+		)
+		if err := rows.Scan(&bts, &cpu, &mem); err != nil {
+			return nil, fmt.Errorf("scan job sample row: %w", err)
+		}
+		out = append(out, JobPoint{
+			At:  time.Unix(bts, 0).UTC(),
+			CPU: cpu.Float64,
+			Mem: mem.Float64,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read job sample rows: %w", err)
+	}
+	return out, nil
+}
+
+// JobFacets returns the distinct repositories, workflows and runner sets the
+// window contains, each sorted, for the filter dropdowns.
+func (s *Store) JobFacets(ctx context.Context, r Range) (JobFacets, error) {
+	from, to, _, ok := r.window()
+	if !ok {
+		return JobFacets{}, nil
+	}
+
+	var out JobFacets
+	for _, facet := range []struct {
+		column string
+		into   *[]string
+	}{
+		{"repository", &out.Repositories},
+		{"workflow", &out.Workflows},
+		{"set_name", &out.Sets},
+	} {
+		// #nosec G202 -- column comes from this literal slice, never a caller
+		q := `SELECT DISTINCT ` + facet.column + ` FROM job_observations WHERE ` +
+			jobWindow + ` AND ` + facet.column + ` <> '' ORDER BY ` + facet.column
+		values, err := s.distinct(ctx, q, to, from)
+		if err != nil {
+			return JobFacets{}, fmt.Errorf("job facet %s: %w", facet.column, err)
+		}
+		*facet.into = values
+	}
+	return out, nil
+}
+
+// distinct runs a one-column query and collects its rows.
+func (s *Store) distinct(ctx context.Context, q string, args ...any) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
