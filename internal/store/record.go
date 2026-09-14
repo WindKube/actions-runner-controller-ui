@@ -12,7 +12,6 @@ import (
 	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
 	"arc-ui/internal/store/ent/jobsample"
-	"arc-ui/internal/store/ent/phasetransition"
 	"arc-ui/internal/store/ent/runnerfailure"
 	"arc-ui/internal/store/ent/sample"
 )
@@ -26,8 +25,8 @@ type metricValue struct {
 // RecordSnapshot persists one observation of the fleet.
 //
 // It writes four things: scope samples for the fleet and each set, raw samples
-// for each runner, and the churn, job and phase rows implied by the difference
-// from the previous snapshot. The differences are the interesting part — a
+// for each runner, and the churn and job rows implied by the difference from
+// the previous snapshot. The differences are the interesting part — a
 // Snapshot alone cannot say that a runner is new or that a job just finished,
 // so the store keeps the previous frame in memory and compares.
 //
@@ -84,7 +83,6 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 	var (
 		jobs     []*ent.JobObservationCreate
 		usage    []jobUsage
-		phases   []*ent.PhaseTransitionCreate
 		churn    []*ent.ChurnEventCreate
 		failures []*ent.RunnerFailureCreate
 		switched []jobClose
@@ -152,12 +150,6 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 
 		if prev, known := s.prev[r.Name]; known {
 			cpuDelta, memDelta = r.CPU.Used*dt, r.Mem.Used*dt
-			next.phaseAt = prev.phaseAt
-			if prev.state != r.State {
-				// A new phase starts at the scrape that first saw the change,
-				// which is the earliest instant the store can honestly claim.
-				next.phaseAt = at
-			}
 			if prev.job.Present() && !sameJob(prev.job, r.Job) {
 				// A persistent runner moving off its job. Close the old one
 				// here; the ephemeral case, where the runner disappears with
@@ -172,7 +164,6 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 				})
 			}
 		} else {
-			next.phaseAt = at
 			// Announce the runner's creation at its real creation time rather
 			// than at this scrape, so the churn chart is right even on the
 			// first snapshot after a restart, where every existing runner
@@ -187,16 +178,6 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 				SetKind(churnCreated).
 				SetTs(createdAt.Unix()))
 		}
-
-		if next.phaseAt.IsZero() {
-			next.phaseAt = at
-		}
-		phases = append(phases, s.client.PhaseTransition.Create().
-			SetRunnerName(r.Name).
-			SetSetName(r.SetName).
-			SetPhase(string(r.State)).
-			SetStartedAt(next.phaseAt.Unix()).
-			SetEndedAt(ts))
 
 		if r.Job.Present() {
 			started := r.Job.StartedAt
@@ -282,7 +263,6 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 		jobs:       jobs,
 		usage:      usage,
 		bucket:     s.jobBucket(),
-		phases:     phases,
 		churn:      churn,
 		failures:   failures,
 		ts:         ts,
@@ -342,7 +322,6 @@ type snapshotWrite struct {
 	jobs       []*ent.JobObservationCreate
 	usage      []jobUsage
 	bucket     int64
-	phases     []*ent.PhaseTransitionCreate
 	churn      []*ent.ChurnEventCreate
 	failures   []*ent.RunnerFailureCreate
 	ts         int64
@@ -402,24 +381,6 @@ func (w snapshotWrite) exec(ctx context.Context, tx *ent.Tx) error {
 	// finished job stop matching the open-job lookup it uses.
 	if err := w.writeJobSamples(ctx, tx); err != nil {
 		return err
-	}
-
-	if len(w.phases) > 0 {
-		// ended_at is pushed forward on every scrape the phase survives, so a
-		// runner that disappears already has a closed final phase and no
-		// separate close pass is needed.
-		err := tx.PhaseTransition.CreateBulk(w.phases...).
-			OnConflict(entsql.ConflictColumns(
-				phasetransition.FieldRunnerName, phasetransition.FieldPhase, phasetransition.FieldStartedAt,
-			)).
-			Update(func(u *ent.PhaseTransitionUpsert) {
-				u.UpdateSetName()
-				u.UpdateEndedAt()
-			}).
-			Exec(ctx)
-		if err != nil {
-			return fmt.Errorf("write phase transitions: %w", err)
-		}
 	}
 
 	if len(w.churn) > 0 {

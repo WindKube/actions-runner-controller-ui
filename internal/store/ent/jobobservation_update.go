@@ -17,8 +17,9 @@ import (
 // JobObservationUpdate is the builder for updating JobObservation entities.
 type JobObservationUpdate struct {
 	config
-	hooks    []Hook
-	mutation *JobObservationMutation
+	hooks     []Hook
+	mutation  *JobObservationMutation
+	modifiers []func(*sql.UpdateBuilder)
 }
 
 // Where appends a list predicates to the JobObservationUpdate builder.
@@ -332,6 +333,12 @@ func (_u *JobObservationUpdate) ExecX(ctx context.Context) {
 	}
 }
 
+// Modify adds a statement modifier for attaching custom logic to the UPDATE statement.
+func (_u *JobObservationUpdate) Modify(modifiers ...func(u *sql.UpdateBuilder)) *JobObservationUpdate {
+	_u.modifiers = append(_u.modifiers, modifiers...)
+	return _u
+}
+
 func (_u *JobObservationUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	_spec := sqlgraph.NewUpdateSpec(jobobservation.Table, jobobservation.Columns, sqlgraph.NewFieldSpec(jobobservation.FieldID, field.TypeInt))
 	if ps := _u.mutation.predicates; len(ps) > 0 {
@@ -413,6 +420,7 @@ func (_u *JobObservationUpdate) sqlSave(ctx context.Context) (_node int, err err
 	if value, ok := _u.mutation.AddedMemLimit(); ok {
 		_spec.AddField(jobobservation.FieldMemLimit, field.TypeFloat64, value)
 	}
+	_spec.AddModifiers(_u.modifiers...)
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{jobobservation.Label}
@@ -428,9 +436,10 @@ func (_u *JobObservationUpdate) sqlSave(ctx context.Context) (_node int, err err
 // JobObservationUpdateOne is the builder for updating a single JobObservation entity.
 type JobObservationUpdateOne struct {
 	config
-	fields   []string
-	hooks    []Hook
-	mutation *JobObservationMutation
+	fields    []string
+	hooks     []Hook
+	mutation  *JobObservationMutation
+	modifiers []func(*sql.UpdateBuilder)
 }
 
 // SetRunnerName sets the "runner_name" field.
@@ -751,6 +760,12 @@ func (_u *JobObservationUpdateOne) ExecX(ctx context.Context) {
 	}
 }
 
+// Modify adds a statement modifier for attaching custom logic to the UPDATE statement.
+func (_u *JobObservationUpdateOne) Modify(modifiers ...func(u *sql.UpdateBuilder)) *JobObservationUpdateOne {
+	_u.modifiers = append(_u.modifiers, modifiers...)
+	return _u
+}
+
 func (_u *JobObservationUpdateOne) sqlSave(ctx context.Context) (_node *JobObservation, err error) {
 	_spec := sqlgraph.NewUpdateSpec(jobobservation.Table, jobobservation.Columns, sqlgraph.NewFieldSpec(jobobservation.FieldID, field.TypeInt))
 	id, ok := _u.mutation.ID()
@@ -849,6 +864,7 @@ func (_u *JobObservationUpdateOne) sqlSave(ctx context.Context) (_node *JobObser
 	if value, ok := _u.mutation.AddedMemLimit(); ok {
 		_spec.AddField(jobobservation.FieldMemLimit, field.TypeFloat64, value)
 	}
+	_spec.AddModifiers(_u.modifiers...)
 	_node = &JobObservation{config: _u.config}
 	_spec.Assign = _node.assignValues
 	_spec.ScanValues = _node.scanValues

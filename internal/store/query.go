@@ -1,21 +1,24 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
 	entsql "entgo.io/ent/dialect/sql"
+	"github.com/samber/lo"
 
 	"arc-ui/internal/store/ent"
+	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
-	"arc-ui/internal/store/ent/phasetransition"
 	"arc-ui/internal/store/ent/predicate"
 	"arc-ui/internal/store/ent/runnerfailure"
+	"arc-ui/internal/store/ent/sample"
 )
 
 // defaultPoints is what a Range with no Points asks for: enough to fill the
@@ -98,43 +101,43 @@ func (s *Store) Series(ctx context.Context, scope Scope, scopeID string, metrics
 		tier = tierFor(bucket)
 	}
 
-	args := []any{bucket, bucket, string(scope), scopeID, string(tier), from, to}
-	holders := make([]string, len(metrics))
-	for i, m := range metrics {
-		holders[i] = "?"
-		args = append(args, string(m))
+	names := lo.Map(metrics, func(m Metric, _ int) string { return string(m) })
+
+	var rows []struct {
+		Metric string  `json:"metric"`
+		Bucket int64   `json:"bts"`
+		Value  float64 `json:"value"`
 	}
-
-	// The only thing concatenated is a run of "?" placeholders sized to the
-	// metric list; every metric name goes in as a bound argument below.
-	// #nosec G202 -- placeholders only, never interpolated values
-	q := `SELECT metric, (ts / ?) * ? AS bts, AVG(value)
-	      FROM samples
-	      WHERE scope = ? AND scope_id = ? AND tier = ? AND ts >= ? AND ts < ?
-	        AND metric IN (` + strings.Join(holders, ",") + `)
-	      GROUP BY metric, bts
-	      ORDER BY bts`
-
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	err := s.client.Sample.Query().
+		Where(
+			sample.ScopeEQ(string(scope)),
+			sample.ScopeIDEQ(scopeID),
+			sample.TierEQ(string(tier)),
+			sample.TsGTE(from),
+			sample.TsLT(to),
+			sample.MetricIn(names...),
+		).
+		Modify(func(sel *entsql.Selector) {
+			bucketed := entsql.ExprFunc(func(b *entsql.Builder) {
+				b.WriteString("(").Ident(sample.FieldTs).
+					WriteString(" / ").Arg(bucket).
+					WriteString(") * ").Arg(bucket)
+			})
+			sel.Select().
+				AppendSelect(sample.FieldMetric).
+				AppendSelectExprAs(bucketed, "bts").
+				AppendSelectAs(entsql.Avg(sample.FieldValue), "value").
+				GroupBy(sample.FieldMetric, "bts").
+				OrderBy("bts")
+		}).
+		Scan(ctx, &rows)
 	if err != nil {
 		return out, fmt.Errorf("query series %s/%s: %w", scope, scopeID, err)
 	}
-	defer func() { _ = rows.Close() }()
 
-	for rows.Next() {
-		var (
-			metric string
-			bts    int64
-			value  float64
-		)
-		if err := rows.Scan(&metric, &bts, &value); err != nil {
-			return out, fmt.Errorf("scan series row: %w", err)
-		}
-		m := Metric(metric)
-		out[m] = append(out[m], Point{At: time.Unix(bts, 0).UTC(), Value: value})
-	}
-	if err := rows.Err(); err != nil {
-		return out, fmt.Errorf("read series rows: %w", err)
+	for _, row := range rows {
+		m := Metric(row.Metric)
+		out[m] = append(out[m], Point{At: time.Unix(row.Bucket, 0).UTC(), Value: row.Value})
 	}
 	return out, nil
 }
@@ -167,48 +170,53 @@ func densePoints(buckets []int64) []Point {
 	return out
 }
 
-// countSeries runs a bucketed COUNT(*) grouped by one discriminator column and
-// projects it onto a dense grid. It backs both Churn and Throughput, which are
-// the same query over different tables.
-func (s *Store) countSeries(ctx context.Context, q string, args []any, buckets []int64) (map[string][]Point, error) {
+// countRow is one bucketed count: how many rows of kind Key fell into the
+// bucket starting at Bucket. The json tags are the column aliases the two
+// selectors below project.
+type countRow struct {
+	Key    string  `json:"key"`
+	Bucket int64   `json:"bts"`
+	Count  float64 `json:"count"`
+}
+
+// countSeries projects bucketed counts onto a dense grid, one series per
+// discriminator value. It backs both Churn and Throughput, which ask the same
+// question of different tables.
+func countSeries(rows []countRow, buckets []int64) map[string][]Point {
 	index := make(map[int64]int, len(buckets))
 	for i, b := range buckets {
 		index[b] = i
 	}
+
 	series := map[string][]Point{}
-	ensure := func(key string) []Point {
-		if p, ok := series[key]; ok {
-			return p
+	for _, row := range rows {
+		p, ok := series[row.Key]
+		if !ok {
+			p = densePoints(buckets)
+			series[row.Key] = p
 		}
-		p := densePoints(buckets)
-		series[key] = p
-		return p
+		if i, ok := index[row.Bucket]; ok {
+			p[i].Value += row.Count
+		}
 	}
+	return series
+}
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query counts: %w", err)
+// bucketBy groups a timestamp column into bucket-wide buckets aliased "bts",
+// counts the rows in each and orders by bucket. It is the half of Churn's and
+// Throughput's queries that does not depend on which table is being read.
+func bucketBy(tsColumn string, bucket int64) func(*entsql.Selector) {
+	return func(sel *entsql.Selector) {
+		bucketed := entsql.ExprFunc(func(b *entsql.Builder) {
+			b.WriteString("(").Ident(tsColumn).
+				WriteString(" / ").Arg(bucket).
+				WriteString(") * ").Arg(bucket)
+		})
+		sel.AppendSelectExprAs(bucketed, "bts").
+			AppendSelectAs("COUNT(*)", "count").
+			GroupBy("key", "bts").
+			OrderBy("bts")
 	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var (
-			key   string
-			bts   int64
-			count float64
-		)
-		if err := rows.Scan(&key, &bts, &count); err != nil {
-			return nil, fmt.Errorf("scan count row: %w", err)
-		}
-		p := ensure(key)
-		if i, ok := index[bts]; ok {
-			p[i].Value += count
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read count rows: %w", err)
-	}
-	return series, nil
 }
 
 // Churn returns created and terminated counts bucketed over the range. An
@@ -227,20 +235,23 @@ func (s *Store) Churn(ctx context.Context, setName string, r Range) (created, te
 		return nil, nil, nil
 	}
 
-	q := `SELECT kind, (ts / ?) * ? AS bts, COUNT(*)
-	      FROM churn_events
-	      WHERE ts >= ? AND ts < ?`
-	args := []any{bucket, bucket, from, to}
+	where := []predicate.ChurnEvent{churnevent.TsGTE(from), churnevent.TsLT(to)}
 	if setName != "" {
-		q += " AND set_name = ?"
-		args = append(args, setName)
+		where = append(where, churnevent.SetNameEQ(setName))
 	}
-	q += " GROUP BY kind, bts ORDER BY bts"
 
-	series, err := s.countSeries(ctx, q, args, buckets)
+	var rows []countRow
+	err = s.client.ChurnEvent.Query().Where(where...).
+		Modify(func(sel *entsql.Selector) {
+			sel.Select().AppendSelectAs(churnevent.FieldKind, "key")
+			bucketBy(churnevent.FieldTs, bucket)(sel)
+		}).
+		Scan(ctx, &rows)
 	if err != nil {
 		return nil, nil, fmt.Errorf("churn for %q: %w", setName, err)
 	}
+
+	series := countSeries(rows, buckets)
 	return denseOr(series[churnCreated], buckets), denseOr(series[churnTerminated], buckets), nil
 }
 
@@ -260,23 +271,34 @@ func (s *Store) Throughput(ctx context.Context, setName string, r Range) (ok, fa
 		return nil, nil, nil
 	}
 
-	// The success flag is projected to text in SQL rather than scanned as a
-	// bool, because SQLite stores it as 0/1 and the grouping key has to be one
-	// comparable type for both this query and Churn's.
-	q := `SELECT CASE WHEN succeeded THEN 'ok' ELSE 'failed' END, (finished_at / ?) * ? AS bts, COUNT(*)
-	      FROM job_observations
-	      WHERE finished_at > 0 AND finished_at >= ? AND finished_at < ?`
-	args := []any{bucket, bucket, from, to}
-	if setName != "" {
-		q += " AND set_name = ?"
-		args = append(args, setName)
+	where := []predicate.JobObservation{
+		jobobservation.FinishedAtGT(0),
+		jobobservation.FinishedAtGTE(from),
+		jobobservation.FinishedAtLT(to),
 	}
-	q += " GROUP BY 1, bts ORDER BY bts"
+	if setName != "" {
+		where = append(where, jobobservation.SetNameEQ(setName))
+	}
 
-	series, err := s.countSeries(ctx, q, args, buckets)
+	var rows []countRow
+	err = s.client.JobObservation.Query().Where(where...).
+		Modify(func(sel *entsql.Selector) {
+			// The success flag is projected to text rather than scanned as a
+			// bool, because SQLite stores it as 0/1 and the grouping key has to
+			// be one comparable type for both this query and Churn's.
+			outcome := entsql.ExprFunc(func(b *entsql.Builder) {
+				b.WriteString("CASE WHEN ").Ident(jobobservation.FieldSucceeded).
+					WriteString(" THEN 'ok' ELSE 'failed' END")
+			})
+			sel.Select().AppendSelectExprAs(outcome, "key")
+			bucketBy(jobobservation.FieldFinishedAt, bucket)(sel)
+		}).
+		Scan(ctx, &rows)
 	if err != nil {
 		return nil, nil, fmt.Errorf("throughput for %q: %w", setName, err)
 	}
+
+	series := countSeries(rows, buckets)
 	return denseOr(series["ok"], buckets), denseOr(series["failed"], buckets), nil
 }
 
@@ -303,75 +325,54 @@ func (s *Store) RepoConsumption(ctx context.Context, r Range) ([]RepoTotal, erro
 		return nil, nil
 	}
 
-	const q = `SELECT repository, COUNT(*), SUM(cpu_seconds), SUM(mem_byte_seconds)
-	           FROM job_observations
-	           WHERE repository <> ''
-	             AND started_at < ?
-	             AND (finished_at = 0 OR finished_at >= ?)
-	           GROUP BY repository`
-
-	rows, err := s.db.QueryContext(ctx, q, to, from)
+	// The aliases are what the scan target's json tags bind to; ent derives no
+	// name of its own for an aggregate.
+	var rows []struct {
+		Repository     string  `json:"repository"`
+		Jobs           int     `json:"jobs"`
+		CPUSeconds     float64 `json:"cpu_seconds"`
+		MemByteSeconds float64 `json:"mem_byte_seconds"`
+	}
+	err := s.client.JobObservation.Query().
+		Where(
+			jobobservation.RepositoryNEQ(""),
+			jobobservation.StartedAtLT(to),
+			jobobservation.Or(
+				jobobservation.FinishedAtEQ(0),
+				jobobservation.FinishedAtGTE(from),
+			),
+		).
+		GroupBy(jobobservation.FieldRepository).
+		Aggregate(
+			ent.As(ent.Count(), "jobs"),
+			ent.As(ent.Sum(jobobservation.FieldCPUSeconds), "cpu_seconds"),
+			ent.As(ent.Sum(jobobservation.FieldMemByteSeconds), "mem_byte_seconds"),
+		).
+		Scan(ctx, &rows)
 	if err != nil {
 		return nil, fmt.Errorf("query repo consumption: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
-	var out []RepoTotal
-	for rows.Next() {
-		var (
-			rt      RepoTotal
-			cpu     sql.NullFloat64
-			memSecs sql.NullFloat64
-		)
-		if err := rows.Scan(&rt.Repository, &rt.Jobs, &cpu, &memSecs); err != nil {
-			return nil, fmt.Errorf("scan repo consumption row: %w", err)
-		}
-		rt.CPUSeconds, rt.MemByteSeconds = cpu.Float64, memSecs.Float64
-		out = append(out, rt)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read repo consumption rows: %w", err)
+	out := make([]RepoTotal, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, RepoTotal{
+			Repository:     row.Repository,
+			Jobs:           row.Jobs,
+			CPUSeconds:     row.CPUSeconds,
+			MemByteSeconds: row.MemByteSeconds,
+		})
 	}
 
 	// Cost first, job count as the tie-break: a repository burning cores
 	// matters more than one running many trivial jobs, and that is the
 	// question the panel is asked. Name last so the order is deterministic.
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].CPUSeconds != out[j].CPUSeconds {
-			return out[i].CPUSeconds > out[j].CPUSeconds
-		}
-		if out[i].Jobs != out[j].Jobs {
-			return out[i].Jobs > out[j].Jobs
-		}
-		return out[i].Repository < out[j].Repository
+	slices.SortStableFunc(out, func(a, b RepoTotal) int {
+		return cmp.Or(
+			cmp.Compare(b.CPUSeconds, a.CPUSeconds),
+			cmp.Compare(b.Jobs, a.Jobs),
+			cmp.Compare(a.Repository, b.Repository),
+		)
 	})
-	return out, nil
-}
-
-// JobsForSet returns recent job observations for a runner set, newest first.
-//
-// The runner-detail "job history" panel is scoped to the set rather than to
-// the runner on purpose: an ARC ephemeral runner executes exactly one job and
-// is then destroyed, so a per-runner history would always be one row long.
-func (s *Store) JobsForSet(ctx context.Context, setName string, limit int) ([]JobRecord, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	q := s.client.JobObservation.Query().
-		Order(jobobservation.ByStartedAt(entsql.OrderDesc()), jobobservation.ByID(entsql.OrderDesc())).
-		Limit(limit)
-	if setName != "" {
-		q = q.Where(jobobservation.SetNameEQ(setName))
-	}
-
-	rows, err := q.All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("query jobs for set %q: %w", setName, err)
-	}
-	out := make([]JobRecord, 0, len(rows))
-	for _, j := range rows {
-		out = append(out, jobRecordOf(j))
-	}
 	return out, nil
 }
 
@@ -449,34 +450,7 @@ func (s *Store) Failures(
 	return out, int64(total), nil
 }
 
-// PhasesForRunner returns the lifecycle phases observed for one runner,
-// oldest first, which is the order the lifecycle bar lays them out in.
-func (s *Store) PhasesForRunner(ctx context.Context, runnerName string) ([]Phase, error) {
-	rows, err := s.client.PhaseTransition.Query().
-		Where(phasetransition.RunnerNameEQ(runnerName)).
-		Order(phasetransition.ByStartedAt(), phasetransition.ByID()).
-		All(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("query phases for runner %q: %w", runnerName, err)
-	}
-	out := make([]Phase, 0, len(rows))
-	for _, p := range rows {
-		out = append(out, Phase{
-			Runner:    p.RunnerName,
-			Set:       p.SetName,
-			Phase:     p.Phase,
-			StartedAt: fromUnix(p.StartedAt),
-			EndedAt:   fromUnix(p.EndedAt),
-		})
-	}
-	return out, nil
-}
-
-// ---------------------------------------------------------------------------
-// Job and workflow-run listings
-// ---------------------------------------------------------------------------
-
-// defaultJobRows is how many rows a job or workflow listing returns when the
+// defaultJobRows is how many rows a job or workflow-run listing returns when a
 // caller asks for no particular number. The tables report the window's true
 // total beside the page, so this caps rendering cost without hiding scale.
 const defaultJobRows = 100

@@ -17,8 +17,9 @@ import (
 // RunnerFailureUpdate is the builder for updating RunnerFailure entities.
 type RunnerFailureUpdate struct {
 	config
-	hooks    []Hook
-	mutation *RunnerFailureMutation
+	hooks     []Hook
+	mutation  *RunnerFailureMutation
+	modifiers []func(*sql.UpdateBuilder)
 }
 
 // Where appends a list predicates to the RunnerFailureUpdate builder.
@@ -136,6 +137,12 @@ func (_u *RunnerFailureUpdate) ExecX(ctx context.Context) {
 	}
 }
 
+// Modify adds a statement modifier for attaching custom logic to the UPDATE statement.
+func (_u *RunnerFailureUpdate) Modify(modifiers ...func(u *sql.UpdateBuilder)) *RunnerFailureUpdate {
+	_u.modifiers = append(_u.modifiers, modifiers...)
+	return _u
+}
+
 func (_u *RunnerFailureUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	_spec := sqlgraph.NewUpdateSpec(runnerfailure.Table, runnerfailure.Columns, sqlgraph.NewFieldSpec(runnerfailure.FieldID, field.TypeInt))
 	if ps := _u.mutation.predicates; len(ps) > 0 {
@@ -163,6 +170,7 @@ func (_u *RunnerFailureUpdate) sqlSave(ctx context.Context) (_node int, err erro
 	if value, ok := _u.mutation.AddedTs(); ok {
 		_spec.AddField(runnerfailure.FieldTs, field.TypeInt64, value)
 	}
+	_spec.AddModifiers(_u.modifiers...)
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{runnerfailure.Label}
@@ -178,9 +186,10 @@ func (_u *RunnerFailureUpdate) sqlSave(ctx context.Context) (_node int, err erro
 // RunnerFailureUpdateOne is the builder for updating a single RunnerFailure entity.
 type RunnerFailureUpdateOne struct {
 	config
-	fields   []string
-	hooks    []Hook
-	mutation *RunnerFailureMutation
+	fields    []string
+	hooks     []Hook
+	mutation  *RunnerFailureMutation
+	modifiers []func(*sql.UpdateBuilder)
 }
 
 // SetRunnerName sets the "runner_name" field.
@@ -305,6 +314,12 @@ func (_u *RunnerFailureUpdateOne) ExecX(ctx context.Context) {
 	}
 }
 
+// Modify adds a statement modifier for attaching custom logic to the UPDATE statement.
+func (_u *RunnerFailureUpdateOne) Modify(modifiers ...func(u *sql.UpdateBuilder)) *RunnerFailureUpdateOne {
+	_u.modifiers = append(_u.modifiers, modifiers...)
+	return _u
+}
+
 func (_u *RunnerFailureUpdateOne) sqlSave(ctx context.Context) (_node *RunnerFailure, err error) {
 	_spec := sqlgraph.NewUpdateSpec(runnerfailure.Table, runnerfailure.Columns, sqlgraph.NewFieldSpec(runnerfailure.FieldID, field.TypeInt))
 	id, ok := _u.mutation.ID()
@@ -349,6 +364,7 @@ func (_u *RunnerFailureUpdateOne) sqlSave(ctx context.Context) (_node *RunnerFai
 	if value, ok := _u.mutation.AddedTs(); ok {
 		_spec.AddField(runnerfailure.FieldTs, field.TypeInt64, value)
 	}
+	_spec.AddModifiers(_u.modifiers...)
 	_node = &RunnerFailure{config: _u.config}
 	_spec.Assign = _node.assignValues
 	_spec.ScanValues = _node.scanValues

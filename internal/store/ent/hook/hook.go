@@ -44,18 +44,6 @@ func (f JobSampleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, e
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.JobSampleMutation", m)
 }
 
-// The PhaseTransitionFunc type is an adapter to allow the use of ordinary
-// function as PhaseTransition mutator.
-type PhaseTransitionFunc func(context.Context, *ent.PhaseTransitionMutation) (ent.Value, error)
-
-// Mutate calls f(ctx, m).
-func (f PhaseTransitionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
-	if mv, ok := m.(*ent.PhaseTransitionMutation); ok {
-		return f(ctx, mv)
-	}
-	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.PhaseTransitionMutation", m)
-}
-
 // The RunnerFailureFunc type is an adapter to allow the use of ordinary
 // function as RunnerFailure mutator.
 type RunnerFailureFunc func(context.Context, *ent.RunnerFailureMutation) (ent.Value, error)

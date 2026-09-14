@@ -17,8 +17,9 @@ import (
 // SampleUpdate is the builder for updating Sample entities.
 type SampleUpdate struct {
 	config
-	hooks    []Hook
-	mutation *SampleMutation
+	hooks     []Hook
+	mutation  *SampleMutation
+	modifiers []func(*sql.UpdateBuilder)
 }
 
 // Where appends a list predicates to the SampleUpdate builder.
@@ -157,6 +158,12 @@ func (_u *SampleUpdate) ExecX(ctx context.Context) {
 	}
 }
 
+// Modify adds a statement modifier for attaching custom logic to the UPDATE statement.
+func (_u *SampleUpdate) Modify(modifiers ...func(u *sql.UpdateBuilder)) *SampleUpdate {
+	_u.modifiers = append(_u.modifiers, modifiers...)
+	return _u
+}
+
 func (_u *SampleUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	_spec := sqlgraph.NewUpdateSpec(sample.Table, sample.Columns, sqlgraph.NewFieldSpec(sample.FieldID, field.TypeInt))
 	if ps := _u.mutation.predicates; len(ps) > 0 {
@@ -190,6 +197,7 @@ func (_u *SampleUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedValue(); ok {
 		_spec.AddField(sample.FieldValue, field.TypeFloat64, value)
 	}
+	_spec.AddModifiers(_u.modifiers...)
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{sample.Label}
@@ -205,9 +213,10 @@ func (_u *SampleUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 // SampleUpdateOne is the builder for updating a single Sample entity.
 type SampleUpdateOne struct {
 	config
-	fields   []string
-	hooks    []Hook
-	mutation *SampleMutation
+	fields    []string
+	hooks     []Hook
+	mutation  *SampleMutation
+	modifiers []func(*sql.UpdateBuilder)
 }
 
 // SetTs sets the "ts" field.
@@ -353,6 +362,12 @@ func (_u *SampleUpdateOne) ExecX(ctx context.Context) {
 	}
 }
 
+// Modify adds a statement modifier for attaching custom logic to the UPDATE statement.
+func (_u *SampleUpdateOne) Modify(modifiers ...func(u *sql.UpdateBuilder)) *SampleUpdateOne {
+	_u.modifiers = append(_u.modifiers, modifiers...)
+	return _u
+}
+
 func (_u *SampleUpdateOne) sqlSave(ctx context.Context) (_node *Sample, err error) {
 	_spec := sqlgraph.NewUpdateSpec(sample.Table, sample.Columns, sqlgraph.NewFieldSpec(sample.FieldID, field.TypeInt))
 	id, ok := _u.mutation.ID()
@@ -403,6 +418,7 @@ func (_u *SampleUpdateOne) sqlSave(ctx context.Context) (_node *Sample, err erro
 	if value, ok := _u.mutation.AddedValue(); ok {
 		_spec.AddField(sample.FieldValue, field.TypeFloat64, value)
 	}
+	_spec.AddModifiers(_u.modifiers...)
 	_node = &Sample{config: _u.config}
 	_spec.Assign = _node.assignValues
 	_spec.ScanValues = _node.scanValues

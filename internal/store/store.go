@@ -36,6 +36,7 @@ import (
 
 	"arc-ui/internal/fleet"
 	"arc-ui/internal/store/ent"
+	"arc-ui/internal/store/ent/sample"
 )
 
 // Scope names what a series is aggregated over.
@@ -260,26 +261,6 @@ type JobFacets struct {
 	Sets         []string
 }
 
-// Phase is one contiguous stretch a runner spent in one fleet.State.
-type Phase struct {
-	Runner string
-	Set    string
-	Phase  string
-	// StartedAt and EndedAt are both scrape-resolution observations, not exact
-	// transitions: the true boundary lies somewhere in the interval before the
-	// scrape that first saw the change.
-	StartedAt time.Time
-	EndedAt   time.Time
-}
-
-// Duration is how long the phase lasted, or zero if it is still open.
-func (p Phase) Duration() time.Duration {
-	if p.StartedAt.IsZero() || p.EndedAt.IsZero() || !p.EndedAt.After(p.StartedAt) {
-		return 0
-	}
-	return p.EndedAt.Sub(p.StartedAt)
-}
-
 // Retention holds the per-tier windows. It mirrors the corresponding fields of
 // config.Config; the store takes it as an argument rather than reading config
 // so it can be compacted with a different policy in a test.
@@ -304,7 +285,6 @@ type Stats struct {
 	Samples     int64
 	Jobs        int64
 	JobSamples  int64
-	Phases      int64
 	ChurnEvents int64
 	Failures    int64
 	Rows        int64
@@ -358,8 +338,6 @@ type runnerState struct {
 	set   string
 	state fleet.State
 	job   fleet.Job
-	// phaseAt is when the runner entered its current state, as observed.
-	phaseAt time.Time
 }
 
 // Option configures a Store at open time.
@@ -512,29 +490,35 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	}
 
 	counts := []struct {
-		table string
+		what  string
+		count func(context.Context) (int, error)
 		into  *int64
 	}{
-		{"samples", &st.Samples},
-		{"job_observations", &st.Jobs},
-		{"job_samples", &st.JobSamples},
-		{"phase_transitions", &st.Phases},
-		{"churn_events", &st.ChurnEvents},
-		{"runner_failures", &st.Failures},
+		{"samples", s.client.Sample.Query().Count, &st.Samples},
+		{"job observations", s.client.JobObservation.Query().Count, &st.Jobs},
+		{"job samples", s.client.JobSample.Query().Count, &st.JobSamples},
+		{"churn events", s.client.ChurnEvent.Query().Count, &st.ChurnEvents},
+		{"runner failures", s.client.RunnerFailure.Query().Count, &st.Failures},
 	}
 	for _, c := range counts {
-		if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+c.table).Scan(c.into); err != nil {
-			return st, fmt.Errorf("count %s: %w", c.table, err)
+		n, err := c.count(ctx)
+		if err != nil {
+			return st, fmt.Errorf("count %s: %w", c.what, err)
 		}
-		st.Rows += *c.into
+		*c.into = int64(n)
+		st.Rows += int64(n)
 	}
 
-	var oldest sql.NullInt64
-	if err := s.db.QueryRowContext(ctx, "SELECT MIN(ts) FROM samples").Scan(&oldest); err != nil {
+	// The oldest surviving sample, read off the ts index rather than as a
+	// MIN() aggregate so an empty store is an ordinary not-found rather than a
+	// NULL that has to be scanned into a nullable.
+	oldest, err := s.client.Sample.Query().Order(sample.ByTs()).First(ctx)
+	switch {
+	case ent.IsNotFound(err):
+	case err != nil:
 		return st, fmt.Errorf("oldest sample: %w", err)
-	}
-	if oldest.Valid {
-		st.Oldest = time.Unix(oldest.Int64, 0).UTC()
+	default:
+		st.Oldest = time.Unix(oldest.Ts, 0).UTC()
 	}
 	return st, nil
 }

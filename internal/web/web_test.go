@@ -910,7 +910,6 @@ func TestStoreFooterReportsSizeAndRowCounts(t *testing.T) {
 		SizeBytes:   12 * 1024 * 1024,
 		Samples:     1234567,
 		Jobs:        42,
-		Phases:      7,
 		ChurnEvents: 99,
 		Failures:    8317,
 		Rows:        1243032,
