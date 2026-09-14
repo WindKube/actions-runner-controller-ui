@@ -22,6 +22,7 @@
 package listener
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -57,11 +58,6 @@ const maxConcurrentScrapes = 16
 // are counted: an operator needs the shape of the failure and one example, and a
 // reason listing ninety pods is a reason nobody reads.
 const maxNamedFailures = 3
-
-// maxBodyBytes caps what we will read from the endpoint. The URL is operator
-// supplied and may point at something that is not a listener at all; a
-// dashboard must not be OOM-killed by a misconfiguration.
-const maxBodyBytes = 8 << 20
 
 // disabledReason explains "nothing to scrape" in the terms an operator needs to
 // act on. It names the chart values because "not configured" alone sends people
@@ -443,7 +439,10 @@ func (s *Scraper) scrape(ctx context.Context, endpoint string) (Metrics, namespa
 	}
 	defer func() {
 		// Drain before closing so the connection can be reused across ticks.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxBodyBytes))
+		// Bounded because a response we gave up on has no size we agreed to:
+		// past this much, a fresh connection next tick is the cheaper of the
+		// two.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxKeptBytes))
 		_ = resp.Body.Close()
 	}()
 
@@ -451,27 +450,21 @@ func (s *Scraper) scrape(ctx context.Context, endpoint string) (Metrics, namespa
 		return Metrics{}, nil, fmt.Errorf("scraping %s: unexpected status %s", safeURL(endpoint), resp.Status)
 	}
 
-	// One byte more than we will accept, so that running the reader dry is
-	// evidence the body overran rather than ended. io.LimitReader alone cannot
-	// express this: it reports EOF at the cap, which the parser reads as the
-	// end of the exposition. A body that overruns on a line boundary then
-	// parses cleanly as its own prefix and we publish it as known — a queue
-	// depth missing every series past the cap, presented as fact.
-	body := &io.LimitedReader{R: resp.Body, N: maxBodyBytes + 1}
+	// Filtered as it streams rather than parsed whole: most of a busy
+	// listener's exposition is histograms and Go runtime series this package
+	// throws away, and handing them to the parser costs the memory of a body
+	// we never wanted. It also means truncation cannot be mistaken for the end
+	// of the exposition — an overrun is an error here, not a shorter answer
+	// published as known.
+	kept, err := filterExposition(resp.Body)
+	if err != nil {
+		return Metrics{}, nil, fmt.Errorf("scraping %s: %w", safeURL(endpoint), withoutURL(err))
+	}
 
 	// parse, not Parse: a scale set name reused across namespaces is something
 	// only an operator can fix, so the report has to reach the log — via the
 	// tracker, because this runs every interval forever.
-	m, index, err := parse(body)
-
-	// Checked before err: an oversized body usually fails the parse too, on
-	// whatever half-line it was cut at. "unexpected token" sends an operator
-	// hunting for a malformed exposition; the size is the actual fault and the
-	// only one of the two they can act on.
-	if body.N == 0 {
-		return Metrics{}, nil, fmt.Errorf(
-			"scraping %s: response exceeds the %d byte limit", safeURL(endpoint), maxBodyBytes)
-	}
+	m, index, err := parse(bytes.NewReader(kept))
 	if err != nil {
 		return Metrics{}, nil, fmt.Errorf("scraping %s: %w", safeURL(endpoint), withoutURL(err))
 	}

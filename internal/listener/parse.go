@@ -29,6 +29,24 @@ const (
 	metricCompletedJobs     = "gha_completed_jobs_total"
 )
 
+// collectedFamilies is every family parse asks collect for, in one list because
+// the scrape filter has to know them before the parser does: a family added
+// below and to Metrics but not here is dropped on the way in and reads as a
+// listener that never exposed it. TestFilterCoversEveryCollectedFamily is the
+// tripwire for that.
+var collectedFamilies = []string{
+	metricAssignedJobs,
+	metricRunningJobs,
+	metricRegisteredRunners,
+	metricBusyRunners,
+	metricIdleRunners,
+	metricDesiredRunners,
+	metricMinRunners,
+	metricMaxRunners,
+	metricStartedJobs,
+	metricCompletedJobs,
+}
+
 // Label keys carrying the scale set name. ARC uses `name`; some listener
 // versions and recording rules carry `runner_scale_set_name` instead, so both
 // are accepted with `name` winning.
