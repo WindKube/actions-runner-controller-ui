@@ -24,9 +24,8 @@ import (
 
 // EventSource fetches recent Kubernetes events for one runner pod.
 //
-// It is separate from the snapshot because events are the highest-churn object
-// in a cluster and must never be held in an informer cache; they are fetched
-// on demand, for one pod, only when someone opens its detail page.
+// It is separate from the snapshot because events are the highest-churn object in
+// a cluster and must never be held in an informer cache.
 type EventSource interface {
 	Events(ctx context.Context, r fleet.Runner) ([]fleet.Event, error)
 }
@@ -57,10 +56,6 @@ func (h *Handler) heartbeat() time.Duration {
 	}
 	return 15 * time.Second
 }
-
-// ---------------------------------------------------------------------------
-// Page handlers
-// ---------------------------------------------------------------------------
 
 // Index serves the fleet overview as a complete document.
 func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
@@ -164,10 +159,6 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, p Page, body te
 		h.Log.Error().Err(err).Str("path", r.URL.Path).Msg("render failed")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Streams
-// ---------------------------------------------------------------------------
 
 // regionSet is a page's patchable regions, keyed by DOM id.
 type regionSet map[string]templ.Component
@@ -292,16 +283,14 @@ func (h *Handler) StreamRunner(w http.ResponseWriter, r *http.Request, name stri
 	})
 }
 
-// stream is the shared loop behind every live view.
+// stream is the shared loop behind every live view. It re-renders on each fleet
+// change and on a heartbeat, patches only the regions whose markup differs from
+// what this client last received, and bumps a sequence signal so the browser can
+// time its own staleness.
 //
-// It re-renders on each fleet change and on a heartbeat, patches only the
-// regions whose markup actually differs from what this client last received,
-// and bumps a sequence signal so the browser can time its own staleness.
-//
-// The loop is what the live signal buys. Without it the same code still runs
-// once — every control on the page refreshes by reopening this endpoint, so a
-// paused dashboard has to serve that render — it simply does not stay for the
-// next tick.
+// The loop is what the live signal buys: without it the same code still runs
+// once, because every control refreshes by reopening this endpoint — it simply
+// does not stay for the next tick.
 func (h *Handler) stream(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -400,13 +389,11 @@ func (h *Handler) stream(
 	}
 }
 
-// patch renders one region and sends it only when it differs from what this
-// client last received.
+// patch renders one region and sends it only when it differs from what this client
+// last received.
 //
-// The comparison is per-connection rather than global because two browsers
-// with different filters legitimately see different markup for the same id.
-// Most ticks change only the tiles and a couple of table rows, so this turns a
-// full page of markup per interval into a few hundred bytes.
+// The comparison is per-connection rather than global because two browsers with
+// different filters legitimately see different markup for the same id.
 func (h *Handler) patch(ctx context.Context, sse *datastar.ServerSentEventGenerator, sent map[string]string, id string, c templ.Component) error {
 	var buf bytes.Buffer
 	if err := c.Render(ctx, &buf); err != nil {
@@ -455,17 +442,12 @@ func (h *Handler) logStreamEnd(streamURL string, err error) {
 	h.Log.Warn().Err(err).Str("stream", streamURL).Msg("stream ended")
 }
 
-// ---------------------------------------------------------------------------
-// Stream registry
-// ---------------------------------------------------------------------------
-
 // StreamRegistry tracks open SSE streams so shutdown can end them promptly.
 //
-// http.Server.Shutdown waits for active connections, and an SSE stream is
-// active until its handler returns — so without this, shutting down waits the
-// full timeout for every open dashboard. Cancelling the server's BaseContext
-// would also work but is indiscriminate: it would abort ordinary in-flight
-// requests too, which should be allowed to finish.
+// http.Server.Shutdown waits for active connections, and an SSE stream is active
+// until its handler returns — so without this, shutting down waits the full
+// timeout for every open dashboard. Cancelling the server's BaseContext would also
+// work but is indiscriminate: it would abort ordinary in-flight requests too.
 type StreamRegistry struct {
 	mu     sync.Mutex
 	cancel map[int64]context.CancelFunc
@@ -473,7 +455,6 @@ type StreamRegistry struct {
 	closed bool
 }
 
-// NewStreamRegistry returns an empty registry.
 func NewStreamRegistry() *StreamRegistry {
 	return &StreamRegistry{cancel: make(map[int64]context.CancelFunc)}
 }

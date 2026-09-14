@@ -77,10 +77,9 @@ func podMetrics(ns, name string, at time.Time, containers ...metricsv1beta1.Cont
 // newClient seeds a fake clientset with pod metrics.
 //
 // The objects go in through Tracker().Create with an explicit GVR rather than
-// NewSimpleClientset(objs...): the tracker's automatic kind-to-resource guess
-// turns PodMetrics into "podmetricses", while the generated client lists
-// "pods" (metrics.k8s.io serves pod metrics under that name). Seeded the easy
-// way, every List comes back empty and the tests pass for the wrong reason.
+// NewSimpleClientset(objs...): the tracker's kind-to-resource guess turns
+// PodMetrics into "podmetricses", while the generated client lists "pods". Seeded
+// the easy way, every List comes back empty and the tests pass for the wrong reason.
 func newClient(t *testing.T, objs ...*metricsv1beta1.PodMetrics) *metricsfake.Clientset {
 	t.Helper()
 

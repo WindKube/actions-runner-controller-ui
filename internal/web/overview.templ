@@ -39,10 +39,9 @@ templ OverviewPage(o Overview) {
 	</div>
 }
 
-// StoreFooter reports the history store's own footprint at the foot of the
-// page. The row counts are laid out in columns rather than as a KV list because
-// they are read against one another — which table is growing — not looked up
-// one at a time.
+// StoreFooter reports the history store's own footprint at the foot of the page.
+// The row counts are laid out in columns rather than as a KV list because they are
+// read against one another — which table is growing — not looked up one at a time.
 templ StoreFooter(o Overview) {
 	@Card("store", "history store", storeSubtitle(o.Store)) {
 		if !o.Store.Enabled {
@@ -57,9 +56,9 @@ templ StoreFooter(o Overview) {
 	}
 }
 
-// storeSubtitle puts the size in the card header, where the strip's other
-// headline numbers live, so the one number an operator is watching for is
-// visible without reading the grid.
+// storeSubtitle puts the size in the card header, where the strip's other headline
+// numbers live, so the one number an operator watches is visible without reading
+// the grid.
 func storeSubtitle(p StorePanel) string {
 	if !p.Enabled || len(p.Rows) == 0 {
 		return ""

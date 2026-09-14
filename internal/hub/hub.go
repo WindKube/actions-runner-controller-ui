@@ -1,10 +1,7 @@
 // Package hub fans fleet-change notifications out to connected browsers.
 //
-// It deliberately carries no payload beyond a sequence number and a timestamp.
-// Each SSE stream re-renders from the current snapshot using its own filter
-// state, so pushing the data through the hub would mean either broadcasting
-// one client's filtered view to everyone or serialising the whole fleet per
-// subscriber. A bare "something changed" tick is both smaller and correct.
+// A tick carries no payload beyond a sequence number and a timestamp: each SSE
+// stream re-renders from the current snapshot using its own filter state.
 package hub
 
 import (
@@ -16,9 +13,8 @@ import (
 type Tick struct {
 	// Seq increases monotonically, letting a client detect dropped ticks.
 	Seq uint64
-	// At is when the change was observed. The UI shows the age of the most
-	// recent tick as its live-connection indicator, so this must be the
-	// observation time rather than the delivery time.
+	// At must be the observation time rather than the delivery time: the UI
+	// renders its age as the live-connection indicator.
 	At time.Time
 }
 
@@ -29,7 +25,6 @@ type Hub struct {
 	seq  uint64
 }
 
-// New returns an empty hub.
 func New() *Hub {
 	return &Hub{subs: make(map[chan Tick]struct{})}
 }
@@ -38,7 +33,7 @@ func New() *Hub {
 // closes the channel. Cancel is idempotent and must always be called.
 func (h *Hub) Subscribe() (<-chan Tick, func()) {
 	// Buffered so a subscriber that is mid-render does not immediately start
-	// dropping ticks; see Broadcast for what happens when the buffer fills.
+	// dropping ticks.
 	ch := make(chan Tick, 8)
 
 	h.mu.Lock()
@@ -56,18 +51,15 @@ func (h *Hub) Subscribe() (<-chan Tick, func()) {
 	}
 }
 
-// Broadcast notifies every subscriber that the fleet changed.
+// Broadcast notifies every subscriber that the fleet changed. A subscriber
+// whose buffer is full is skipped rather than blocked: ticks carry no data, so
+// the next one it receives leaves it in the state it would have reached by
+// processing both.
 //
-// A subscriber whose buffer is full is skipped rather than blocked. Dropping a
-// tick is harmless here precisely because ticks carry no data: the next one the
-// client receives will make it re-render from the current snapshot, which is
-// the same state it would have reached by processing both.
-//
-// The lock is held across the sends, not just the bookkeeping. Copying the
-// subscriber set and sending after unlocking would race with a concurrent
-// cancel: that cancel closes the channel, and the in-flight send then panics
-// on a closed channel. Holding the lock is safe here only because every send
-// below is non-blocking, so this never sleeps while holding it.
+// The lock is held across the sends, not just the bookkeeping. Sending after
+// unlocking would race with a concurrent cancel closing the channel, panicking
+// the in-flight send. That is safe only because every send below is
+// non-blocking, so this never sleeps while holding the lock.
 func (h *Hub) Broadcast(at time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -78,14 +70,14 @@ func (h *Hub) Broadcast(at time.Time) {
 	for ch := range h.subs {
 		select {
 		case ch <- tick:
-		default: // slow subscriber; it will catch up on the next tick
+		default:
 		}
 	}
 }
 
-// Subscribers reports the current subscriber count. Nothing on the dashboard
-// renders it; it is here because the leak it would show — a cancelled stream
-// whose channel is still in the map — is otherwise invisible to a test.
+// Subscribers reports the current subscriber count. Nothing renders it; it is
+// here because the leak it would show — a cancelled stream whose channel is
+// still in the map — is otherwise invisible to a test.
 func (h *Hub) Subscribers() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

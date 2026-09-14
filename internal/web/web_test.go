@@ -91,7 +91,6 @@ func testBuilder() *Builder {
 	}
 }
 
-// renderOverview renders the unfiltered fleet overview as a complete document.
 func renderOverview(t *testing.T) string {
 	t.Helper()
 	return renderOverviewWith(t, testBuilder())
@@ -200,13 +199,11 @@ func TestGridLinesSpanTheWidthTheyWereBuiltFor(t *testing.T) {
 		"grid rules should span the 400-unit width they were built for, got %s", sb.String())
 }
 
-// A capacity bar's four segments are each computed against the same
-// denominator but independently of one another, and are never normalised
-// against each other, so they can sum past 100% — the fixture below reaches
-// 191%. A flex child is shrinkable by default, and a browser resolving an
-// overfull flex line rescales *all* of them proportionally — at which point no
-// segment is its true fraction of the ceiling any more and the bar lies exactly
-// when the fleet is under pressure.
+// A capacity bar's four segments are each computed against the same denominator but
+// independently of one another, so they can sum past 100% — the fixture below
+// reaches 191%. A flex child is shrinkable by default, and a browser resolving an
+// overfull flex line rescales *all* of them proportionally, at which point the bar
+// lies exactly when the fleet is under pressure.
 func TestCapacityBarSegmentsDoNotRescaleWhenOverfull(t *testing.T) {
 	t.Parallel()
 
@@ -435,8 +432,7 @@ func streamAt(t *testing.T, base string, sig Signals) string {
 // readUntilSignal consumes SSE lines until the sequence-signal frame arrives,
 // reporting how many element patches preceded it. Counting frames rather than
 // waiting for a fixed number is deliberate: the initial paint also carries the
-// address-bar script, so the exact count is an implementation detail no test
-// should be pinned to.
+// address-bar script.
 func readUntilSignal(t *testing.T, r *bufio.Reader) (elements int) {
 	t.Helper()
 
@@ -738,15 +734,15 @@ func tickOffset(t *testing.T, label string) time.Duration {
 	return d
 }
 
-// TestTicksAreEvenlySpaced treats the label strip as a correctness property
-// rather than a snapshot.
+// TestTicksAreEvenlySpaced treats the label strip as a correctness property rather
+// than a snapshot.
 //
 // Ticks lays the labels out with flex justify-between, so they land at equal
 // spacing across the chart however many there are. A set whose labels are not
-// equally spaced in TIME therefore prints a label underneath a position that
-// means something else, and the axis lies without looking wrong. Three ranges
-// used to do exactly that: 6h skipped -2h, 24h ended on two 3h steps after
-// three 6h ones, and 7d mixed 2d and 1d steps.
+// equally spaced in TIME prints a label underneath a position that means something
+// else, and the axis lies without looking wrong. Three ranges used to do exactly
+// that: 6h skipped -2h, 24h ended on two 3h steps after three 6h ones, and 7d
+// mixed 2d and 1d steps.
 func TestTicksAreEvenlySpaced(t *testing.T) {
 	t.Parallel()
 
@@ -789,12 +785,11 @@ func TestAssetsAreContentHashedAndImmutable(t *testing.T) {
 
 // TestAssetsConditionalRequestKeepsCachingHeaders pins what a 304 must carry.
 //
-// A 304 answering If-None-Match has to repeat the ETag and Cache-Control the
-// 200 would have carried, or the browser cannot extend the freshness lifetime
-// and revalidates the hashed asset on every load — which defeats the whole
-// content-hash-plus-immutable strategy. An earlier hand-rolled branch here
-// wrote the 304 before those headers were set; http.ServeContent now answers
-// the conditional itself, after they are in place.
+// A 304 answering If-None-Match has to repeat the ETag and Cache-Control the 200
+// would have carried, or the browser cannot extend the freshness lifetime and
+// revalidates the hashed asset on every load. An earlier hand-rolled branch wrote
+// the 304 before those headers were set; http.ServeContent now answers the
+// conditional itself.
 func TestAssetsConditionalRequestKeepsCachingHeaders(t *testing.T) {
 	t.Parallel()
 
@@ -821,12 +816,11 @@ func TestAssetsConditionalRequestKeepsCachingHeaders(t *testing.T) {
 		"the 304 dropped Cache-Control")
 }
 
-// The requested-resources line is drawn from a series the store has kept all
-// along, yet resourceChart drew only its newest value, flat across the whole
-// window. A fleet that grew from 2 cores to 6 an instant ago then claimed to
-// have reserved 6 cores for the entire hour — a reservation that never
-// happened, on the one panel whose whole job is comparing usage against what
-// was actually reserved at the time.
+// The requested-resources line is drawn from a series the store has kept all along,
+// yet resourceChart drew only its newest value, flat across the whole window. A
+// fleet that grew from 2 cores to 6 an instant ago then claimed to have reserved 6
+// cores for the entire hour, on the one panel whose job is comparing usage against
+// what was actually reserved at the time.
 func TestRequestLineFollowsHistoryNotOnlyItsNewestValue(t *testing.T) {
 	t.Parallel()
 
@@ -844,7 +838,6 @@ func TestRequestLineFollowsHistoryNotOnlyItsNewestValue(t *testing.T) {
 		"the early 2-core request must sit below the closing 6-core one, got %v", ys)
 }
 
-// polylineYs pulls the y coordinate out of each "x,y" pair of a points string.
 func polylineYs(t *testing.T, points string) []float64 {
 	t.Helper()
 

@@ -1,16 +1,15 @@
 // Package metrics polls pod CPU and memory usage from the metrics.k8s.io
 // aggregated API and pushes it into the snapshot.
 //
-// It polls rather than watches on purpose. metrics.k8s.io is served by
-// metrics-server out of an in-memory store, not by etcd: there is no
-// resourceVersion, no watch verb and no informer to build. The API only ever
-// answers "what did I scrape most recently", so a ticker is the whole design.
+// It polls rather than watches because metrics-server serves from an in-memory
+// store, not etcd: there is no resourceVersion, no watch verb and no informer to
+// build.
 //
-// Everything here is best-effort. metrics-server is an optional add-on, RBAC
-// for it is frequently missing, and even on a healthy cluster a pod has no
-// metrics for the first ~30 seconds of its life — which for ephemeral runners
-// means a meaningful fraction of them live and die without ever being scraped.
-// A missing pod is therefore never an error; only a failing List is.
+// Everything here is best-effort. metrics-server is an optional add-on, RBAC for
+// it is frequently missing, and even on a healthy cluster a pod has no metrics
+// for the first ~30 seconds of its life — which for ephemeral runners means many
+// live and die without ever being scraped. A missing pod is therefore never an
+// error; only a failing List is.
 package metrics
 
 import (
@@ -114,12 +113,11 @@ func (p *Poller) Run(ctx context.Context) error {
 // tick performs one scrape and reports the outcome. It never returns an error:
 // a broken metrics-server degrades the dashboard, it does not stop it.
 func (p *Poller) tick(ctx context.Context) {
-	// One scrape must not outlive its own interval. Run calls tick
-	// synchronously, so a metrics-server that accepts the connection and then
-	// never answers blocks the List for the life of the process: no later tick
-	// fires, and the dashboard silently stops updating without ever reporting
-	// the source as unavailable. With a deadline the hang becomes an ordinary
-	// scrape failure, which the code below already knows how to report.
+	// One scrape must not outlive its own interval. Run calls tick synchronously, so
+	// a metrics-server that accepts the connection and then never answers blocks the
+	// List for the life of the process: no later tick fires, and the dashboard
+	// silently stops updating. With a deadline the hang becomes an ordinary scrape
+	// failure.
 	scrapeCtx, cancel := context.WithTimeout(ctx, p.interval)
 	defer cancel()
 
@@ -127,12 +125,9 @@ func (p *Poller) tick(ctx context.Context) {
 	if err != nil {
 		if ctx.Err() != nil {
 			// Deliberately ctx and not scrapeCtx: a scrape that timed out is a
-			// metrics-server fault worth reporting, while a cancelled parent is
-			// shutdown. Testing the derived context would conflate them.
-			//
-			// Shutdown, not a metrics-server fault. Leave the last known
-			// health alone so the final render does not accuse a healthy
-			// cluster of being broken.
+			// metrics-server fault worth reporting, while a cancelled parent is shutdown.
+			// Leave the last known health alone so the final render does not accuse a
+			// healthy cluster of being broken.
 			return
 		}
 		p.health.Fail(p.log, err.Error())
@@ -199,13 +194,13 @@ func (p *Poller) scrape(ctx context.Context) (map[string]fleet.Usage, error) {
 // Key is the map key the sink is indexed by: "namespace/podname".
 func Key(namespace, pod string) string { return namespace + "/" + pod }
 
-// usageOf sums a pod's containers. PodMetrics carries no pod-level total —
-// only the per-container breakdown — so the sum is ours to compute.
+// usageOf sums a pod's containers. PodMetrics carries no pod-level total, so the
+// sum is ours to compute.
 //
 // CPU goes through MilliValue and not Value: Value rounds up to whole cores,
-// which would turn every 250m reading into 1.0 and inflate the entire fleet's
-// usage by an order of magnitude. Milli-cores are summed as integers first so
-// no per-container rounding accumulates.
+// which would turn every 250m reading into 1.0 and inflate the fleet's usage by
+// an order of magnitude. Milli-cores are summed as integers so no per-container
+// rounding accumulates.
 func usageOf(containers []metricsv1beta1.ContainerMetrics, at time.Time) fleet.Usage {
 	var milliCores, bytes int64
 	for _, c := range containers {

@@ -1,10 +1,9 @@
 package store
 
 // Code generation for this package is driven by the Taskfile, not by
-// `//go:generate` directives. That is this monorepo's convention: `go generate
-// ./...` silently does nothing when a tool is missing, whereas a task fails
-// loudly, and the generated ent client is checked in so a normal build never
-// needs the generator at all.
+// `//go:generate` directives: `go generate ./...` silently does nothing when a
+// tool is missing, whereas a task fails loudly, and the generated ent client is
+// checked in so a normal build never needs the generator.
 //
 // The task runs, from the repository root:
 //
@@ -15,18 +14,16 @@ package store
 //
 // Neither feature flag is optional here.
 //
-// `sql/upsert`: every write this package makes is an upsert — snapshot
-// samples, rollup rows, the running job's accumulated cost — because the
-// sampler may be restarted, replayed, or run twice on the same instant, and
-// none of that may duplicate a row. Without it ent generates no OnConflict
-// builders and the whole design falls back to read-modify-write races.
+// `sql/upsert`: every write this package makes is an upsert, because the sampler
+// may be restarted, replayed, or run twice on the same instant, and none of that
+// may duplicate a row. Without it ent generates no OnConflict builders and the
+// design falls back to read-modify-write races.
 //
-// `sql/modifier`: every chart query buckets a timestamp column into
-// `(ts / n) * n` and groups on the result. That is an expression, not a field,
-// so ent's generated GroupBy cannot name it; Modify is what lets those queries
-// be written through the same predicates and column constants as the rest of
-// the package instead of as hand-built SQL strings.
+// `sql/modifier`: every chart query buckets a timestamp into `(ts / n) * n` and
+// groups on the result. That is an expression, not a field, so ent's generated
+// GroupBy cannot name it; Modify is what keeps those queries on the same
+// predicates and column constants as the rest of the package.
 //
-// Note that `entgo.io/ent/cmd/ent` is registered as a go.mod tool. It must be
-// invoked as `go tool ent`; `go install`ing it separately would pin a
-// different ent version than the one the generated code compiles against.
+// `entgo.io/ent/cmd/ent` is registered as a go.mod tool and must be invoked as
+// `go tool ent`; `go install`ing it separately would pin a different ent version
+// than the one the generated code compiles against.

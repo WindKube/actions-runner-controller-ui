@@ -6,15 +6,13 @@
 // unversioned for Go consumers: every release since October 2023 is tagged
 // `gha-runner-scale-set-X.Y.Z`, which the module proxy cannot see, so a plain
 // `go get` silently resolves to v0.27.6 and drags in a k8s.io generation from
-// 2023. Worse, importing the real API package compiles the entire Azure Key
-// Vault SDK, because VaultConfig.Type is typed `vault.VaultType`. The payoff
-// for all that would be nil — the repo ships no generated clientset, only
-// controller-gen deepcopy.
+// 2023. Importing the real API package also compiles the entire Azure Key Vault
+// SDK, because VaultConfig.Type is typed `vault.VaultType`.
 //
 // So we copy the ~20 structs we actually render, with json tags taken verbatim
 // from release tag gha-runner-scale-set-0.14.2 (commit 9bb16ae). Decoding via
-// runtime.DefaultUnstructuredConverter ignores fields we did not declare, so
-// ARC can grow its API without breaking us.
+// runtime.DefaultUnstructuredConverter ignores fields we did not declare, so ARC
+// can grow its API without breaking us.
 package v1alpha1
 
 import (
@@ -22,11 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ---------------------------------------------------------------------------
-// AutoscalingRunnerSet — the user-facing scale set. One per runner pool.
-// ---------------------------------------------------------------------------
-
-// AutoscalingRunnerSet is the top-level scale set resource.
+// AutoscalingRunnerSet is the top-level scale set resource, one per runner pool.
 type AutoscalingRunnerSet struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -126,10 +120,6 @@ func (s AutoscalingRunnerSetSpec) RunnerContainer() (corev1.Container, bool) {
 	return corev1.Container{}, false
 }
 
-// ---------------------------------------------------------------------------
-// EphemeralRunnerSet — the generation actually being scaled. Owns the runners.
-// ---------------------------------------------------------------------------
-
 // EphemeralRunnerSet is one generation of a scale set's runners. A rollout can
 // leave more than one alive at a time.
 type EphemeralRunnerSet struct {
@@ -160,10 +150,6 @@ type EphemeralRunnerSetStatus struct {
 	FailedEphemeralRunners  int    `json:"failedEphemeralRunners"`
 	Phase                   string `json:"phase"`
 }
-
-// ---------------------------------------------------------------------------
-// EphemeralRunner — one runner, one pod, one job.
-// ---------------------------------------------------------------------------
 
 // EphemeralRunner is a single runner. Its pod always shares its name.
 type EphemeralRunner struct {
@@ -238,10 +224,6 @@ func (s EphemeralRunnerStatus) LastFailure() metav1.Time {
 	}
 	return latest
 }
-
-// ---------------------------------------------------------------------------
-// AutoscalingListener — the GitHub-side poller. Health lives on its pod.
-// ---------------------------------------------------------------------------
 
 // AutoscalingListener polls GitHub for job assignments.
 //

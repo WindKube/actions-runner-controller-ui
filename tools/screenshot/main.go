@@ -2,12 +2,9 @@
 // `task preview` into PNGs that can be embedded in README.md.
 //
 // It is a separate module on purpose. Driving a browser needs go-rod and its
-// dependency tail, and none of that belongs in arc-ui's own module graph: the
-// Dockerfile's `deps` stage is cache-keyed on go.mod/go.sum alone, so a library
-// that never ships in the binary would still invalidate that layer and be
-// downloaded for every image build. Nothing here imports the application — it
-// turns a directory of HTML files into a directory of PNGs and knows no more
-// than that.
+// dependency tail, and the Dockerfile's `deps` stage is cache-keyed on
+// go.mod/go.sum alone, so a library that never ships in the binary would still
+// invalidate that layer on every image build.
 //
 // The preview HTML is self-contained (the CSS is inlined and the only script tag
 // has an empty src), so it renders from file:// with no server and no network.
@@ -102,9 +99,8 @@ func run() error {
 }
 
 // connect resolves a browser and connects to it. The lookup order is explicit
-// override, then whatever is already installed, then a managed download — so a
-// developer who has Chrome gets an instant run, and a bare CI box still works
-// without anyone having to install a system package first.
+// override, then whatever is already installed, then a managed download, so a bare
+// CI box works without anyone installing a system package first.
 func connect(bin string) (*rod.Browser, func(), error) {
 	if bin == "" {
 		bin = os.Getenv("ARC_UI_CHROME")
@@ -125,10 +121,9 @@ func connect(bin string) (*rod.Browser, func(), error) {
 		Set("disable-lcd-text")
 
 	if bin != "" {
-		// The path comes from a flag or the environment — i.e. from whoever is
-		// already running this command — so there is no privilege boundary to
-		// cross here. Cleaning it keeps gosec's taint analysis quiet and turns a
-		// sloppy path into a tidy one in the error message.
+		// The path comes from a flag or the environment — i.e. from whoever is already
+		// running this command — so there is no privilege boundary to cross here. Cleaning
+		// it keeps gosec's taint analysis quiet.
 		bin = filepath.Clean(bin)
 		if _, err := os.Stat(bin); err != nil {
 			return nil, nil, fmt.Errorf("browser binary %q: %w", bin, err)

@@ -1,9 +1,9 @@
 // Package fleet is the dashboard's domain model: the current state of every
 // runner and scale set, plus the filtering and aggregation the views render.
 //
-// It knows nothing about Kubernetes or HTTP. Collectors push a Snapshot in;
-// the web layer reads view models out. That boundary is what makes the whole
-// aggregation layer testable without a cluster.
+// It knows nothing about Kubernetes or HTTP. Collectors push a Snapshot in, the
+// web layer reads view models out, and that boundary is what makes aggregation
+// testable without a cluster.
 package fleet
 
 import (
@@ -18,8 +18,8 @@ import (
 
 // State is a runner's lifecycle state as the dashboard presents it.
 //
-// This is deliberately not ARC's EphemeralRunner phase. That phase describes
-// the *pod* — a runner sitting idle waiting for work reports "Running" — so it
+// This is deliberately not ARC's EphemeralRunner phase. That phase describes the
+// *pod* — a runner sitting idle waiting for work reports "Running" — so it
 // cannot distinguish the two states an operator most wants to tell apart.
 type State string
 
@@ -57,9 +57,9 @@ func (s State) sortRank() int {
 // Resources is a request/limit/usage triple for one dimension.
 //
 // Used is only meaningful when At is non-zero: metrics-server holds no history
-// and takes up to ~30s to first report a pod, so a short-lived ephemeral
-// runner may live and die without ever being scraped. That must render as "—",
-// never as zero, or the dashboard understates fleet usage.
+// and takes up to ~30s to first report a pod, so a short-lived ephemeral runner
+// may live and die without ever being scraped. That must render as "—", never as
+// zero, or the dashboard understates fleet usage.
 type Resources struct {
 	Used    float64
 	Request float64
@@ -67,7 +67,6 @@ type Resources struct {
 	At      time.Time
 }
 
-// HasUsage reports whether a usage sample was actually observed.
 func (r Resources) HasUsage() bool { return !r.At.IsZero() }
 
 // Job is the workflow job a runner is currently executing.
@@ -79,7 +78,6 @@ type Job struct {
 	StartedAt  time.Time
 }
 
-// Present reports whether a job is assigned.
 func (j Job) Present() bool { return j.Repository != "" || j.Name != "" }
 
 // Runner is one EphemeralRunner joined with its pod and latest metrics.
@@ -98,11 +96,9 @@ type Runner struct {
 	Restarts  int32
 	RunnerID  int
 
-	// PodUID identifies the runner's pod. It is carried purely so the events
-	// lookup can pin its field selector to this exact pod: runner names are
-	// generated from the scale set name and do get reused, and a selector on
-	// name alone will happily return an hour of a long-dead pod's events and
-	// present them as this runner's.
+	// PodUID pins the events lookup's field selector to this exact pod: runner names
+	// are generated from the scale set name and do get reused, and a selector on
+	// name alone will happily return a long-dead pod's events as this runner's.
 	PodUID string
 
 	CPU Resources // cores
@@ -116,7 +112,6 @@ type Runner struct {
 	FailedAt time.Time
 }
 
-// Age is how long the runner has existed.
 func (r Runner) Age(now time.Time) time.Duration {
 	if r.CreatedAt.IsZero() {
 		return 0
@@ -175,13 +170,11 @@ type RunnerSet struct {
 	ListenerKnown   bool
 }
 
-// AtCapacity reports whether the set has hit its ceiling — the condition the
-// design paints red.
+// AtCapacity reports whether the set has hit its ceiling.
 func (s RunnerSet) AtCapacity() bool {
 	return !s.Unbounded && s.MaxRunners > 0 && s.Current >= s.MaxRunners
 }
 
-// ScaledToZero reports whether the set currently has no runners at all.
 func (s RunnerSet) ScaledToZero() bool { return s.Current == 0 }
 
 // CapacityDenominator is the value capacity bars scale against. An unbounded
@@ -207,9 +200,8 @@ type Usage struct {
 
 // Event is a Kubernetes event shown on the runner detail page.
 //
-// ARC's modern controllers emit no events of their own, so everything here
-// comes from the kubelet and scheduler acting on the runner pod — Scheduled,
-// Pulled, Started, Failed, BackOff, Evicted, Killing.
+// ARC's modern controllers emit no events of their own, so everything here comes
+// from the kubelet and scheduler acting on the runner pod.
 type Event struct {
 	Type    string // Normal or Warning
 	Reason  string
@@ -218,20 +210,18 @@ type Event struct {
 	Count   int32
 }
 
-// Warning reports whether an event is one the operator should notice.
 func (e Event) Warning() bool { return e.Type == "Warning" }
 
 // Source records whether one upstream data source is usable. Every source is
 // optional: the dashboard boots and serves with all of them broken, naming the
 // failures in the control-plane strip rather than rendering zeros.
 type Source struct {
-	Name string
-	// Available is whether the source answered at all.
+	Name      string
 	Available bool
-	// Reason explains a source that is unavailable — or, when Available is
-	// true, one that answered only partly. A fleet whose listeners are half
-	// reachable has real queue depth for half its sets, and painting that as an
-	// outage would be as wrong as painting it as healthy.
+	// Reason explains a source that is unavailable — or, when Available is true, one
+	// that answered only partly. A fleet whose listeners are half reachable has real
+	// queue depth for half its sets, and painting that as an outage would be as
+	// wrong as painting it as healthy.
 	Reason    string
 	CheckedAt time.Time
 }
@@ -239,12 +229,11 @@ type Source struct {
 // ListenerTarget is one ARC listener metrics endpoint to scrape.
 //
 // It lives here rather than in the scraper because the two sides must not import
-// each other: the collector discovers targets from its pod cache and the scraper
-// consumes them, and this package is the vocabulary they already share.
+// each other: the collector discovers targets and the scraper consumes them.
 type ListenerTarget struct {
-	// Set and Namespace name the scale set this listener serves. They are not
-	// used to key anything — the exposition carries its own labels — but they
-	// are what makes a per-target error message mean something.
+	// Set and Namespace name the scale set this listener serves. They key nothing —
+	// the exposition carries its own labels — but they are what makes a per-target
+	// error message mean something.
 	Set       string
 	Namespace string
 	Pod       string
@@ -274,17 +263,14 @@ type Snapshot struct {
 	ListenersTotal    int
 }
 
-// Source looks up one source by name.
 func (s Snapshot) Source(name string) (Source, bool) {
 	return lo.Find(s.Sources, func(src Source) bool { return src.Name == name })
 }
 
-// Set looks up one runner set by name.
 func (s Snapshot) Set(name string) (RunnerSet, bool) {
 	return lo.Find(s.Sets, func(set RunnerSet) bool { return set.Name == name })
 }
 
-// Runner looks up one runner by name.
 func (s Snapshot) Runner(name string) (Runner, bool) {
 	return lo.Find(s.Runners, func(r Runner) bool { return r.Name == name })
 }
@@ -325,7 +311,6 @@ func ParseSetSort(v string) SetSort {
 	}
 }
 
-// SortSets orders the runner-set table.
 func SortSets(sets []RunnerSet, by SetSort) {
 	switch by {
 	case SortRunnerCount:
@@ -401,10 +386,9 @@ const GiB = 1024 * 1024 * 1024
 // FormatGiB renders a byte count as the design does, e.g. "12Gi".
 //
 // Sub-gibibyte values get a decimal place. At %.0f a 512Mi request renders as
-// "0Gi", which is character-for-character what no request at all renders as, so
-// the panel cannot tell a small request from a missing one. Anything positive
-// that would still round to "0.0Gi" is shown as "<0.1Gi" rather than
-// reintroducing the same ambiguity one decimal further down.
+// "0Gi", identical to no request at all. Anything positive that would still
+// round to "0.0Gi" is shown as "<0.1Gi" rather than reintroducing the same
+// ambiguity one decimal further down.
 func FormatGiB(bytes float64) string {
 	if bytes <= 0 {
 		return "0Gi"
@@ -418,12 +402,10 @@ func FormatGiB(bytes float64) string {
 	return fmt.Sprintf("%.0fGi", bytes/GiB)
 }
 
-// FormatBytes renders a byte count with the largest unit that leaves a
-// readable mantissa, e.g. "512 B", "4.0 KiB", "12.0 MiB", "1.5 GiB".
-//
-// The SQLite file this reports on spans four orders of magnitude over an
-// install's life — kibibytes on first boot, gibibytes after thirteen months of
-// hourly rollups — so a fixed unit is unreadable at one end or the other.
+// FormatBytes renders a byte count with the largest unit that leaves a readable
+// mantissa, e.g. "512 B", "4.0 KiB", "12.0 MiB", "1.5 GiB". The SQLite file this
+// reports on spans four orders of magnitude over an install's life, so a fixed
+// unit is unreadable at one end or the other.
 //
 // Promotion happens after rounding, not before: 1048575 bytes is 1023.999 KiB,
 // which one decimal place renders as "1024.0 KiB", a quantity nobody writes.

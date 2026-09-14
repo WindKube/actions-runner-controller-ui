@@ -40,15 +40,13 @@ func AllGVRs() []schema.GroupVersionResource {
 // Labels and annotations ARC applies. Taken from the controller source at
 // gha-runner-scale-set-0.14.2.
 const (
-	// LabelScaleSetName and LabelScaleSetNamespace appear together on every
-	// object belonging to one scale set — EphemeralRunnerSet, EphemeralRunner,
-	// Pod, listener, ServiceAccount and Role alike. Selecting on both is the
-	// cheapest way to fetch a whole scale set's objects.
+	// LabelScaleSetName and LabelScaleSetNamespace appear together on every object
+	// belonging to one scale set — EphemeralRunnerSet, EphemeralRunner, Pod,
+	// listener, ServiceAccount and Role alike.
 	LabelScaleSetName      = "actions.github.com/scale-set-name"
 	LabelScaleSetNamespace = "actions.github.com/scale-set-namespace"
 
 	// LabelEphemeralRunner is set to "True" on every runner pod, cluster-wide.
-	// One selector, every runner.
 	LabelEphemeralRunner = "actions-ephemeral-runner"
 
 	// AnnotationRunnerScaleSetID is GitHub's numeric id for the scale set.

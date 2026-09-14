@@ -39,11 +39,10 @@ func TestWritePreview(t *testing.T) {
 		History:  previewHistory{},
 		Version:  "preview",
 		Interval: 15 * time.Second,
-		// Only needs to be a stable string for write() to match on — the link is
-		// swapped for an inline <style> there. JS is deliberately left unset: the
-		// layout omits the module script entirely when Page.JS is empty, and a
-		// preview file has no server to stream from. An empty src= would resolve
-		// to the page itself and make the browser parse this HTML as a module.
+		// Only needs to be a stable string for write() to match on — the link is swapped
+		// for an inline <style> there. JS is deliberately left unset: the layout omits the
+		// module script entirely when Page.JS is empty, and an empty src= would resolve to
+		// the page itself and make the browser parse this HTML as a module.
 		CSS: "/static/app.css",
 	}
 	ctx := context.Background()

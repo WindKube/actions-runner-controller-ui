@@ -534,12 +534,10 @@ func TestRetentionKeepsJobsUntilTheyAreHistorical(t *testing.T) {
 	assert.NotContains(t, survived, "abandoned", "an abandoned open job survived forever")
 }
 
-// TestSwitchedJobKeepsItsFinalInterval covers the persistent-runner handover:
-// the runner is seen on one job and then on the next, and the interval between
-// those two scrapes must not fall between the two rows. It lands on the new
-// job, which is the direction RecordSnapshot bills a handover — see
-// TestHandoverIsNotBilledToThePreviousRepository for why the direction matters
-// more than it looks.
+// TestSwitchedJobKeepsItsFinalInterval covers the persistent-runner handover: the
+// runner is seen on one job and then on the next, and the interval between those
+// two scrapes must not fall between the two rows. It lands on the new job — see
+// TestHandoverIsNotBilledToThePreviousRepository for why the direction matters.
 func TestSwitchedJobKeepsItsFinalInterval(t *testing.T) {
 	t.Parallel()
 
@@ -582,12 +580,10 @@ func TestSwitchedJobKeepsItsFinalInterval(t *testing.T) {
 
 // TestHandoverIsNotBilledToThePreviousRepository pins where the straddling
 // interval lands when the two jobs belong to different repositories, which on a
-// persistent runner is the routine case. RecordSnapshot bills it forwards, so
-// the successor's repository carries the whole interval — including the part
-// its predecessor ran, which is why `e2e` here holds 240 core-seconds it cannot
-// possibly have consumed by the instant it is asserted. The direction is a
-// choice and not a measurement; flipping it would move the same core-seconds
-// onto the other repository's panel, so it is pinned rather than argued.
+// persistent runner is routine. RecordSnapshot bills it forwards, so the
+// successor's repository carries the whole interval — which is why `e2e` here
+// holds 240 core-seconds it cannot possibly have consumed. The direction is a
+// choice, not a measurement, so it is pinned rather than argued.
 func TestHandoverIsNotBilledToThePreviousRepository(t *testing.T) {
 	t.Parallel()
 
@@ -634,9 +630,8 @@ func TestHandoverIsNotBilledToThePreviousRepository(t *testing.T) {
 
 // TestBulkUpsertAccumulatesPerRow pins the other half of that: one statement
 // carries an increment for every runner in the snapshot and shares a single
-// conflict clause between them, so an increment that resolved to a literal, or
-// to some other row's value, would look fine with one runner and be wrong with
-// two.
+// conflict clause between them, so an increment that resolved to a literal, or to
+// some other row's value, would look fine with one runner and be wrong with two.
 func TestBulkUpsertAccumulatesPerRow(t *testing.T) {
 	t.Parallel()
 
@@ -666,12 +661,11 @@ func TestBulkUpsertAccumulatesPerRow(t *testing.T) {
 	assert.InDelta(t, 90, byName["test"].CPUSeconds, 1e-9, "runner-b's job took someone else's increment: %+v", jobs)
 }
 
-// TestDuplicateRunnerInOneSnapshotIsBilledOnce covers the hazard that comes
-// with accumulating in the database: a runner listed twice would resolve
-// against the row its own statement had just inserted, and the increment would
-// land twice. The sibling write paths converge on a repeat by construction —
-// samples take the new value, churn ignores the conflict — so this was the one
-// path that had to be made to.
+// TestDuplicateRunnerInOneSnapshotIsBilledOnce covers the hazard that comes with
+// accumulating in the database: a runner listed twice would resolve against the row
+// its own statement had just inserted, and the increment would land twice. The
+// sibling write paths converge on a repeat by construction — samples take the new
+// value, churn ignores the conflict — so this was the one path that had to be made to.
 func TestDuplicateRunnerInOneSnapshotIsBilledOnce(t *testing.T) {
 	t.Parallel()
 
@@ -748,11 +742,10 @@ func TestJobCostSurvivesAProcessRestart(t *testing.T) {
 	assert.InDelta(t, 120, cpuSeconds(s), 1e-9, "cost accounting did not resume after the restart")
 }
 
-// TestRetentionDoesNotOverflowTheAbandonedJobWindow pins the one arithmetic
-// hazard in the sweep list: maxJobRuntime is added to a configured window, and
-// time.Duration is int64 nanoseconds, so a window near the ceiling wraps
-// negative — which unixCutoff turns into a cutoff in the *future*, matching
-// every open job row including one that started seconds ago.
+// TestRetentionDoesNotOverflowTheAbandonedJobWindow pins the one arithmetic hazard
+// in the sweep list: maxJobRuntime is added to a configured window, and
+// time.Duration is int64 nanoseconds, so a window near the ceiling wraps negative —
+// which unixCutoff turns into a cutoff in the *future*, matching every open job row.
 func TestRetentionDoesNotOverflowTheAbandonedJobWindow(t *testing.T) {
 	t.Parallel()
 

@@ -17,21 +17,18 @@ import (
 
 // Compact rolls raw samples up into coarser tiers and applies retention.
 //
-// Run it periodically. It is idempotent — running it twice with the same
-// `now` leaves exactly the same rows — and safe to interrupt, because every
-// step is a single statement and rollups always run before the deletes that
-// consume their sources. A crash between the two leaves duplicate data, never
-// missing data, and the next run converges.
+// Run it periodically. It is idempotent and safe to interrupt: rollups always run
+// before the deletes that consume their sources, so a crash between the two
+// leaves duplicate data rather than missing data, and the next run converges.
 //
-// The idempotency rests on one detail that is easy to get wrong: the boundary
-// at which a source tier is trimmed is floored to the *target* bucket width,
-// and the rollup reads from the same floored boundary. Without that
-// alignment, a bucket straddling the retention edge would be re-averaged from
-// whichever of its source rows happened to survive the previous sweep, and
-// history would quietly drift every time compaction ran.
+// The idempotency rests on one detail that is easy to get wrong: the boundary at
+// which a source tier is trimmed is floored to the *target* bucket width, and the
+// rollup reads from the same floored boundary. Without that alignment a bucket
+// straddling the retention edge would be re-averaged from whichever source rows
+// survived the previous sweep, and history would drift every time compaction ran.
 //
-// `now` is a parameter rather than time.Now() so a test can compact a
-// fabricated timeline, and so two calls in the same tick agree.
+// `now` is a parameter rather than time.Now() so two calls in the same tick agree,
+// and so a test can compact a fabricated timeline.
 func (s *Store) Compact(ctx context.Context, now time.Time, ret Retention) error {
 	start := time.Now()
 
@@ -66,16 +63,14 @@ func (s *Store) Compact(ctx context.Context, now time.Time, ret Retention) error
 // rollup derives the `to` tier from the `from` tier for every bucket that is
 // complete and still within the source tier's retention.
 //
-// Only whole buckets are derived: the bucket containing `now` is left alone,
-// so a rollup never publishes a partial average that a later run would
-// silently correct.
+// Only whole buckets are derived: the bucket containing `now` is left alone, so a
+// rollup never publishes a partial average that a later run would silently
+// correct.
 //
-// Averaging is the right fold here because every stored metric is a gauge.
-// Counts — churn, job throughput — deliberately live in their own tables so
-// they are never averaged by accident. Rolling m1 into m5 does average
-// averages, which is only exactly the true mean when the underlying buckets
-// have equal sample counts; at scrape resolution they effectively do, and the
-// error is far below what a ninety-pixel chart can render.
+// Averaging is safe because every stored metric is a gauge; counts live in their
+// own tables so they are never averaged by accident. Rolling m1 into m5 averages
+// averages, which is only the true mean when the source buckets hold equal sample
+// counts — at scrape resolution they effectively do.
 func (s *Store) rollup(ctx context.Context, now time.Time, from, to Tier, srcRetention time.Duration) (int64, error) {
 	bucket := int64(to.Resolution().Seconds())
 	if bucket <= 0 {
@@ -87,14 +82,13 @@ func (s *Store) rollup(ctx context.Context, now time.Time, from, to Tier, srcRet
 		return 0, nil
 	}
 
-	// The subquery is not cosmetic. SQLite's parser cannot always tell where a
-	// SELECT ends and an upsert clause begins when INSERT ... SELECT is
-	// followed by ON CONFLICT; wrapping the aggregate in a derived table and
-	// adding the documented `WHERE true` removes the ambiguity entirely.
+	// The subquery is not cosmetic. SQLite's parser cannot always tell where a SELECT
+	// ends and an upsert clause begins when INSERT ... SELECT is followed by ON
+	// CONFLICT; the derived table plus the documented `WHERE true` removes it.
 	//
-	// Runner-scoped rows are excluded: they are raw-only by design and are
-	// dropped after fifteen minutes, so rolling them up would create exactly
-	// the per-runner history the tiering exists to avoid.
+	// Runner-scoped rows are excluded: they are raw-only and dropped after fifteen
+	// minutes, so rolling them up would create exactly the per-runner history the
+	// tiering exists to avoid.
 	const q = `
 INSERT INTO samples (scope, scope_id, metric, tier, ts, value)
 SELECT scope, scope_id, metric, tier, bts, value FROM (
@@ -114,12 +108,9 @@ ON CONFLICT (scope, scope_id, metric, tier, ts) DO UPDATE SET value = excluded.v
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		// The count is this function's whole return value, and a zero here is
-		// indistinguishable from "there was nothing to roll up" — so the only
-		// honest answer to "I cannot count what I wrote" is an error. The
-		// retention sweep below takes the opposite view for the same call and
-		// is right to: there the count is a running total for one log line,
-		// and losing it must not abandon the sweeps that have not run yet.
+		// A zero here is indistinguishable from "there was nothing to roll up", so an
+		// uncountable write has to surface as an error. The retention sweep below ignores
+		// the same failure deliberately: there the count only feeds a log line.
 		return 0, fmt.Errorf("count rows rolled from %s into %s: %w", from, to, err)
 	}
 	return n, nil
@@ -138,19 +129,17 @@ func rollupFloor(now time.Time, retention time.Duration, bucket int64) int64 {
 // maxJobRuntime is how long past the retention window an unfinished job
 // observation is still believed rather than swept.
 //
-// A row is only closed by the completion the store observes, so a runner that
-// went away while the process was down leaves one open forever: without a
-// second cutoff those rows are the one thing in the database that never
-// expires. Five days is GitHub's own execution-time ceiling for a job on a
-// self-hosted runner, so a row still open that far past the window is not a
-// long build, it is a lost completion signal.
+// A row is only closed by an observed completion, so a runner that vanished while
+// the process was down leaves one open forever. Five days is GitHub's
+// execution-time ceiling for a job on a self-hosted runner, so a row still open
+// that far past the window is a lost completion signal, not a long build.
 const maxJobRuntime = 5 * 24 * time.Hour
 
 // applyRetention deletes everything past its window.
 //
 // The derived tables have no retention knob of their own, so they borrow one:
-// jobs, churn and failures follow the 5-minute tier, which is the longest
-// window the throughput, consumption and failure panels offer.
+// jobs, churn and failures follow the 5-minute tier, the longest window the
+// throughput, consumption and failure panels offer.
 func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention) (int64, error) {
 	type sweep struct {
 		what      string
@@ -214,17 +203,14 @@ func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention
 			del:       s.deleteTier(Tier1h),
 		},
 		{
-			// Per-job usage, on its own window. This is the knob that lets an
-			// operator keep a month of job rows while paying for a week of the
-			// samples behind them, which is the only table here whose size is
-			// driven by how BUSY the fleet is rather than how big it is.
+			// Per-job usage, on its own window. This is the knob that lets an operator keep a
+			// month of job rows while paying for a week of the samples behind them — the only
+			// table here whose size is driven by how BUSY the fleet is rather than how big.
 			//
-			// Sweeping on the sample's own timestamp means a job that straddles
-			// the boundary keeps the part of its series inside the window and
-			// loses the part outside it. That is bounded by maxJobRuntime and
-			// is the honest reading of "keep N of usage history"; the
-			// alternative, holding every sample of any job with one foot in the
-			// window, makes the window a lower bound rather than a limit.
+			// Sweeping on the sample's own timestamp means a job straddling the boundary keeps
+			// the part of its series inside the window and loses the part outside it. That is
+			// bounded by maxJobRuntime; holding every sample of any job with one foot in the
+			// window would make the window a lower bound rather than a limit.
 			what:      "job samples",
 			retention: ret.JobSamples,
 			cutoff:    unixCutoff(now, ret.JobSamples),
@@ -233,11 +219,9 @@ func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention
 			},
 		},
 		{
-			// Samples whose job is about to go. These two run BEFORE the job
-			// sweeps below and select on the same cutoffs, so a sample can
-			// never outlive the row that gives it meaning — an orphan here
-			// would be unreachable and immortal, since nothing else in this
-			// list would ever match it again.
+			// Samples whose job is about to go. These two run BEFORE the job sweeps below and
+			// select on the same cutoffs, so a sample can never outlive the row that gives it
+			// meaning — an orphan here would be unreachable and immortal.
 			what:      "job samples of expiring finished jobs",
 			retention: ret.Scope5m,
 			cutoff:    unixCutoff(now, ret.Scope5m),
@@ -262,10 +246,9 @@ func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention
 			},
 		},
 		{
-			// Finished jobs age from their completion, not from their start. A
-			// row becomes history the moment it stops changing, and sweeping on
-			// started_at would delete a week-long build that finished a minute
-			// ago — along with the throughput bucket it belongs in.
+			// Finished jobs age from their completion, not their start: sweeping on started_at
+			// would delete a week-long build that finished a minute ago, and the throughput
+			// bucket it belongs in.
 			what:      "finished job observations",
 			retention: ret.Scope5m,
 			cutoff:    unixCutoff(now, ret.Scope5m),
@@ -359,7 +342,6 @@ func (s *Store) deleteTier(tier Tier) func(context.Context, int64) (int, error) 
 	}
 }
 
-// unixCutoff is the plain, unaligned retention boundary.
 func unixCutoff(now time.Time, retention time.Duration) int64 {
 	return now.Add(-retention).Unix()
 }

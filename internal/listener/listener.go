@@ -1,24 +1,21 @@
 // Package listener scrapes the ARC listener's Prometheus endpoint for the one
-// number Kubernetes cannot tell us: how many jobs GitHub has assigned to a
-// scale set that have no runner yet.
+// number Kubernetes cannot tell us: how many jobs GitHub has assigned to a scale
+// set that have no runner yet.
 //
-// Queue depth exists only on GitHub's side of the connection. The cluster sees
-// runners, never the backlog waiting for them, so without this scrape the
-// dashboard can say "40 runners busy" but not "and 120 jobs waiting".
+// Queue depth exists only on GitHub's side of the connection, so without this
+// scrape the dashboard can say "40 runners busy" but not "and 120 jobs waiting".
 //
-// The catch is that these metrics are off by default. The `metrics:` block in
-// the gha-runner-scale-set-controller chart values is commented out and no
-// Service is created for the listener, so on a stock install there is nothing
-// to scrape. That is the normal case, not a failure: nothing to scrape is
-// recorded as the reason the number is missing.
+// These metrics are off by default. The `metrics:` block in the
+// gha-runner-scale-set-controller chart values is commented out and no Service is
+// created for the listener, so on a stock install there is nothing to scrape.
+// That is the normal case, not a failure.
 //
-// There is also never just one endpoint. ARC runs one AutoscalingListener pod
-// per scale set and each serves only its own scale set's series, so a fleet's
-// queue depth exists only as the union of every listener's answer — which is why
-// this scraper takes a Discoverer rather than a URL, and why a partial answer is
-// published rather than discarded. A single configured URL is still supported for
-// the case where something in front of the listeners aggregates them, such as a
-// Prometheus /federate endpoint.
+// There is also never just one endpoint. ARC runs one AutoscalingListener pod per
+// scale set and each serves only its own series, so a fleet's queue depth exists
+// only as the union of every listener's answer — which is why this scraper takes
+// a Discoverer rather than a URL, and why a partial answer is published rather
+// than discarded. A single configured URL is still supported for the case where
+// something in front of the listeners aggregates them.
 package listener
 
 import (
@@ -49,10 +46,9 @@ const scrapeTimeout = 10 * time.Second
 
 // maxConcurrentScrapes bounds how many listeners are scraped at once.
 //
-// One round covers a normal fleet, so a tick costs about one scrapeTimeout
-// rather than one per listener. Ticks never overlap — Run calls tick
-// synchronously — so on a very large fleet of dead listeners the effect of the
-// cap is a slower cadence, not a pile-up of goroutines.
+// Ticks never overlap — Run calls tick synchronously — so on a very large fleet
+// of dead listeners the effect of the cap is a slower cadence, not a pile-up of
+// goroutines.
 const maxConcurrentScrapes = 16
 
 // maxNamedFailures caps how many failing listeners one reason names. The rest
@@ -62,10 +58,9 @@ const maxNamedFailures = 3
 
 // disabledReason explains "nothing to scrape" in the terms an operator needs to
 // act on. It names the chart values because "not configured" alone sends people
-// hunting through the dashboard's own settings, where the problem is not, and
-// it names the pod recreation because the flags only reach a listener that is
-// restarted after the controller is redeployed — an install that enables
-// metrics and stops there looks exactly like one that never enabled them.
+// hunting through the dashboard's own settings, and it names the pod recreation
+// because the flags only reach a listener restarted after the controller is
+// redeployed.
 const disabledReason = "listener metrics endpoint not configured; ARC ships them disabled — " +
 	"uncomment the metrics: block in the gha-runner-scale-set-controller chart values, " +
 	"then recreate the listener pods so they pick up the flags"
@@ -82,10 +77,9 @@ type Sink interface {
 
 // Discoverer supplies the endpoints to scrape, re-resolved on every tick.
 //
-// The collector implements it from the pod cache it already keeps for listener
-// health. Re-resolving matters: pod IPs are recycled, listeners are recreated
-// whenever a scale set changes, and a target list remembered at boot would
-// slowly become a list of addresses belonging to someone else.
+// Re-resolving matters: pod IPs are recycled, listeners are recreated whenever a
+// scale set changes, and a target list remembered at boot would slowly become a
+// list of addresses belonging to someone else.
 type Discoverer interface {
 	ListenerTargets() []fleet.ListenerTarget
 }
@@ -93,7 +87,6 @@ type Discoverer interface {
 // fixedTargets is a Discoverer over an operator-configured endpoint list.
 type fixedTargets []fleet.ListenerTarget
 
-// ListenerTargets returns the fixed list.
 func (f fixedTargets) ListenerTargets() []fleet.ListenerTarget { return f }
 
 // Scraper polls ARC listener metrics endpoints on an interval.
@@ -119,17 +112,12 @@ type Scraper struct {
 //
 // Leaving http.Client.Transport nil would mean http.DefaultTransport, which is
 // shared with every other HTTP client in the process. That is a correctness
-// problem in tests before it is a tidiness one: httptest.Server.Close() calls
-// CloseIdleConnections() on http.DefaultTransport directly
-// (net/http/httptest/server.go), so one parallel test closing its server tears
-// down connections another test's scrape is still using — the scrape then fails
-// with "http: CloseIdleConnections called" rather than the status it was
-// meant to observe.
+// problem in tests first: httptest.Server.Close() calls CloseIdleConnections() on
+// http.DefaultTransport directly, so one parallel test closing its server tears
+// down connections another test's scrape is still using.
 //
 // Clone() rather than a bare &http.Transport{}: a zero Transport silently drops
-// ProxyFromEnvironment (so HTTP_PROXY/NO_PROXY would stop being honoured for
-// in-cluster scrapes), the dial timeouts, HTTP/2, and idle-connection reaping.
-// Cloning changes which pool the connections live in and nothing else.
+// ProxyFromEnvironment, the dial timeouts, HTTP/2, and idle-connection reaping.
 func scrapeTransport() http.RoundTripper {
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		return t.Clone()
@@ -172,10 +160,9 @@ func NewDiscoveringScraper(d Discoverer, interval time.Duration, log zerolog.Log
 // Run scrapes until ctx is cancelled. Returns nil on clean shutdown.
 //
 // A configured-but-empty endpoint returns immediately: there is nothing to poll
-// and nothing that will ever make there be, so spinning a ticker to fail forever
-// would only bury the real message under repetition. Discovery does keep
-// ticking, because an install with no listener metrics today has them the moment
-// someone uncomments the chart's metrics block.
+// and nothing that will ever make there be. Discovery does keep ticking, because
+// an install with no listener metrics today has them the moment someone
+// uncomments the chart's metrics block.
 func (s *Scraper) Run(ctx context.Context) error {
 	if s.configured && len(s.targets.ListenerTargets()) == 0 {
 		s.reportDisabled()
@@ -217,10 +204,9 @@ func (s *Scraper) tick(ctx context.Context) {
 	}
 
 	if len(failures) == len(list) {
-		// The collision tracker is deliberately left alone: a scrape that
-		// failed says nothing about how the cluster is deployed, and treating
-		// it as "collisions gone" would make a flapping endpoint re-announce
-		// the same ones on every recovery.
+		// The collision tracker is deliberately left alone: a scrape that failed says
+		// nothing about how the cluster is deployed, and treating it as "collisions gone"
+		// would make a flapping endpoint re-announce the same ones on every recovery.
 		reason := allFailedReason(failures)
 		s.health.Fail(s.log, reason)
 		// Unlike pod usage, a stale queue depth is actively misleading: the
@@ -347,8 +333,7 @@ func partialReason(ok, total int, failures []failure) string {
 // allFailedReason describes a fleet where nothing answered.
 //
 // A single endpoint reports its own error verbatim: it is the only thing that
-// failed, and "no listener answered" in front of it would be ceremony around a
-// message that already says everything.
+// failed, so "no listener answered" in front of it would be ceremony.
 func allFailedReason(failures []failure) string {
 	if len(failures) == 1 {
 		return failures[0].err.Error()
@@ -375,21 +360,19 @@ func namedFailures(failures []failure) string {
 	return out
 }
 
-// safeURL is an endpoint with its credentials, query string and fragment
-// removed, for use in error text.
+// safeURL is an endpoint with its credentials, query string and fragment removed,
+// for use in error text.
 //
-// Every error scrape returns is copied into fleet.Source.Reason by tick, which
-// the dashboard renders and the log records. ARC_UI_LISTENER_METRICS_URL is
+// Every error scrape returns is copied into fleet.Source.Reason by tick, which the
+// dashboard renders and the log records. ARC_UI_LISTENER_METRICS_URL is
 // operator-supplied and may legitimately carry userinfo or a token query
-// parameter, so neither may appear there. The userinfo is replaced rather than
-// dropped: an operator reading "credentials were sent and it still 401'd" is
-// better served than one who cannot tell whether any were sent at all.
+// parameter. The userinfo is replaced rather than dropped: an operator reading
+// "credentials were sent and it still 401'd" is better served than one who cannot
+// tell whether any were sent at all.
 //
-// The fragment is stripped for the same reason and is the easiest of the three
-// to overlook, because it is the one part of a URL that never reaches the
-// server. That makes it invisible in a packet capture and in the listener's own
-// logs — but it is still in the string the operator configured, and this
-// function's whole job is to make that string safe to display.
+// The fragment is stripped for the same reason, and is the easiest of the three
+// to overlook because it never reaches the server — but it is still in the string
+// the operator configured.
 func safeURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -413,10 +396,9 @@ func safeURL(raw string) string {
 //
 // Redacting the URL this package formats itself is only half the job: a
 // *url.Error carries the request URL verbatim, and net/http redacts only the
-// password inside it — a token in the query string survives untouched, and %w
-// would carry the whole thing into Source.Reason. Unwrapping keeps the useful
-// half ("connect: connection refused") and drops the half that leaks, since the
-// caller supplies its own redacted URL alongside.
+// password inside it — a token in the query string survives untouched. Unwrapping
+// keeps the useful half ("connect: connection refused") and drops the half that
+// leaks, since the caller supplies its own redacted URL alongside.
 func withoutURL(err error) error {
 	var uerr *url.Error
 	if errors.As(err, &uerr) && uerr.Err != nil {

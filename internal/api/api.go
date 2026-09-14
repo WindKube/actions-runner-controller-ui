@@ -1,10 +1,9 @@
 // Package api is the HTTP surface: routing, health probes and the server
 // lifecycle.
 //
-// It owns no dashboard logic. Rendering lives in internal/web, which is
-// framework-agnostic and exposes plain net/http handlers; this package's job
-// is to mount them, add the probes, and shut everything down in the right
-// order.
+// It owns no dashboard logic. Rendering lives in internal/web, which exposes
+// plain net/http handlers; this package mounts them, adds the probes, and shuts
+// everything down in the right order.
 package api
 
 import (
@@ -43,11 +42,9 @@ type Server struct {
 
 // Options configures a Server.
 //
-// There is deliberately no Version here. Nothing this package serves reports
-// one — /healthz is a bare "ok" and /readyz carries only the dependency
-// verdicts — and the version the dashboard displays comes from
-// web.Builder.Version. A field here would be a second place to set it that
-// silently changes nothing.
+// There is deliberately no Version here. Nothing this package serves reports one,
+// and the version the dashboard displays comes from web.Builder.Version. A field
+// here would be a second place to set it that silently changes nothing.
 type Options struct {
 	Config  config.Config
 	Log     zerolog.Logger
@@ -152,12 +149,11 @@ func (s *Server) Start() error {
 
 // Shutdown drains the server.
 //
-// The order matters and is the whole reason this is not two lines. Readiness is
-// withdrawn first and the process keeps serving for PreStopDelay, so that load
-// balancers observe the failing probe and stop sending new requests before the
-// listener disappears. Only then does Shutdown run, which stops accepting,
-// fires the on-shutdown hook that closes every live stream, and waits for the
-// remaining in-flight requests.
+// The order matters. Readiness is withdrawn first and the process keeps serving
+// for PreStopDelay, so load balancers observe the failing probe and stop sending
+// new requests before the listener disappears. Only then does Shutdown run,
+// which stops accepting, fires the on-shutdown hook that closes every live
+// stream, and waits for the remaining in-flight requests.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.ready.Store(false)
 	s.log.Info().Dur("drain", s.cfg.PreStopDelay).Msg("readiness withdrawn; draining")
@@ -187,10 +183,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 // healthz is process-local and never touches the API server.
 //
-// Liveness must not depend on the cluster. Pointing it at readiness means an
-// API server blip restarts the pod, which forces every informer to re-LIST from
-// scratch — turning a transient upstream problem into a slower recovery than
-// doing nothing at all.
+// Liveness must not depend on the cluster. Pointing it at readiness means an API
+// server blip restarts the pod, forcing every informer to re-LIST from scratch —
+// turning a transient upstream problem into a slower recovery than doing nothing.
 func (s *Server) healthz(c *gin.Context) {
 	c.String(http.StatusOK, "ok")
 }

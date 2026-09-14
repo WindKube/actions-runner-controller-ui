@@ -157,11 +157,10 @@ templ RunnerPage(d RunnerDetail) {
 	</div>
 }
 
-// RunnerResources is the raw per-runner usage over the last few minutes.
-//
-// The window is fixed rather than following the page's range selector: raw
-// per-runner samples are retained for minutes, so a 30-day range would render
-// a handful of points crammed against the right edge.
+// RunnerResources is the raw per-runner usage over the last few minutes. The
+// window is fixed rather than following the page's range selector: raw per-runner
+// samples are retained for minutes, so a 30-day range would render a handful of
+// points crammed against the right edge.
 templ RunnerResources(d RunnerDetail) {
 	@Card("resources", "resource usage", "last 4 minutes") {
 		@ResourcePair(d.CPU, d.Mem)
@@ -208,11 +207,9 @@ templ RunnerFacts(d RunnerDetail) {
 
 // SetJobsPanel lists what the rest of the RunnerSet is working on.
 //
-// The design showed a job history for the individual runner. That panel cannot
-// exist here: an ARC ephemeral runner accepts exactly one job and then
-// terminates, so its history is always a single row. Widening the scope to the
-// RunnerSet keeps the panel's purpose — what is this pool actually doing —
-// while telling the truth about the lifecycle.
+// A job history for the individual runner cannot exist here: an ARC ephemeral
+// runner accepts exactly one job and then terminates, so its history is always a
+// single row.
 templ SetJobsPanel(d RunnerDetail) {
 	@Card("setjobs", "jobs across "+d.Runner.SetName, fmt.Sprintf("%d", len(d.SetJobs))) {
 		if len(d.SetJobs) == 0 {

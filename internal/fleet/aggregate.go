@@ -32,9 +32,9 @@ type Totals struct {
 	Mem Resources // bytes, summed
 
 	// MetricsCovered counts runners that actually reported usage. Short-lived
-	// ephemeral runners routinely die before metrics-server first scrapes
-	// them, so partial coverage is normal and worth surfacing rather than
-	// silently understating fleet usage.
+	// ephemeral runners routinely die before metrics-server first scrapes them, so
+	// partial coverage is normal and worth surfacing rather than silently
+	// understating fleet usage.
 	MetricsCovered int
 }
 
@@ -53,9 +53,9 @@ func (t Totals) MetricsComplete() bool {
 
 // Aggregate totals a set of runners against the scale sets they belong to.
 //
-// Requests come from the sets rather than the runners because that is where
-// the pod template lives, and they are scaled by the observed runner count so
-// the "used of requested" ratio compares like with like.
+// Requests come from the sets rather than the runners because that is where the
+// pod template lives, and they are scaled by the observed runner count so the
+// "used of requested" ratio compares like with like.
 func Aggregate(runners []Runner, sets []RunnerSet) Totals {
 	t := Totals{Runners: len(runners)}
 
@@ -137,8 +137,8 @@ func GroupBySet(runners []Runner, sets []RunnerSet) []SetTotals {
 // Failure is one entry in the failure lane.
 type Failure struct {
 	Runner string
-	// Set is the scale set the runner belonged to. The lane is fleet-wide, so a
-	// row without it leaves the reader guessing which set is burning pods.
+	// Set is the scale set the runner belonged to. The lane is fleet-wide, so a row
+	// without it leaves the reader guessing which set is burning pods.
 	Set    string
 	Reason string
 	At     time.Time
@@ -175,8 +175,7 @@ func Failures(runners []Runner, limit int) []Failure {
 //
 // Exported because the lane is assembled from two sources — the history store
 // and the live snapshot — and rows merged from both have to end up in the same
-// order as rows derived from one runner list, or the newest failure is not the
-// one at the top.
+// order as rows derived from one runner list.
 func SortFailures(f []Failure) {
 	slices.SortStableFunc(f, func(a, b Failure) int {
 		return cmp.Or(
@@ -196,11 +195,8 @@ type RepoUsage struct {
 	CPUCores   float64
 }
 
-// ByRepository totals current consumption per repository, busiest first.
-//
-// This is live consumption, not historical job counts: it answers "who is
-// using the fleet right now", which is the question an operator looking at a
-// saturated fleet actually has.
+// ByRepository totals current consumption per repository, busiest first. This is
+// live consumption, not historical job counts.
 func ByRepository(runners []Runner) []RepoUsage {
 	working := lo.Filter(runners, func(r Runner, _ int) bool { return r.Job.Repository != "" })
 	byRepo := lo.GroupBy(working, func(r Runner) string { return r.Job.Repository })

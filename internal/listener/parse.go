@@ -54,11 +54,10 @@ var collectedFamilies = []string{
 const (
 	labelName         = "name"
 	labelScaleSetName = "runner_scale_set_name"
-	// labelNamespace does not key anything — the exported maps are keyed by
-	// bare scale set name — but it is what distinguishes two different scale
-	// sets that happen to share one, which decides how their series combine.
-	// It is also the only thing that can: see namespaceIndex for what that
-	// costs when a series does not carry it.
+	// labelNamespace does not key anything — the exported maps are keyed by bare
+	// scale set name — but it is what distinguishes two different scale sets that
+	// share one, which decides how their series combine. It is also the only thing
+	// that can; see namespaceIndex.
 	labelNamespace = "namespace"
 )
 
@@ -80,15 +79,14 @@ const (
 
 // Metrics is the parsed result, exported so it can be unit-tested.
 //
-// Every map is keyed by scale set name. A metric the listener did not expose
-// is simply an absent map, never a map of zeros — "not reported" and "zero"
-// are different answers and the dashboard renders them differently.
+// Every map is keyed by scale set name. A metric the listener did not expose is
+// simply an absent map, never a map of zeros — "not reported" and "zero" are
+// different answers and the dashboard renders them differently.
 //
-// The key is the bare name, not namespace/name, so two scale sets sharing a
-// name in different namespaces share one entry: the job counts and counters
-// are the total across both, while MinRunners/MaxRunners/DesiredRunners report
-// one of the two sets (see collect) because a summed ceiling would be a limit
-// no set actually has.
+// The key is the bare name, so two scale sets sharing a name in different
+// namespaces share one entry: counters are the total across both, while
+// Min/Max/DesiredRunners report one of the two (see collect), because a summed
+// ceiling would be a limit no set actually has.
 type Metrics struct {
 	AssignedJobs       map[string]float64
 	RunningJobs        map[string]float64
@@ -106,15 +104,14 @@ type Metrics struct {
 // namespace index it built on the way, from which the scale set name collisions
 // fall out — a deployment mistake worth naming, but not a parse error.
 //
-// It is deliberately tolerant: unknown metric families are ignored, histograms
-// and summaries are skipped, and a family the listener never exposed just
-// leaves its map nil. A scrape that parses cleanly but contains nothing we
-// recognise is a valid — if useless — result, not an error.
+// It is deliberately tolerant: unknown metric families are ignored, histograms and
+// summaries are skipped, and a family the listener never exposed just leaves its
+// map nil. A scrape that parses cleanly but contains nothing we recognise is a
+// valid — if useless — result, not an error.
 //
-// It returns the index rather than the collisions themselves, because one
-// listener serves one scale set: two same-named sets in different namespaces
-// produce two separate bodies, and the collision only exists once their indexes
-// are unioned.
+// It returns the index rather than the collisions themselves because one listener
+// serves one scale set: two same-named sets in different namespaces produce two
+// separate bodies, and the collision only exists once their indexes are unioned.
 func parse(r io.Reader) (Metrics, namespaceIndex, error) {
 	// The validation scheme must be passed explicitly: a zero-valued
 	// TextParser carries model.UnsetValidation and panics on the first metric
@@ -126,11 +123,9 @@ func parse(r io.Reader) (Metrics, namespaceIndex, error) {
 		return Metrics{}, nil, fmt.Errorf("parsing prometheus exposition: %w", err)
 	}
 
-	// One index across all three ceiling families, not one each: a name reused
-	// across namespaces is a single deployment fact, and saying it once per
-	// family is that one fact said three times. Sharing it also catches the
-	// split case — max from one namespace, min from another, neither family
-	// seeing two — which is the same mistake with a worse symptom.
+	// One index across all three ceiling families, not one each: a name reused across
+	// namespaces is a single deployment fact. Sharing it also catches the split case —
+	// max from one namespace, min from another, neither family seeing two.
 	ns := namespaceIndex{}
 	m := Metrics{
 		AssignedJobs:       collect(families, metricAssignedJobs, sum, ns),
@@ -147,13 +142,13 @@ func parse(r io.Reader) (Metrics, namespaceIndex, error) {
 	return m, ns, nil
 }
 
-// fold merges other into m, with the same per-family rules parse applies within
-// one body.
+// fold merges other into m, with the same per-family rules parse applies within one
+// body.
 //
-// It exists because a fleet's metrics arrive as one body per listener, and the
-// two aggregations have to agree: a family summed inside a body and kept
-// first-wins across bodies would report a different number depending on how ARC
-// happened to distribute its listeners.
+// It exists because a fleet's metrics arrive as one body per listener, and the two
+// aggregations have to agree: a family summed inside a body and kept first-wins
+// across bodies would report a different number depending on how ARC happened to
+// distribute its listeners.
 func (m *Metrics) fold(other Metrics) {
 	// Summed, like parse's `sum` families: these count things that add up, and
 	// upstream already splits them by repository and workflow within one body.
@@ -203,16 +198,13 @@ func foldKeep(dst *map[string]float64, src map[string]float64) {
 // thing in the exposition that tells two same-named scale sets apart. So two
 // genuinely different scale sets that share a name and carry no namespace label
 // are indistinguishable from one scale set exposing the same gauge twice: the
-// index sees a single namespace (""), nothing is reported, the first series
-// wins and the rest are dropped. ARC's listener always labels these gauges, so
-// this needs a listener or a proxy that does not — but when it happens it is
-// silent, and nothing here promises otherwise.
+// index sees a single namespace (""), nothing is reported, and the first series
+// wins. ARC's listener always labels these gauges, but when it happens it is
+// silent.
 //
 // The index is reported rather than logged where it is found: the body is
-// untrusted and can carry tens of thousands of collisions, the same fact repeats
-// in every ceiling family, and a scraper re-reads all of it every interval — so
-// how loudly to say this needs to know how often it is being told, which only
-// the caller knows. See collisionTracker.
+// untrusted and can carry tens of thousands of collisions, and only the caller
+// knows how often it is being told. See collisionTracker.
 type namespaceIndex map[string]map[string]struct{}
 
 // add records that set was seen under ns, which is "" when the series carries
@@ -231,10 +223,8 @@ func (i namespaceIndex) add(set, ns string) {
 //
 // Both the list and each name's namespaces are sorted, and every part that comes
 // from the scrape body is cut down by truncateLabel, so the same deployment
-// produces the same bounded report scrape after scrape however the listener
-// ordered its series. collisionTracker's dedup depends on that: an unstable
-// report would look like a new fact every tick, which is the noise the report
-// exists to avoid.
+// produces the same bounded report scrape after scrape. collisionTracker's dedup
+// depends on that: an unstable report would look like a new fact every tick.
 func (i namespaceIndex) collisions() (count int, rendered []string) {
 	names := make([]string, 0, len(i))
 	for set, seen := range i {
@@ -273,19 +263,16 @@ func (i namespaceIndex) union(other namespaceIndex) {
 
 // collect pulls one metric family out, keyed by scale set name.
 //
-// Counters are looked up under both their exposed name and the bare name:
-// classic text exposition keeps the `_total` suffix in the family name, but
-// OpenMetrics strips it, and which one a parser hands back has changed
-// between prometheus/common releases.
+// Counters are looked up under both their exposed name and the bare name: classic
+// text exposition keeps the `_total` suffix in the family name, OpenMetrics strips
+// it, and which one a parser hands back has changed between prometheus/common
+// releases.
 //
-// The key is the bare scale set name, so a name reused in two namespaces —
-// legal, and reachable whenever ARC_UI_NAMESPACES spans more than one — folds
-// two different scale sets together. agg decides how: see the aggregation
-// constants for why counters may be added and ceilings may not.
+// The key is the bare scale set name, so a name reused in two namespaces folds two
+// different scale sets together. agg decides how; see the aggregation constants.
 //
-// ns is filled in for perScaleSet families only, because only they have to
-// choose between namespaces. A summed family folds them together on purpose and
-// has nothing to report, so passing the same index in is harmless.
+// ns is filled in for perScaleSet families only, because only they have to choose
+// between namespaces.
 func collect(families map[string]*dto.MetricFamily, name string, agg aggregation, ns namespaceIndex) map[string]float64 {
 	mf, ok := families[name]
 	if !ok {
@@ -337,20 +324,17 @@ func collect(families map[string]*dto.MetricFamily, name string, agg aggregation
 	return out
 }
 
-// preferNamespace reports whether a series from namespace ns should take over
-// the key currently holding namespace prev's value. Two rules, in order:
+// preferNamespace reports whether a series from namespace ns should take over the
+// key currently holding namespace prev's value. Two rules, in order:
 //
 //   - A labelled series beats an unlabelled one. labelValue cannot tell "no
 //     namespace label" from `namespace=""` and returns "" for both, and "" sorts
-//     before every real namespace — so ordering on the raw string alone would
-//     let a series that says nothing about where it came from evict one that
-//     does, and attribute the surviving value to namespace "".
+//     before every real namespace — so ordering on the raw string alone would let
+//     a series that says nothing about where it came from evict one that does.
 //   - Otherwise the alphabetically first namespace wins, so which of two real
-//     namespaces is reported does not depend on the order the listener happened
-//     to emit its series in.
+//     namespaces is reported does not depend on the listener's emission order.
 //
-// Series repeating within one namespace keep the first: they describe one scale
-// set, and there is nothing to choose between them.
+// Series repeating within one namespace keep the first.
 func preferNamespace(ns, prev string) bool {
 	if (ns == "") != (prev == "") {
 		return prev == ""
@@ -403,10 +387,9 @@ func value(m *dto.Metric) (float64, bool) {
 
 // QueueDepth derives per-set queue depth: assigned minus running, floored at 0.
 //
-// The two gauges are sampled independently by the listener, so a job that has
-// just started can be counted as running before it stops being counted as
-// assigned. That transient makes the difference negative; reporting a negative
-// queue would be nonsense, so it floors at zero.
+// The two gauges are sampled independently by the listener, so a job that has just
+// started can be counted as running before it stops being counted as assigned.
+// That transient makes the difference negative.
 func (m Metrics) QueueDepth() map[string]int {
 	out := make(map[string]int, len(m.AssignedJobs))
 	for set, assigned := range m.AssignedJobs {
@@ -424,19 +407,18 @@ func (m Metrics) QueueDepth() map[string]int {
 
 // floorDepth rounds a gauge difference to a whole job, never below zero.
 //
-// The gauges come from an operator-supplied URL that may not be a listener at
-// all, and "+Inf", "-Inf" and "NaN" are all legal Prometheus exposition, so d
-// is not trusted to be a sane finite number. Anything outside int range is
-// rejected before the conversion: int(math.Round(d)) is implementation-defined
-// once the result does not fit, and on this toolchain +Inf becomes
-// math.MaxInt64 — a 19-digit queue depth on the dashboard rather than anything
-// a reader would recognise as broken.
+// The gauges come from an operator-supplied URL that may not be a listener at all,
+// and "+Inf", "-Inf" and "NaN" are all legal Prometheus exposition, so d is not
+// trusted to be finite. Anything outside int range is rejected before the
+// conversion: int(math.Round(d)) is implementation-defined once the result does
+// not fit, and on this toolchain +Inf becomes math.MaxInt64 — a 19-digit queue
+// depth rather than anything a reader would recognise as broken.
 //
 // Each clause earns its place: NaN fails every ordered comparison and needs the
-// explicit test; -Inf and negatives fall out of d <= 0; +Inf and finite junk
-// too large to round into an int fall out of the magnitude test (float64 rounds
-// math.MaxInt64 up to 2^63, so the bound is exclusive at exactly the first
-// value that would overflow).
+// explicit test; -Inf and negatives fall out of d <= 0; +Inf and finite junk too
+// large to round into an int fall out of the magnitude test (float64 rounds
+// math.MaxInt64 up to 2^63, so the bound is exclusive at exactly the first value
+// that would overflow).
 func floorDepth(d float64) int {
 	if math.IsNaN(d) || d <= 0 || d >= math.MaxInt {
 		return 0

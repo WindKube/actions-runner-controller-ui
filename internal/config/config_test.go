@@ -13,15 +13,13 @@ import (
 // t.Setenv forbids it, and two cases racing on the same variable would be
 // unreproducible anyway.
 
-// TestLoadRejectsUnusableShutdownDurations covers the two values that are
-// accepted by the duration parser but meaningless to the shutdown sequence.
+// TestLoadRejectsUnusableShutdownDurations covers the two values that are accepted
+// by the duration parser but meaningless to the shutdown sequence.
 //
-// Neither time.After nor context.WithTimeout rejects a negative duration; both
-// simply fire at once. Without validation, ARC_UI_PRESTOP_DELAY=-1s skips the
-// window that keeps the pod serving while endpoints controllers stop routing to
-// it, and ARC_UI_SHUTDOWN_TIMEOUT=0s cuts in-flight requests and SSE streams
-// immediately while the store is still checkpointing. Both then look like a
-// clean shutdown in the logs, which is what makes them worth failing on at boot.
+// Neither time.After nor context.WithTimeout rejects a negative duration; both fire
+// at once. Unvalidated, ARC_UI_PRESTOP_DELAY=-1s skips the window that keeps the
+// pod serving, and ARC_UI_SHUTDOWN_TIMEOUT=0s cuts in-flight requests while the
+// store is still checkpointing. Both then look like a clean shutdown in the logs.
 func TestLoadRejectsUnusableShutdownDurations(t *testing.T) {
 	tests := []struct {
 		name    string

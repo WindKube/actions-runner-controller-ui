@@ -122,13 +122,11 @@ func startRecorder(t *testing.T, p *recorderProbe, onResult func(error)) *snapsh
 func TestSnapshotRecorderAppliesSnapshotsInOrder(t *testing.T) {
 	t.Parallel()
 
-	// The store diffs each snapshot against the previous one it saw, so two
-	// recordings in flight at once let the older snapshot land last and become
-	// "previous" for the newer one: the CPU/memory integration interval goes
-	// zero or negative and churn is diffed against a future fleet. A store
-	// write only has to outlast the collector's 250ms debounce window for the
-	// second change to arrive mid-write, which is exactly what happens during
-	// the churn bursts that make writes slow in the first place.
+	// The store diffs each snapshot against the previous one it saw, so two recordings
+	// in flight at once let the older snapshot land last and become "previous" for the
+	// newer one: the integration interval goes zero or negative and churn is diffed
+	// against a future fleet. A write only has to outlast the 250ms debounce window
+	// for that to happen.
 	p := &recorderProbe{hold: make(chan struct{})}
 	rec := startRecorder(t, p, nil)
 
@@ -202,10 +200,9 @@ func TestSnapshotRecorderCoalescesChangesQueuedBehindAWrite(t *testing.T) {
 func TestSnapshotRecorderEnqueueNeverBlocksTheCollector(t *testing.T) {
 	t.Parallel()
 
-	// enqueue runs on the collector's notifier goroutine, where a slow
-	// subscriber delays every other one. It must return while a write is in
-	// flight, which is the whole reason the work is handed to a worker at all —
-	// so this recorder's write never finishes.
+	// enqueue runs on the collector's notifier goroutine, where a slow subscriber
+	// delays every other one. It must return while a write is in flight — the whole
+	// reason the work is handed to a worker — so this recorder's write never finishes.
 	wedged := make(chan struct{})
 	t.Cleanup(func() { close(wedged) })
 
@@ -239,13 +236,11 @@ func TestSnapshotRecorderEnqueueNeverBlocksTheCollector(t *testing.T) {
 func TestSnapshotRecorderKeepsTheNewerOfTwoPendingSnapshots(t *testing.T) {
 	t.Parallel()
 
-	// Nothing the recorder owns serialises its callers, so two enqueues can
-	// hand over out of order. Resolving that by "whoever wrote r.pending last"
-	// lets the older snapshot reach the store after the newer one — the exact
-	// out-of-order application the worker exists to prevent.
+	// Nothing the recorder owns serialises its callers, so two enqueues can hand over
+	// out of order. Resolving that by "whoever wrote r.pending last" lets the older
+	// snapshot reach the store after the newer one.
 	//
-	// Built without a worker on purpose: this asserts on what enqueue parks, so
-	// nothing may drain it mid-test.
+	// Built without a worker on purpose: this asserts on what enqueue parks.
 	p := &recorderProbe{}
 	rec := &snapshotRecorder{
 		record:    p.recordFn,

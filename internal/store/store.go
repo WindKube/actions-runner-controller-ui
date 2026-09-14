@@ -1,21 +1,18 @@
 // Package store is the dashboard's historian.
 //
-// metrics-server keeps no history at all — it holds roughly the last two
-// scrapes and nothing else — and ARC keeps none either. Every "over time"
-// chart in this dashboard exists only because this package samples the fleet
-// and writes it down. That is the whole reason it exists.
+// metrics-server keeps no history at all and ARC keeps none either, so every
+// "over time" chart in this dashboard exists only because this package samples
+// the fleet and writes it down.
 //
-// The hard constraint is volume. A 200-runner fleet sampled every five
-// seconds for thirty days is on the order of two hundred million rows, which
-// is not a thing to put in an embedded SQLite file on a PVC. So the store is
-// tiered: per-runner samples live for minutes because the only view that
-// reads them renders the last four; fleet and per-set samples are rolled up
-// into progressively coarser buckets as they age, because a chart that draws
-// ninety points from a thirty-day window cannot tell the difference.
+// The hard constraint is volume. A 200-runner fleet sampled every five seconds
+// for thirty days is on the order of two hundred million rows, which is not a
+// thing to put in an embedded SQLite file on a PVC. So the store is tiered:
+// per-runner samples live for minutes because the only view that reads them
+// renders the last four; fleet and per-set samples are rolled up into
+// progressively coarser buckets as they age.
 //
-// Everything here is best-effort. The dashboard boots and serves with the
-// store broken, reporting it as a fleet.Source rather than failing a page, so
-// no method in this package is on a critical path.
+// Everything here is best-effort. The dashboard boots and serves with the store
+// broken, reporting it as a fleet.Source rather than failing a page.
 package store
 
 import (
@@ -92,10 +89,9 @@ var rollupTiers = []struct {
 // Metric names one stored series.
 type Metric string
 
-// The stored metrics. Counts are whole numbers stored as floats because
-// averaging them across a rollup bucket produces fractions, and rounding at
-// write time would make a chart of a set that is half-busy look like a
-// staircase.
+// The stored metrics. Counts are whole numbers stored as floats because averaging
+// them across a rollup bucket produces fractions, and rounding at write time would
+// make a chart of a half-busy set look like a staircase.
 const (
 	MetricRunners Metric = "runners"
 	MetricBusy    Metric = "busy"
@@ -106,10 +102,10 @@ const (
 	// actually reachable. ARC ships with them disabled, and a stored zero
 	// would be indistinguishable from "nothing is queued".
 	MetricQueued Metric = "queued"
-	// MetricCapacity is summed maxRunners, and is deliberately absent for an
-	// unbounded set so the dashed max line is omitted rather than drawn at
-	// zero. It is a series rather than a constant because people rescale sets
-	// during the day and history must not be retroactively rewritten.
+	// MetricCapacity is summed maxRunners, and is deliberately absent for an unbounded
+	// set so the dashed max line is omitted rather than drawn at zero. It is a series
+	// rather than a constant because people rescale sets during the day and history
+	// must not be retroactively rewritten.
 	MetricCapacity   Metric = "capacity"
 	MetricCPUUsed    Metric = "cpu_used"
 	MetricCPURequest Metric = "cpu_request"
@@ -140,9 +136,9 @@ type Point struct {
 // Range describes a query window and the number of points wanted.
 //
 // Points is a request rather than a promise. The store buckets [From, To) into
-// roughly that many buckets and returns the ones it has data for, so a store
-// that has only been running ten minutes yields a short series rather than one
-// padded out with invented zeros.
+// roughly that many buckets and returns the ones it has data for, so a store that
+// has only been running ten minutes yields a short series rather than one padded
+// out with invented zeros.
 type Range struct {
 	From, To time.Time
 	Points   int
@@ -152,13 +148,12 @@ type Range struct {
 type RepoTotal struct {
 	Repository string
 	Jobs       int
-	// CPUSeconds and MemByteSeconds are integrals of the metrics-server
-	// samples taken while a job was assigned, and they bound the truth from
-	// neither side. A job short enough to die between two scrapes contributes
-	// nothing at all, while a job that took over a persistent runner is
-	// credited with the whole interval that straddles the handover, including
-	// the part its predecessor ran. RecordSnapshot explains why the handover
-	// is billed forwards.
+	// CPUSeconds and MemByteSeconds are integrals of the metrics-server samples taken
+	// while a job was assigned, and they bound the truth from neither side. A job
+	// short enough to die between two scrapes contributes nothing at all, while a job
+	// that took over a persistent runner is credited with the whole interval that
+	// straddles the handover. RecordSnapshot explains why the handover is billed
+	// forwards.
 	CPUSeconds     float64
 	MemByteSeconds float64
 }
@@ -262,12 +257,12 @@ type JobFacets struct {
 }
 
 // Retention holds the per-tier windows. It mirrors the corresponding fields of
-// config.Config; the store takes it as an argument rather than reading config
-// so it can be compacted with a different policy in a test.
+// config.Config; the store takes it as an argument rather than reading config so
+// it can be compacted with a different policy in a test.
 //
-// A zero duration means "keep forever" for that tier, which is a deliberate
-// escape hatch and not a default anyone should ship: the raw tiers are the
-// ones that grow without bound.
+// A zero duration means "keep forever" for that tier, which is an escape hatch and
+// not a default anyone should ship: the raw tiers are the ones that grow without
+// bound.
 type Retention struct {
 	RunnerRaw, ScopeRaw, Scope1m, Scope5m, Scope1h time.Duration
 
@@ -318,22 +313,20 @@ type Store struct {
 	jobSampleBucket int64
 
 	// mu guards the diff state below. RecordSnapshot is the only writer and is
-	// expected to be called from a single sampler goroutine, but the lock
-	// costs nothing and makes an accidental second caller safe rather than
-	// silently corrupting the churn counts.
+	// expected to be called from a single sampler goroutine, but the lock makes an
+	// accidental second caller safe rather than silently corrupting the churn counts.
 	mu     sync.Mutex
 	prev   map[string]*runnerState
 	prevAt time.Time
 }
 
-// runnerState is what the store remembers about a runner between snapshots.
-// It exists because a Snapshot is a photograph: nothing in it says a runner is
-// new, or that a job just finished. Those are differences, and differences
-// need the previous frame.
+// runnerState is what the store remembers about a runner between snapshots. It
+// exists because a Snapshot is a photograph: nothing in it says a runner is new,
+// or that a job just finished. Those are differences, and differences need the
+// previous frame.
 //
 // Integrated cost is deliberately not here. It accumulates in the database, a
-// scrape's increment at a time, so that it survives the process rather than
-// living and dying with it.
+// scrape's increment at a time, so that it survives the process.
 type runnerState struct {
 	set   string
 	state fleet.State
@@ -367,13 +360,12 @@ func (s *Store) jobBucket() int64 {
 	return s.jobSampleBucket
 }
 
-// Open opens (creating it if necessary) the SQLite database at path and
-// applies the schema.
+// Open opens (creating it if necessary) the SQLite database at path and applies
+// the schema.
 //
-// The connection is deliberately capped at one. SQLite serialises writers
-// anyway, and a pool of readers competing with the sampler's writes just turns
-// lock contention into SQLITE_BUSY errors that the busy_timeout then has to
-// absorb.
+// The connection is deliberately capped at one. SQLite serialises writers anyway,
+// and a pool of readers competing with the sampler's writes just turns lock
+// contention into SQLITE_BUSY errors that the busy_timeout then has to absorb.
 func Open(ctx context.Context, path string, log zerolog.Logger, opts ...Option) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("open store: path is empty")
@@ -384,16 +376,14 @@ func Open(ctx context.Context, path string, log zerolog.Logger, opts ...Option) 
 		}
 	}
 
-	// modernc.org/sqlite registers itself as "sqlite"; ent's dialect.SQLite is
-	// the string "sqlite3", which is mattn's name. They are opened separately
-	// and joined below rather than aliased, because handing ent a
-	// caller-constructed driver value loses the driver package's own
-	// registrations.
+	// modernc.org/sqlite registers itself as "sqlite"; ent's dialect.SQLite is the
+	// string "sqlite3", which is mattn's name. They are opened separately and joined
+	// below rather than aliased, because handing ent a caller-constructed driver value
+	// loses the driver package's own registrations.
 	//
-	// foreign_keys(1) is mandatory, not hygiene: ent's SQLite migrator refuses
-	// to run without it, and the error it prints names mattn's `_fk=1`
-	// spelling, which does nothing here and sends you looking in the wrong
-	// place entirely.
+	// foreign_keys(1) is mandatory, not hygiene: ent's SQLite migrator refuses to run
+	// without it, and the error it prints names mattn's `_fk=1` spelling, which does
+	// nothing here and sends you looking in the wrong place entirely.
 	dsn := path + "?" + strings.Join([]string{
 		"_pragma=foreign_keys(1)",
 		"_pragma=journal_mode(WAL)",
@@ -436,11 +426,11 @@ func Open(ctx context.Context, path string, log zerolog.Logger, opts ...Option) 
 // migrateMu serialises schema creation across every Store in the process.
 //
 // This is not paranoia about SQLite. ent's Atlas-backed migrator decorates the
-// *package-level* table descriptors generated into ent/migrate as it runs, so
-// two clients calling Schema.Create at the same time write and read the same
-// globals — a real data race that `go test -race` reports from inside ent
-// itself. Production opens exactly one store and would never notice; the test
-// suite opens a dozen in parallel and does.
+// *package-level* table descriptors generated into ent/migrate as it runs, so two
+// clients calling Schema.Create at the same time write and read the same globals —
+// a real data race that `go test -race` reports from inside ent itself. Production
+// opens exactly one store and would never notice; the test suite opens a dozen in
+// parallel and does.
 var migrateMu sync.Mutex
 
 // migrate applies the schema under that lock.
@@ -475,10 +465,9 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // Stats reports on-disk size and row counts.
 //
-// The size includes the write-ahead log and shared-memory files, because those
-// are real bytes on the volume and a WAL that has not been checkpointed can be
-// a large fraction of the total. Missing sidecar files are not an error; they
-// simply do not exist until SQLite creates them.
+// The size includes the write-ahead log and shared-memory files, because those are
+// real bytes on the volume and an uncheckpointed WAL can be a large fraction of
+// the total. Missing sidecar files are not an error.
 func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	st := Stats{Path: s.path}
 	for _, suffix := range []string{"", "-wal", "-shm"} {

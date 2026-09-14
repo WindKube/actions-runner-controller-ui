@@ -722,11 +722,10 @@ func TestJobStartsSurviveADegradedRunnerInformer(t *testing.T) {
 	})
 	require.Equal(t, 2, tracker.Len(), "a degraded runner informer evicted every tracked job start")
 
-	// The watch recovers: r1 is still on the same job, r2 finished and was
-	// deleted while we could not see it. Two things have to hold at once — r1
-	// still reports its original start rather than its pod's, which would show a
-	// long job as freshly restarted, and the sweep that was skipped while
-	// degraded resumes now that the list can be trusted again.
+	// The watch recovers: r1 is still on the same job, r2 finished and was deleted
+	// while we could not see it. Two things have to hold at once — r1 still reports
+	// its original start rather than its pod's, and the sweep that was skipped while
+	// degraded resumes now that the list can be trusted.
 	back := BuildSnapshot(SnapshotInput{
 		Now:        testNow.Add(2 * time.Minute),
 		Runners:    []*arcapi.EphemeralRunner{er},
@@ -747,15 +746,13 @@ func TestJobStartsSurviveADegradedRunnerInformer(t *testing.T) {
 	require.Zero(t, tracker.Len(), "tracker retained entries after a synced informer reported no runners")
 }
 
-// TestJobStartEvictionIgnoresTheAggregateARCVerdict pins that the sweep is
-// gated on the EphemeralRunner informer alone, not on the arc-crds source.
+// TestJobStartEvictionIgnoresTheAggregateARCVerdict pins that the sweep is gated on
+// the EphemeralRunner informer alone, not on the arc-crds source.
 //
 // arc-crds is an aggregate: probeARCCRDs reports it unavailable when ANY of the
-// four ARC resources is absent or denied, while still handing back the others
-// as usable and running their informers. It is also probed exactly once, at
-// boot, with nothing to re-probe it — so one missing autoscalinglisteners RBAC
-// rule would pin the tracker for the life of the process while the
-// EphemeralRunner informer works perfectly.
+// four ARC resources is absent or denied, while still running the others'
+// informers. It is also probed once, at boot, so one missing autoscalinglisteners
+// RBAC rule would pin the tracker for the life of the process.
 func TestJobStartEvictionIgnoresTheAggregateARCVerdict(t *testing.T) {
 	t.Parallel()
 

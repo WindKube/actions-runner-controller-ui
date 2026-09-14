@@ -7,9 +7,9 @@ import (
 )
 
 // gridLines draws the horizontal y-axis rules inside a chart's SVG. Each rule
-// carries its own right-hand end, so the rules span the width their geometry
-// was computed for rather than whatever this template happens to assume. The
-// labels that go with them are HTML, not SVG, and live in GridLabels.
+// carries its own right-hand end, so the rules span the width their geometry was
+// computed for. The labels that go with them are HTML, not SVG, and live in
+// GridLabels.
 templ gridLines(lines []chart.GridLine) {
 	for _, g := range lines {
 		<line
@@ -27,12 +27,11 @@ templ gridLines(lines []chart.GridLine) {
 // AreaChartView is the stacked runner-count chart with its capacity ceiling.
 //
 // The viewBox width comes from the view model because that is the width the
-// geometry was computed against. Every chart below draws its width the same
-// way. The height is the package constant, and here it has to equal the pixel
-// height this template's own class pins, or the HTML-layer grid labels —
-// positioned in those pixels — part company with the rules they name. That
-// second constraint binds this chart and the line chart, the two with labels
-// beside them; the bar and churn heights are coordinate units only.
+// geometry was computed against; every chart below draws its width the same way.
+// The height is the package constant, and here it has to equal the pixel height
+// this template's own class pins, or the HTML-layer grid labels part company with
+// the rules they name. That binds this chart and the line chart, the two with
+// labels beside them.
 templ AreaChartView(c AreaChart) {
 	if c.Empty {
 		@Empty("no history yet — charts fill in as samples are collected")
@@ -73,11 +72,9 @@ templ AreaChartView(c AreaChart) {
 	@Legend(c.Legend)
 }
 
-// LineChartView is a single series with optional flat reference lines.
-//
-// The reference lines share the series' scale, which is the point of the
-// panel: drawn on independent scales, a fleet using a tenth of what it
-// reserves would look fully utilised.
+// LineChartView is a single series with optional flat reference lines. The
+// reference lines share the series' scale: drawn independently, a fleet using a
+// tenth of what it reserves would look fully utilised.
 templ LineChartView(c LineChart) {
 	if c.Empty {
 		@Empty("no samples in this window")
@@ -145,12 +142,9 @@ templ BarChartView(c BarChart) {
 	@Legend(c.Legend)
 }
 
-// ChurnChartView mirrors runner creations above the centre line and
-// terminations below it, which is what makes a set thrashing on short-lived
-// runners obvious at a glance.
-//
-// The centre line is part of that geometry, so it spans the width the bars were
-// laid out across rather than a width of this template's own choosing.
+// ChurnChartView mirrors runner creations above the centre line and terminations
+// below it. The centre line is part of that geometry, so it spans the width the
+// bars were laid out across.
 templ ChurnChartView(c ChurnChart) {
 	if c.Empty {
 		@Empty("no runner churn recorded in this window")

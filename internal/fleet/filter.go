@@ -88,13 +88,9 @@ type Option struct {
 
 // Select is one labelled dropdown in the filter bar.
 type Select struct {
-	// Key is the Datastar signal name bound to this select.
-	//
-	// These are flat lowercase words, which is not an accident. HTML lowercases
-	// attribute names, so `data-bind:fRepo` reaches Datastar as `f-repo`; its
-	// default "camel" modifier would then convert that back to `fRepo`. That
-	// round trip works, but relying on it means every signal name depends on a
-	// case-conversion step. A single lowercase word passes through unchanged.
+	// Key is the Datastar signal name bound to this select. These are flat lowercase
+	// words so the name survives HTML's attribute lowercasing and Datastar's camel
+	// conversion unchanged; see web.Signals.
 	Key     string
 	Label   string
 	Value   string

@@ -14,31 +14,25 @@ import (
 )
 
 // Chart geometry. Every chart is computed against a 1000-unit wide coordinate
-// grid. The number itself is arbitrary: the SVGs are w-full with
+// grid. The number is arbitrary: the SVGs are w-full with
 // preserveAspectRatio="none", so the browser stretches the grid to whatever the
-// panel is and 1000 only sets the resolution the coordinates are computed at.
-// It is a round number, not a pixel count; nothing else has to match it.
+// panel is and 1000 only sets the resolution coordinates are computed at.
 //
-// The width still travels with the geometry: each chart view model carries the
-// Width its coordinates were computed against and the template draws its
-// viewBox from that, so the two cannot drift.
+// The width travels with the geometry: each chart view model carries the Width its
+// coordinates were computed against and the template draws its viewBox from that,
+// so the two cannot drift.
 //
-// The heights are fixed constants, named directly by charts.templ rather than
-// carried on a view model; nothing varies them per chart. For the two charts
-// with y-axis labels — area and line — the constant does double duty and is
-// load-bearing: it is also passed as renderedPx to chart.Grid, and to
-// LabelTopPx for the area chart's capacity marker, so the pixel offsets those
-// return are right only while the SVG really is that many CSS pixels tall.
-// Change historyH or lineH and the matching height class in charts.templ has to
-// change with it, or every label slides off the rule it names;
-// TestLabelledChartsRenderAtTheHeightTheirLabelsAssume guards the pair.
-// barH and churnH have no labels beside them and no such tie — they are
-// vertical coordinate units, like the width.
+// For the two charts with y-axis labels — area and line — the height constant does
+// double duty and is load-bearing: it is also passed as renderedPx to chart.Grid,
+// and to LabelTopPx for the area chart's capacity marker, so those pixel offsets
+// are right only while the SVG really is that many CSS pixels tall. Change
+// historyH or lineH and the matching height class in charts.templ has to change
+// with it; TestLabelledChartsRenderAtTheHeightTheirLabelsAssume guards the pair.
+// barH and churnH have no labels beside them and no such tie.
 //
 // One trap for whoever edits these comments: the CSS build scans this package's
 // .go and .templ files as plain text, so anything in a comment that parses as a
-// Tailwind class — a bracketed arbitrary value, or a bare utility name — is
-// emitted as a real rule into app.css.
+// Tailwind class is emitted as a real rule into app.css.
 const (
 	chartW = 1000.0
 
@@ -84,7 +78,6 @@ type Snapshotter interface {
 // SnapshotFunc adapts a function to Snapshotter.
 type SnapshotFunc func() fleet.Snapshot
 
-// Snapshot calls f.
 func (f SnapshotFunc) Snapshot() fleet.Snapshot { return f() }
 
 // Builder assembles view models. It is the only place that knows how to turn
@@ -391,10 +384,6 @@ type ChurnChart struct {
 	Empty  bool
 }
 
-// ---------------------------------------------------------------------------
-// Assembly
-// ---------------------------------------------------------------------------
-
 // page builds the shared chrome.
 func (b *Builder) page(title string, s fleet.Snapshot, sig Signals, now time.Time, crumbs []Crumb) Page {
 	var lag time.Duration
@@ -429,9 +418,9 @@ func (b *Builder) interval() time.Duration {
 
 // Overview builds the main dashboard.
 //
-// History failures are absorbed into empty panels rather than returned: the
-// live half of this page comes from the informer cache and is still worth
-// serving when SQLite is unhappy.
+// History failures are absorbed into empty panels rather than returned: the live
+// half of this page comes from the informer cache and is still worth serving when
+// SQLite is unhappy.
 func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Overview {
 	sig = sig.Normalize()
 	snap := b.Fleet.Snapshot()
@@ -460,9 +449,9 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 	repos, _ := b.History.Repos(ctx, win, 8)
 	stats, _ := b.History.Stats(ctx)
 
-	// A store that cannot answer leaves the live snapshot, which still knows
-	// what is broken this instant. An empty lane would claim a healthy fleet at
-	// the exact moment the dashboard has least to go on.
+	// A store that cannot answer leaves the live snapshot, which still knows what is
+	// broken this instant. An empty lane would claim a healthy fleet at the exact
+	// moment the dashboard has least to go on.
 	lane := FailureLane{Items: fleet.Failures(runners, failureLaneRows)}
 	if stored, err := b.History.Failures(ctx, scope, win, failureLaneRows); err == nil {
 		lane = mergeFailures(stored, fleet.Failures(runners, failureLaneRows), failureLaneRows, rng.Label())
@@ -570,10 +559,6 @@ func (b *Builder) Runner(ctx context.Context, name string, sig Signals, now time
 	}, true
 }
 
-// ---------------------------------------------------------------------------
-// Tiles
-// ---------------------------------------------------------------------------
-
 func overviewTiles(t fleet.Totals) []Tile {
 	queued := Tile{Label: "queued", Value: "—", Sub: "listener metrics off", Tone: ToneMuted}
 	if t.QueuedKnown {
@@ -644,10 +629,6 @@ func failTone(n int) Tone {
 	return ToneMuted
 }
 
-// ---------------------------------------------------------------------------
-// Charts
-// ---------------------------------------------------------------------------
-
 func areaChart(s ScopeSeries, r TimeRange) AreaChart {
 	if s.Empty() {
 		return AreaChart{Empty: true, Ticks: r.Ticks(), Legend: stateLegend(s)}
@@ -716,11 +697,9 @@ func memChart(s ScopeSeries, r TimeRange) LineChart {
 		fleet.FormatGiB)
 }
 
-// resourceChart draws observed usage against the requested level.
-//
-// Both series share one maximum. That is the whole point of the panel: if the
-// request line were scaled independently, a fleet using a tenth of what it
-// reserves would look fully utilised.
+// resourceChart draws observed usage against the requested level. Both series
+// share one maximum: if the request line were scaled independently, a fleet using
+// a tenth of what it reserves would look fully utilised.
 func resourceChart(title string, used, request []float64, r TimeRange, stroke, fill string, tone Tone, format func(float64) string) LineChart {
 	if len(used) == 0 && len(request) == 0 {
 		return LineChart{Title: title, Empty: true, Ticks: r.Ticks()}
@@ -743,11 +722,10 @@ func resourceChart(title string, used, request []float64, r TimeRange, stroke, f
 	// what it reserved, and that is the only thing left on the panel to read.
 	if anyPositive(request) {
 		c.Refs = append(c.Refs, RefLine{
-			// The whole series rather than its newest value flattened across
-			// the window. Requests move — sets get rescaled and the runner
-			// count they are multiplied by changes every scrape — so a flat
-			// line backdates today's reservation over an hour that never saw
-			// it, and the usage it is being compared against is real.
+			// The whole series rather than its newest value flattened across the window.
+			// Requests move — sets get rescaled and the runner count they are multiplied by
+			// changes every scrape — so a flat line backdates today's reservation over an hour
+			// that never saw it.
 			Points: chart.Plot(request, chartW, lineH, peak, "", strokeMuted).Points,
 			Stroke: strokeMuted,
 			Label:  "requested " + format(lastOf(request)),
@@ -828,8 +806,7 @@ func runnerLine(title string, at []time.Time, vals []float64, request, limit flo
 // anyPositive reports whether a series ever rose above zero in the window.
 //
 // PeakOf cannot answer this: it floors its result at 1 so callers can divide by
-// it, which makes an all-zero series indistinguishable from one that peaked at
-// one.
+// it, which makes an all-zero series indistinguishable from one that peaked at one.
 func anyPositive(v []float64) bool {
 	for _, x := range v {
 		if x > 0 {
@@ -845,10 +822,6 @@ func lastOf(v []float64) float64 {
 	}
 	return v[len(v)-1]
 }
-
-// ---------------------------------------------------------------------------
-// Tables and panels
-// ---------------------------------------------------------------------------
 
 func setRows(groups []fleet.SetTotals) []SetRow {
 	out := make([]SetRow, 0, len(groups))
@@ -981,10 +954,6 @@ func setJobs(s fleet.Snapshot, current fleet.Runner, now time.Time) []JobRow {
 	return out
 }
 
-// ---------------------------------------------------------------------------
-// Health strip
-// ---------------------------------------------------------------------------
-
 func sourceRows(s fleet.Snapshot, interval time.Duration) []SourceRow {
 	strip := []struct{ name, label string }{
 		{fleet.SourceKubernetes, "kubernetes"},
@@ -1040,24 +1009,24 @@ func listenerTone(s fleet.Snapshot) Tone {
 // and an unbounded list would push them off the page.
 const failureLaneRows = 6
 
-// mergeFailures combines the persisted page with any live failure the store has
-// not caught up with.
+// mergeFailures combines the persisted page with any live failure the store has not
+// caught up with.
 //
-// Both sources are needed. The store is authoritative for the window — it is
-// the only one that remembers runners ARC has deleted — but the recorder writes
-// from the same snapshot the page renders from, so a failure can be on screen a
-// tick before it is in the database, and a store that has stopped accepting
-// writes is exactly when the lane matters most.
+// Both sources are needed. The store is authoritative for the window — it is the
+// only one that remembers runners ARC has deleted — but the recorder writes from
+// the same snapshot the page renders from, so a failure can be on screen a tick
+// before it is in the database, and a store that has stopped accepting writes is
+// exactly when the lane matters most.
 //
 // A live failure absent from the page is treated as unpersisted and counted into
-// the total. It cannot have been pushed off the page by newer rows: live
-// failures are the newest thing there is, and the page is ordered newest first.
+// the total: it cannot have been pushed off by newer rows, because live failures
+// are the newest thing there is.
 func mergeFailures(stored FailureWindow, live []fleet.Failure, limit int, window string) FailureLane {
 	seen := make(map[fleet.Failure]struct{}, len(stored.Failures))
 	key := func(f fleet.Failure) fleet.Failure {
-		// The stored row carries the first observation's timestamp and the live
-		// one carries the current reading, so the timestamp cannot be part of
-		// the identity. Runner and reason are what the store is keyed on too.
+		// The stored row carries the first observation's timestamp and the live one
+		// carries the current reading, so the timestamp cannot be part of the identity.
+		// Runner and reason are what the store is keyed on too.
 		return fleet.Failure{Runner: f.Runner, Reason: f.Reason}
 	}
 
