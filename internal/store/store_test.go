@@ -26,6 +26,8 @@ var defaultRetention = Retention{
 	Scope1m:   7 * 24 * time.Hour,
 	Scope5m:   30 * 24 * time.Hour,
 	Scope1h:   400 * 24 * time.Hour,
+
+	JobSamples: 30 * 24 * time.Hour,
 }
 
 // base is a fixed instant so bucket boundaries in the assertions are stable.
@@ -1054,7 +1056,7 @@ func TestStatsCountsRows(t *testing.T) {
 	assert.NotZero(t, st.Failures, "no failures counted")
 	// Every table the store writes to has to be in the footer's total, or the
 	// panel understates a database it is there to report the size of.
-	assert.Equal(t, st.Samples+st.Jobs+st.Phases+st.ChurnEvents+st.Failures, st.Rows,
+	assert.Equal(t, st.Samples+st.Jobs+st.JobSamples+st.Phases+st.ChurnEvents+st.Failures, st.Rows,
 		"Rows should be the sum of the per-table counts")
 	assert.False(t, st.Oldest.IsZero(), "Oldest should be set once samples exist")
 	assert.NotEmpty(t, st.Path, "Path should be reported")
@@ -1234,4 +1236,465 @@ func TestRetentionExpiresFailures(t *testing.T) {
 
 	require.Len(t, got, 1, "want only the failure inside the window")
 	assert.Equal(t, "runner-fresh", got[0].Runner, "the wrong row survived")
+}
+
+// ---------------------------------------------------------------------------
+// Per-job resource samples
+// ---------------------------------------------------------------------------
+
+// jobSampleRows reads the raw table, because the point of most of these tests
+// is how many rows exist and what is in them, not what a query projects.
+func jobSampleRows(t *testing.T, s *Store, jobID int) []JobPoint {
+	t.Helper()
+	rows, err := s.db.QueryContext(t.Context(),
+		`SELECT ts, cpu_cores, mem_bytes FROM job_samples WHERE job_id = ? ORDER BY ts`, jobID)
+	require.NoError(t, err, "read job_samples")
+	defer func() { assert.NoError(t, rows.Close(), "close rows") }()
+
+	var out []JobPoint
+	for rows.Next() {
+		var (
+			ts       int64
+			cpu, mem float64
+		)
+		require.NoError(t, rows.Scan(&ts, &cpu, &mem), "scan job_sample")
+		out = append(out, JobPoint{At: time.Unix(ts, 0).UTC(), CPU: cpu, Mem: mem})
+	}
+	require.NoError(t, rows.Err(), "job_sample rows")
+	return out
+}
+
+// onlyJob returns the single job observation in the store, failing when there
+// is not exactly one.
+func onlyJob(t *testing.T, s *Store) JobRecord {
+	t.Helper()
+	jobs, _, err := s.Jobs(t.Context(), JobFilter{}, Range{From: base.Add(-time.Hour), To: base.Add(time.Hour)})
+	require.NoError(t, err, "Jobs")
+	require.Len(t, jobs, 1, "expected exactly one job observation")
+	return jobs[0]
+}
+
+func TestJobSamplesRecordUsagePerBucket(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	// Three scrapes inside one minute, then one in the next. The first four
+	// readings must collapse to two rows, because the bucket is the unit of
+	// storage and the scrape is not.
+	for i, at := range []time.Time{
+		base, base.Add(15 * time.Second), base.Add(30 * time.Second), base.Add(time.Minute),
+	} {
+		require.NoError(t, s.RecordSnapshot(ctx, snapshot(at, busyRunner("runner-a", at, float64(i+1)))),
+			"RecordSnapshot %d", i)
+	}
+
+	job := onlyJob(t, s)
+	rows := jobSampleRows(t, s, job.ID)
+	require.Len(t, rows, 2, "three scrapes in one minute and one in the next should be two buckets")
+
+	assert.Equal(t, base.Unix(), rows[0].At.Unix(), "first bucket starts on the minute")
+	// 1, 2 and 3 cores averaged.
+	assert.InDelta(t, 2.0, rows[0].CPU, 1e-9, "readings in one bucket should be averaged")
+	assert.InDelta(t, 4.0, rows[1].CPU, 1e-9, "the second bucket holds its own reading")
+	assert.InDelta(t, float64(fleet.GiB), rows[0].Mem, 1e-3, "memory is averaged alongside CPU")
+}
+
+func TestJobSamplesAreNotWrittenWithoutMetrics(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+
+	// A runner holding a job that metrics-server has never answered for. A zero
+	// row here would be drawn as a job that used no CPU, which is the one thing
+	// the chart must not claim.
+	r := busyRunner("runner-a", base, 0)
+	r.CPU = fleet.Resources{Request: 2}
+	r.Mem = fleet.Resources{Request: 4 * fleet.GiB}
+
+	require.NoError(t, s.RecordSnapshot(t.Context(), snapshot(base, r)), "RecordSnapshot")
+
+	job := onlyJob(t, s)
+	assert.Empty(t, jobSampleRows(t, s, job.ID), "an unscraped runner should contribute no samples")
+}
+
+func TestJobSamplesSurviveAReplayedSnapshot(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+	snap := snapshot(base, busyRunner("runner-a", base, 2))
+
+	require.NoError(t, s.RecordSnapshot(ctx, snap), "first record")
+	require.NoError(t, s.RecordSnapshot(ctx, snap), "replayed record")
+
+	job := onlyJob(t, s)
+	rows := jobSampleRows(t, s, job.ID)
+	require.Len(t, rows, 1, "replaying one snapshot must not add a bucket")
+	// The same reading folded into its own mean is still that reading, which is
+	// what makes a restart that re-observes the fleet harmless here.
+	assert.InDelta(t, 2.0, rows[0].CPU, 1e-9, "a replayed reading should not move the average")
+}
+
+func TestJobSeriesBucketsToTheRequestedPoints(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	for i := range 10 {
+		at := base.Add(time.Duration(i) * time.Minute)
+		require.NoError(t, s.RecordSnapshot(ctx, snapshot(at, busyRunner("runner-a", at, 1))),
+			"RecordSnapshot %d", i)
+	}
+
+	job := onlyJob(t, s)
+
+	full, err := s.JobSeries(ctx, job.ID, Range{From: base, To: base.Add(10 * time.Minute), Points: 60})
+	require.NoError(t, err, "JobSeries")
+	assert.Len(t, full, 10, "a bucket finer than the storage resolution returns the stored rows")
+
+	coarse, err := s.JobSeries(ctx, job.ID, Range{From: base, To: base.Add(10 * time.Minute), Points: 2})
+	require.NoError(t, err, "JobSeries coarse")
+	assert.Len(t, coarse, 2, "a coarse request should group the stored rows")
+}
+
+func TestJobSeriesOfAnUnknownJobIsEmptyNotAnError(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	points, err := s.JobSeries(t.Context(), 12345, Range{From: base, To: base.Add(time.Hour), Points: 10})
+	require.NoError(t, err, "JobSeries")
+	assert.Empty(t, points, "an unknown job has no samples")
+}
+
+func TestJobSamplesExpireWithTheirJob(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	// A job that ran, and finished, well outside every retention window.
+	old := base.Add(-60 * 24 * time.Hour)
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(old, busyRunner("runner-a", old, 1))), "record old")
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(old.Add(time.Minute))), "runner departs")
+
+	var before int64
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_samples`).Scan(&before))
+	require.NotZero(t, before, "the old job should have left samples to sweep")
+
+	require.NoError(t, s.Compact(ctx, base, defaultRetention), "Compact")
+
+	var jobs, samples int64
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_observations`).Scan(&jobs))
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_samples`).Scan(&samples))
+	assert.Zero(t, jobs, "the expired job should be gone")
+	assert.Zero(t, samples, "its samples must not outlive it — an orphan here is immortal")
+}
+
+func TestJobSamplesHonourTheirOwnRetention(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	// A job still well inside the job window, whose samples are outside the
+	// shorter sample window. This is the knob an operator turns to keep a
+	// month of job rows and a day of the series behind them.
+	at := base.Add(-48 * time.Hour)
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(at, busyRunner("runner-a", at, 1))), "record")
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(at.Add(time.Minute))), "runner departs")
+
+	ret := defaultRetention
+	ret.JobSamples = 24 * time.Hour
+	require.NoError(t, s.Compact(ctx, base, ret), "Compact")
+
+	var jobs, samples int64
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_observations`).Scan(&jobs))
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_samples`).Scan(&samples))
+	assert.NotZero(t, jobs, "the job itself is still inside its own window")
+	assert.Zero(t, samples, "its samples are outside the sample window and should be swept")
+}
+
+// ---------------------------------------------------------------------------
+// Job and workflow listings
+// ---------------------------------------------------------------------------
+
+// jobAt records one finished job, so the listing tests can build a window out
+// of several without driving the whole snapshot diff for each.
+func jobAt(t *testing.T, s *Store, repo, workflow, name string, runID int64, start time.Time, ok bool) {
+	t.Helper()
+	finished := start.Add(time.Minute).Unix()
+	succeeded := 0
+	if ok {
+		succeeded = 1
+	}
+	_, err := s.db.ExecContext(t.Context(),
+		`INSERT INTO job_observations
+		   (runner_name, set_name, repository, workflow, job_name, run_id,
+		    started_at, finished_at, succeeded, cpu_seconds, mem_byte_seconds)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		name+"-runner", "linux-x64", repo, workflow, name, runID,
+		start.Unix(), finished, succeeded, 60.0, 60.0*fleet.GiB)
+	require.NoError(t, err, "insert job observation")
+}
+
+// listRange is a window wide enough to hold everything the listing tests write.
+func listRange() Range {
+	return Range{From: base.Add(-2 * time.Hour), To: base.Add(2 * time.Hour), Points: 60}
+}
+
+func seedListings(t *testing.T, s *Store) {
+	t.Helper()
+	jobAt(t, s, "acme/api", "ci.yml", "build", 100, base.Add(-30*time.Minute), true)
+	jobAt(t, s, "acme/api", "ci.yml", "test", 100, base.Add(-29*time.Minute), false)
+	jobAt(t, s, "acme/web", "release.yml", "publish", 200, base.Add(-20*time.Minute), true)
+	jobAt(t, s, "acme/web", "nightly.yml", "e2e_suite", 0, base.Add(-10*time.Minute), true)
+}
+
+func TestJobsFilters(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	seedListings(t, s)
+
+	for _, tc := range []struct {
+		name   string
+		filter JobFilter
+		want   []string
+	}{
+		{"unfiltered", JobFilter{}, []string{"e2e_suite", "publish", "test", "build"}},
+		{"by repository", JobFilter{Repository: "acme/api"}, []string{"test", "build"}},
+		{"by workflow", JobFilter{Workflow: "release.yml"}, []string{"publish"}},
+		{"by run", JobFilter{RunID: 200}, []string{"publish"}},
+		{"failed only", JobFilter{Outcome: OutcomeFailed}, []string{"test"}},
+		{"running only", JobFilter{Outcome: OutcomeRunning}, nil},
+		{"search matches the job name", JobFilter{Search: "BUIL"}, []string{"build"}},
+		{"search matches the workflow", JobFilter{Search: "nightly"}, []string{"e2e_suite"}},
+		{"search matches the repository", JobFilter{Search: "acme/web"}, []string{"e2e_suite", "publish"}},
+		{"search misses", JobFilter{Search: "nothing-matches-this"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rows, total, err := s.Jobs(t.Context(), tc.filter, listRange())
+			require.NoError(t, err, "Jobs")
+
+			got := make([]string, 0, len(rows))
+			for _, r := range rows {
+				got = append(got, r.Job)
+			}
+			assert.Equal(t, tc.want, nilIfEmpty(got), "jobs, newest first")
+			assert.Equal(t, int64(len(tc.want)), total, "the total should count the filtered window")
+		})
+	}
+}
+
+// A search box is free text, and LIKE's own wildcards are characters people
+// type. Without escaping, "100%" matches every job and "job_1" matches "job-1".
+func TestJobSearchTreatsWildcardsAsLiterals(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	jobAt(t, s, "acme/api", "ci.yml", "coverage 100% gate", 1, base.Add(-5*time.Minute), true)
+	jobAt(t, s, "acme/api", "ci.yml", "build_release", 2, base.Add(-4*time.Minute), true)
+	jobAt(t, s, "acme/api", "ci.yml", "build-release", 3, base.Add(-3*time.Minute), true)
+
+	for _, tc := range []struct {
+		name   string
+		search string
+		want   []string
+	}{
+		{"percent is a literal", "100%", []string{"coverage 100% gate"}},
+		{"underscore is a literal", "build_release", []string{"build_release"}},
+		{"backslash is a literal", `\`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rows, _, err := s.Jobs(t.Context(), JobFilter{Search: tc.search}, listRange())
+			require.NoError(t, err, "Jobs")
+
+			got := make([]string, 0, len(rows))
+			for _, r := range rows {
+				got = append(got, r.Job)
+			}
+			assert.Equal(t, tc.want, nilIfEmpty(got), "a wildcard typed into the box is a character")
+		})
+	}
+}
+
+func TestJobsCapsThePageButNotTheTotal(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	for i := range 12 {
+		jobAt(t, s, "acme/api", "ci.yml", fmt.Sprintf("job-%02d", i), int64(i),
+			base.Add(-time.Duration(i)*time.Minute), true)
+	}
+
+	rows, total, err := s.Jobs(t.Context(), JobFilter{Limit: 5}, listRange())
+	require.NoError(t, err, "Jobs")
+	assert.Len(t, rows, 5, "the page should honour the limit")
+	assert.Equal(t, int64(12), total, "the total counts the window, not the page")
+}
+
+func TestWorkflowRunsAggregateTheirJobs(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	seedListings(t, s)
+
+	runs, total, err := s.WorkflowRuns(t.Context(), JobFilter{}, listRange())
+	require.NoError(t, err, "WorkflowRuns")
+	require.Len(t, runs, 3, "four jobs across three runs")
+	assert.Equal(t, int64(3), total, "total counts runs, not jobs")
+
+	byWorkflow := map[string]WorkflowRun{}
+	for _, r := range runs {
+		byWorkflow[r.Workflow] = r
+	}
+
+	ci := byWorkflow["ci.yml"]
+	assert.Equal(t, 2, ci.Jobs, "the ci run holds both of its jobs")
+	assert.Equal(t, 1, ci.Failed, "one of them failed")
+	assert.Zero(t, ci.Running, "both have finished")
+	assert.False(t, ci.FinishedAt.IsZero(), "a run with nothing outstanding has an end")
+	assert.InDelta(t, 120.0, ci.CPUSeconds, 1e-9, "cost sums across the run's jobs")
+
+	// ARC reports no run id for some jobs. They must still be reachable rather
+	// than silently dropped from the tab that is meant to list everything.
+	nightly := byWorkflow["nightly.yml"]
+	assert.Equal(t, int64(0), nightly.RunID, "a job with no run id keeps its own row")
+	assert.Equal(t, 1, nightly.Jobs, "and its job is counted")
+}
+
+func TestWorkflowRunIsUnfinishedWhileAnyJobRuns(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	jobAt(t, s, "acme/api", "ci.yml", "build", 100, base.Add(-30*time.Minute), true)
+
+	// A second job of the same run that has not finished. MAX(finished_at)
+	// over the pair is the first job's completion, which is emphatically not
+	// when the run ended.
+	_, err := s.db.ExecContext(t.Context(),
+		`INSERT INTO job_observations
+		   (runner_name, set_name, repository, workflow, job_name, run_id,
+		    started_at, finished_at, succeeded, cpu_seconds, mem_byte_seconds)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		"r2", "linux-x64", "acme/api", "ci.yml", "test", 100,
+		base.Add(-29*time.Minute).Unix(), 0, 0, 0.0, 0.0)
+	require.NoError(t, err, "insert unfinished job")
+
+	runs, _, err := s.WorkflowRuns(t.Context(), JobFilter{}, listRange())
+	require.NoError(t, err, "WorkflowRuns")
+	require.Len(t, runs, 1, "one run")
+	assert.Equal(t, 1, runs[0].Running, "the unfinished job should be counted")
+	assert.True(t, runs[0].FinishedAt.IsZero(),
+		"a run with a job still going has not finished, whatever MAX(finished_at) says")
+}
+
+func TestJobFacetsOfferOnlyWhatTheWindowHolds(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	seedListings(t, s)
+	// Well outside the window the facets are asked for.
+	jobAt(t, s, "acme/ancient", "old.yml", "gone", 1, base.Add(-30*24*time.Hour), true)
+
+	facets, err := s.JobFacets(t.Context(), listRange())
+	require.NoError(t, err, "JobFacets")
+	assert.Equal(t, []string{"acme/api", "acme/web"}, facets.Repositories,
+		"a dropdown must not offer a value that would match nothing")
+	assert.Equal(t, []string{"ci.yml", "nightly.yml", "release.yml"}, facets.Workflows)
+	assert.Equal(t, []string{"linux-x64"}, facets.Sets)
+}
+
+func TestJobByIDReportsMissingRatherThanFailing(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	seedListings(t, s)
+
+	_, ok, err := s.Job(t.Context(), 999999)
+	require.NoError(t, err, "a missing job is not an error")
+	assert.False(t, ok, "and reports itself missing")
+
+	want := onlyJobNamed(t, s, "build")
+	got, ok, err := s.Job(t.Context(), want.ID)
+	require.NoError(t, err, "Job")
+	require.True(t, ok, "the job should be found")
+	assert.Equal(t, "build", got.Job)
+	assert.Equal(t, "acme/api", got.Repository)
+}
+
+// onlyJobNamed finds one seeded job by name.
+func onlyJobNamed(t *testing.T, s *Store, name string) JobRecord {
+	t.Helper()
+	rows, _, err := s.Jobs(t.Context(), JobFilter{Search: name}, listRange())
+	require.NoError(t, err, "Jobs")
+	for _, r := range rows {
+		if r.Job == name {
+			return r
+		}
+	}
+	t.Fatalf("no job named %q", name)
+	return JobRecord{}
+}
+
+// nilIfEmpty normalises an empty slice to nil so the table tests can express
+// "no rows" as nil without every case needing its own empty literal.
+func nilIfEmpty(v []string) []string {
+	if len(v) == 0 {
+		return nil
+	}
+	return v
+}
+
+// The sample window can legitimately be set LONGER than the job window, and
+// that is the only configuration in which the orphan sweep does any work: the
+// ts sweep leaves these rows alone, the job they describe is deleted, and
+// nothing in the retention list would ever match them again.
+func TestJobSamplesAreNotOrphanedByALongerSampleWindow(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	at := base.Add(-40 * 24 * time.Hour)
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(at, busyRunner("runner-a", at, 1))), "record")
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(at.Add(time.Minute))), "runner departs")
+
+	ret := defaultRetention
+	ret.Scope5m = 30 * 24 * time.Hour    // the job expires
+	ret.JobSamples = 90 * 24 * time.Hour // its samples would not
+	require.NoError(t, s.Compact(ctx, base, ret), "Compact")
+
+	var jobs, samples int64
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_observations`).Scan(&jobs))
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_samples`).Scan(&samples))
+	assert.Zero(t, jobs, "the job is outside its own window")
+	assert.Zero(t, samples, "and its samples must go with it rather than becoming unreachable")
+}
+
+// A job still inside its window keeps its samples even when they are older
+// than the job's own retention boundary would suggest, because the sweeps are
+// ordered and selected on the job's completion rather than the sample's age.
+func TestSamplesOfALiveJobSurviveTheJobSweep(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	at := base.Add(-time.Hour)
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(at, busyRunner("runner-a", at, 1))), "record")
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(at.Add(time.Minute))), "runner departs")
+
+	require.NoError(t, s.Compact(ctx, base, defaultRetention), "Compact")
+
+	var jobs, samples int64
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_observations`).Scan(&jobs))
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_samples`).Scan(&samples))
+	assert.NotZero(t, jobs, "an hour-old job is well inside every window")
+	assert.NotZero(t, samples, "so its chart must still be drawable")
 }

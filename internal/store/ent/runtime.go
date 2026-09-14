@@ -5,6 +5,7 @@ package ent
 import (
 	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
+	"arc-ui/internal/store/ent/jobsample"
 	"arc-ui/internal/store/ent/phasetransition"
 	"arc-ui/internal/store/ent/runnerfailure"
 	"arc-ui/internal/store/ent/sample"
@@ -59,6 +60,20 @@ func init() {
 	jobobservationDescMemByteSeconds := jobobservationFields[10].Descriptor()
 	// jobobservation.DefaultMemByteSeconds holds the default value on creation for the mem_byte_seconds field.
 	jobobservation.DefaultMemByteSeconds = jobobservationDescMemByteSeconds.Default.(float64)
+	jobsampleFields := schema.JobSample{}.Fields()
+	_ = jobsampleFields
+	// jobsampleDescCPUCores is the schema descriptor for cpu_cores field.
+	jobsampleDescCPUCores := jobsampleFields[2].Descriptor()
+	// jobsample.DefaultCPUCores holds the default value on creation for the cpu_cores field.
+	jobsample.DefaultCPUCores = jobsampleDescCPUCores.Default.(float64)
+	// jobsampleDescMemBytes is the schema descriptor for mem_bytes field.
+	jobsampleDescMemBytes := jobsampleFields[3].Descriptor()
+	// jobsample.DefaultMemBytes holds the default value on creation for the mem_bytes field.
+	jobsample.DefaultMemBytes = jobsampleDescMemBytes.Default.(float64)
+	// jobsampleDescSamples is the schema descriptor for samples field.
+	jobsampleDescSamples := jobsampleFields[4].Descriptor()
+	// jobsample.DefaultSamples holds the default value on creation for the samples field.
+	jobsample.DefaultSamples = jobsampleDescSamples.Default.(int)
 	phasetransitionFields := schema.PhaseTransition{}.Fields()
 	_ = phasetransitionFields
 	// phasetransitionDescSetName is the schema descriptor for set_name field.

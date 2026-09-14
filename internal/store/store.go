@@ -164,6 +164,10 @@ type RepoTotal struct {
 
 // JobRecord is one observed workflow job.
 type JobRecord struct {
+	// ID is the row id, and the handle the job detail view is addressed by. It
+	// is stable for the life of the database and no longer: it is a surrogate,
+	// not an identifier GitHub would recognise.
+	ID         int
 	Runner     string
 	Set        string
 	Repository string
@@ -175,10 +179,79 @@ type JobRecord struct {
 	FinishedAt time.Time
 	Succeeded  bool
 	CPUSeconds float64
+	// MemByteSeconds carries the same caveats as RepoTotal's: both are lower
+	// bounds on a short job and are billed forwards across a handover.
+	MemByteSeconds float64
 }
 
 // Running reports whether the job had not finished when it was last observed.
 func (j JobRecord) Running() bool { return j.FinishedAt.IsZero() }
+
+// Outcome is how a job or workflow run ended, as the tables filter on it.
+type Outcome string
+
+// The outcomes a job list can be narrowed to. OutcomeAny is the zero value so
+// an unset filter matches everything.
+const (
+	OutcomeAny     Outcome = ""
+	OutcomeOK      Outcome = "ok"
+	OutcomeFailed  Outcome = "failed"
+	OutcomeRunning Outcome = "running"
+)
+
+// JobFilter narrows a job or workflow-run listing.
+//
+// Every field is optional and the zero value matches everything, so the
+// unfiltered tab needs no special case. Search is matched as a case-insensitive
+// substring, not a subsequence: it is the box above the table, not a fuzzy
+// finder, and it says so in the placeholder.
+type JobFilter struct {
+	Repository string
+	Workflow   string
+	Set        string
+	// RunID narrows to one workflow run. Zero means any, which is also the
+	// value ARC reports when it knows of no run, so those jobs are reachable
+	// only through the unfiltered list.
+	RunID   int64
+	Outcome Outcome
+	Search  string
+	// Limit caps the rows returned, never the total counted beside them.
+	Limit int
+}
+
+// WorkflowRun is one workflow run, aggregated from the jobs observed for it.
+type WorkflowRun struct {
+	Repository string
+	Workflow   string
+	RunID      int64
+
+	Jobs    int
+	Running int
+	Failed  int
+
+	StartedAt time.Time
+	// FinishedAt is zero while any of the run's jobs is still going.
+	FinishedAt time.Time
+
+	CPUSeconds     float64
+	MemByteSeconds float64
+}
+
+// JobPoint is one bucket of a job's resource usage.
+type JobPoint struct {
+	At  time.Time
+	CPU float64 // cores
+	Mem float64 // bytes
+}
+
+// JobFacets are the distinct values a window actually contains, which is what
+// the filter dropdowns above the two tabs are built from. A dimension never
+// offers a value that would match nothing.
+type JobFacets struct {
+	Repositories []string
+	Workflows    []string
+	Sets         []string
+}
 
 // Phase is one contiguous stretch a runner spent in one fleet.State.
 type Phase struct {
@@ -209,6 +282,11 @@ func (p Phase) Duration() time.Duration {
 // ones that grow without bound.
 type Retention struct {
 	RunnerRaw, ScopeRaw, Scope1m, Scope5m, Scope1h time.Duration
+
+	// JobSamples is the window for per-job resource usage. It is not a tier:
+	// job samples are written at one resolution and never rolled up, so this
+	// is the only thing standing between them and unbounded growth.
+	JobSamples time.Duration
 }
 
 // Stats reports what the store is costing, for the health strip.
@@ -218,6 +296,7 @@ type Stats struct {
 
 	Samples     int64
 	Jobs        int64
+	JobSamples  int64
 	Phases      int64
 	ChurnEvents int64
 	Failures    int64
@@ -247,6 +326,10 @@ type Store struct {
 	client *ent.Client
 	log    zerolog.Logger
 
+	// jobSampleBucket is the width, in seconds, of a per-job usage bucket.
+	// Zero means the default; see Option.
+	jobSampleBucket int64
+
 	// mu guards the diff state below. RecordSnapshot is the only writer and is
 	// expected to be called from a single sampler goroutine, but the lock
 	// costs nothing and makes an accidental second caller safe rather than
@@ -272,6 +355,33 @@ type runnerState struct {
 	phaseAt time.Time
 }
 
+// Option configures a Store at open time.
+type Option func(*Store)
+
+// WithJobSampleResolution sets the bucket width per-job usage is averaged
+// into. Anything below a second is ignored, leaving the default, because the
+// width is divided by to floor a timestamp.
+func WithJobSampleResolution(d time.Duration) Option {
+	return func(s *Store) {
+		if d >= time.Second {
+			s.jobSampleBucket = int64(d.Seconds())
+		}
+	}
+}
+
+// defaultJobSampleBucket is the width used when none is configured. It matches
+// config's own default so a Store opened without options behaves like the one
+// the binary opens.
+const defaultJobSampleBucket = 60
+
+// jobBucket is the configured width, or the default.
+func (s *Store) jobBucket() int64 {
+	if s.jobSampleBucket <= 0 {
+		return defaultJobSampleBucket
+	}
+	return s.jobSampleBucket
+}
+
 // Open opens (creating it if necessary) the SQLite database at path and
 // applies the schema.
 //
@@ -279,7 +389,7 @@ type runnerState struct {
 // anyway, and a pool of readers competing with the sampler's writes just turns
 // lock contention into SQLITE_BUSY errors that the busy_timeout then has to
 // absorb.
-func Open(ctx context.Context, path string, log zerolog.Logger) (*Store, error) {
+func Open(ctx context.Context, path string, log zerolog.Logger, opts ...Option) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("open store: path is empty")
 	}
@@ -325,13 +435,17 @@ func Open(ctx context.Context, path string, log zerolog.Logger) (*Store, error) 
 
 	log.Info().Str("path", path).Msg("history store open")
 
-	return &Store{
+	s := &Store{
 		path:   path,
 		db:     db,
 		client: client,
 		log:    log.With().Str("component", "store").Logger(),
 		prev:   map[string]*runnerState{},
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s, nil
 }
 
 // migrateMu serialises schema creation across every Store in the process.
@@ -396,6 +510,7 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 	}{
 		{"samples", &st.Samples},
 		{"job_observations", &st.Jobs},
+		{"job_samples", &st.JobSamples},
 		{"phase_transitions", &st.Phases},
 		{"churn_events", &st.ChurnEvents},
 		{"runner_failures", &st.Failures},

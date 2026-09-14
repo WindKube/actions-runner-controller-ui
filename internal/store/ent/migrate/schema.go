@@ -82,6 +82,28 @@ var (
 			},
 		},
 	}
+	// JobSamplesColumns holds the columns for the "job_samples" table.
+	JobSamplesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "job_id", Type: field.TypeInt},
+		{Name: "ts", Type: field.TypeInt64},
+		{Name: "cpu_cores", Type: field.TypeFloat64, Default: 0},
+		{Name: "mem_bytes", Type: field.TypeFloat64, Default: 0},
+		{Name: "samples", Type: field.TypeInt, Default: 0},
+	}
+	// JobSamplesTable holds the schema information for the "job_samples" table.
+	JobSamplesTable = &schema.Table{
+		Name:       "job_samples",
+		Columns:    JobSamplesColumns,
+		PrimaryKey: []*schema.Column{JobSamplesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "jobsample_job_id_ts",
+				Unique:  true,
+				Columns: []*schema.Column{JobSamplesColumns[1], JobSamplesColumns[2]},
+			},
+		},
+	}
 	// PhaseTransitionsColumns holds the columns for the "phase_transitions" table.
 	PhaseTransitionsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -178,6 +200,7 @@ var (
 	Tables = []*schema.Table{
 		ChurnEventsTable,
 		JobObservationsTable,
+		JobSamplesTable,
 		PhaseTransitionsTable,
 		RunnerFailuresTable,
 		SamplesTable,

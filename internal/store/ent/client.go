@@ -13,6 +13,7 @@ import (
 
 	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
+	"arc-ui/internal/store/ent/jobsample"
 	"arc-ui/internal/store/ent/phasetransition"
 	"arc-ui/internal/store/ent/runnerfailure"
 	"arc-ui/internal/store/ent/sample"
@@ -31,6 +32,8 @@ type Client struct {
 	ChurnEvent *ChurnEventClient
 	// JobObservation is the client for interacting with the JobObservation builders.
 	JobObservation *JobObservationClient
+	// JobSample is the client for interacting with the JobSample builders.
+	JobSample *JobSampleClient
 	// PhaseTransition is the client for interacting with the PhaseTransition builders.
 	PhaseTransition *PhaseTransitionClient
 	// RunnerFailure is the client for interacting with the RunnerFailure builders.
@@ -50,6 +53,7 @@ func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.ChurnEvent = NewChurnEventClient(c.config)
 	c.JobObservation = NewJobObservationClient(c.config)
+	c.JobSample = NewJobSampleClient(c.config)
 	c.PhaseTransition = NewPhaseTransitionClient(c.config)
 	c.RunnerFailure = NewRunnerFailureClient(c.config)
 	c.Sample = NewSampleClient(c.config)
@@ -147,6 +151,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		config:          cfg,
 		ChurnEvent:      NewChurnEventClient(cfg),
 		JobObservation:  NewJobObservationClient(cfg),
+		JobSample:       NewJobSampleClient(cfg),
 		PhaseTransition: NewPhaseTransitionClient(cfg),
 		RunnerFailure:   NewRunnerFailureClient(cfg),
 		Sample:          NewSampleClient(cfg),
@@ -171,6 +176,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		config:          cfg,
 		ChurnEvent:      NewChurnEventClient(cfg),
 		JobObservation:  NewJobObservationClient(cfg),
+		JobSample:       NewJobSampleClient(cfg),
 		PhaseTransition: NewPhaseTransitionClient(cfg),
 		RunnerFailure:   NewRunnerFailureClient(cfg),
 		Sample:          NewSampleClient(cfg),
@@ -202,21 +208,23 @@ func (c *Client) Close() error {
 // Use adds the mutation hooks to all the entity clients.
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
-	c.ChurnEvent.Use(hooks...)
-	c.JobObservation.Use(hooks...)
-	c.PhaseTransition.Use(hooks...)
-	c.RunnerFailure.Use(hooks...)
-	c.Sample.Use(hooks...)
+	for _, n := range []interface{ Use(...Hook) }{
+		c.ChurnEvent, c.JobObservation, c.JobSample, c.PhaseTransition, c.RunnerFailure,
+		c.Sample,
+	} {
+		n.Use(hooks...)
+	}
 }
 
 // Intercept adds the query interceptors to all the entity clients.
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
-	c.ChurnEvent.Intercept(interceptors...)
-	c.JobObservation.Intercept(interceptors...)
-	c.PhaseTransition.Intercept(interceptors...)
-	c.RunnerFailure.Intercept(interceptors...)
-	c.Sample.Intercept(interceptors...)
+	for _, n := range []interface{ Intercept(...Interceptor) }{
+		c.ChurnEvent, c.JobObservation, c.JobSample, c.PhaseTransition, c.RunnerFailure,
+		c.Sample,
+	} {
+		n.Intercept(interceptors...)
+	}
 }
 
 // Mutate implements the ent.Mutator interface.
@@ -226,6 +234,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.ChurnEvent.mutate(ctx, m)
 	case *JobObservationMutation:
 		return c.JobObservation.mutate(ctx, m)
+	case *JobSampleMutation:
+		return c.JobSample.mutate(ctx, m)
 	case *PhaseTransitionMutation:
 		return c.PhaseTransition.mutate(ctx, m)
 	case *RunnerFailureMutation:
@@ -500,6 +510,139 @@ func (c *JobObservationClient) mutate(ctx context.Context, m *JobObservationMuta
 		return (&JobObservationDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown JobObservation mutation op: %q", m.Op())
+	}
+}
+
+// JobSampleClient is a client for the JobSample schema.
+type JobSampleClient struct {
+	config
+}
+
+// NewJobSampleClient returns a client for the JobSample from the given config.
+func NewJobSampleClient(c config) *JobSampleClient {
+	return &JobSampleClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `jobsample.Hooks(f(g(h())))`.
+func (c *JobSampleClient) Use(hooks ...Hook) {
+	c.hooks.JobSample = append(c.hooks.JobSample, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `jobsample.Intercept(f(g(h())))`.
+func (c *JobSampleClient) Intercept(interceptors ...Interceptor) {
+	c.inters.JobSample = append(c.inters.JobSample, interceptors...)
+}
+
+// Create returns a builder for creating a JobSample entity.
+func (c *JobSampleClient) Create() *JobSampleCreate {
+	mutation := newJobSampleMutation(c.config, OpCreate)
+	return &JobSampleCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of JobSample entities.
+func (c *JobSampleClient) CreateBulk(builders ...*JobSampleCreate) *JobSampleCreateBulk {
+	return &JobSampleCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *JobSampleClient) MapCreateBulk(slice any, setFunc func(*JobSampleCreate, int)) *JobSampleCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &JobSampleCreateBulk{err: fmt.Errorf("calling to JobSampleClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*JobSampleCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &JobSampleCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for JobSample.
+func (c *JobSampleClient) Update() *JobSampleUpdate {
+	mutation := newJobSampleMutation(c.config, OpUpdate)
+	return &JobSampleUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *JobSampleClient) UpdateOne(_m *JobSample) *JobSampleUpdateOne {
+	mutation := newJobSampleMutation(c.config, OpUpdateOne, withJobSample(_m))
+	return &JobSampleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *JobSampleClient) UpdateOneID(id int) *JobSampleUpdateOne {
+	mutation := newJobSampleMutation(c.config, OpUpdateOne, withJobSampleID(id))
+	return &JobSampleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for JobSample.
+func (c *JobSampleClient) Delete() *JobSampleDelete {
+	mutation := newJobSampleMutation(c.config, OpDelete)
+	return &JobSampleDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *JobSampleClient) DeleteOne(_m *JobSample) *JobSampleDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *JobSampleClient) DeleteOneID(id int) *JobSampleDeleteOne {
+	builder := c.Delete().Where(jobsample.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &JobSampleDeleteOne{builder}
+}
+
+// Query returns a query builder for JobSample.
+func (c *JobSampleClient) Query() *JobSampleQuery {
+	return &JobSampleQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeJobSample},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a JobSample entity by its id.
+func (c *JobSampleClient) Get(ctx context.Context, id int) (*JobSample, error) {
+	return c.Query().Where(jobsample.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *JobSampleClient) GetX(ctx context.Context, id int) *JobSample {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *JobSampleClient) Hooks() []Hook {
+	return c.hooks.JobSample
+}
+
+// Interceptors returns the client interceptors.
+func (c *JobSampleClient) Interceptors() []Interceptor {
+	return c.inters.JobSample
+}
+
+func (c *JobSampleClient) mutate(ctx context.Context, m *JobSampleMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&JobSampleCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&JobSampleUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&JobSampleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&JobSampleDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown JobSample mutation op: %q", m.Op())
 	}
 }
 
@@ -905,10 +1048,11 @@ func (c *SampleClient) mutate(ctx context.Context, m *SampleMutation) (Value, er
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		ChurnEvent, JobObservation, PhaseTransition, RunnerFailure, Sample []ent.Hook
+		ChurnEvent, JobObservation, JobSample, PhaseTransition, RunnerFailure,
+		Sample []ent.Hook
 	}
 	inters struct {
-		ChurnEvent, JobObservation, PhaseTransition, RunnerFailure,
+		ChurnEvent, JobObservation, JobSample, PhaseTransition, RunnerFailure,
 		Sample []ent.Interceptor
 	}
 )

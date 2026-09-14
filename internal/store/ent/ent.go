@@ -5,6 +5,7 @@ package ent
 import (
 	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
+	"arc-ui/internal/store/ent/jobsample"
 	"arc-ui/internal/store/ent/phasetransition"
 	"arc-ui/internal/store/ent/runnerfailure"
 	"arc-ui/internal/store/ent/sample"
@@ -79,6 +80,7 @@ func checkColumn(t, c string) error {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
 			churnevent.Table:      churnevent.ValidColumn,
 			jobobservation.Table:  jobobservation.ValidColumn,
+			jobsample.Table:       jobsample.ValidColumn,
 			phasetransition.Table: phasetransition.ValidColumn,
 			runnerfailure.Table:   runnerfailure.ValidColumn,
 			sample.Table:          sample.ValidColumn,

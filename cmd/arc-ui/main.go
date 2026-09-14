@@ -173,7 +173,8 @@ func run(parent context.Context) error {
 
 	// --- history store -----------------------------------------------------
 
-	db, err := store.Open(ctx, cfg.DBPath, log)
+	db, err := store.Open(ctx, cfg.DBPath, log,
+		store.WithJobSampleResolution(cfg.JobSampleResolution))
 	if err != nil {
 		return err
 	}
@@ -545,11 +546,12 @@ func runCompactor(ctx context.Context, db *store.Store, ret store.Retention, log
 
 func retentionFrom(cfg config.Config) store.Retention {
 	return store.Retention{
-		RunnerRaw: cfg.RetentionRunnerRaw,
-		ScopeRaw:  cfg.RetentionScopeRaw,
-		Scope1m:   cfg.RetentionScope1m,
-		Scope5m:   cfg.RetentionScope5m,
-		Scope1h:   cfg.RetentionScope1h,
+		RunnerRaw:  cfg.RetentionRunnerRaw,
+		ScopeRaw:   cfg.RetentionScopeRaw,
+		Scope1m:    cfg.RetentionScope1m,
+		Scope5m:    cfg.RetentionScope5m,
+		Scope1h:    cfg.RetentionScope1h,
+		JobSamples: cfg.RetentionJobSamples,
 	}
 }
 
