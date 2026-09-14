@@ -216,6 +216,15 @@ no depth rather than zero, and the health strip names the listeners that failed.
 A NetworkPolicy in the controller namespace, or a service mesh requiring mTLS, is
 the usual reason for that.
 
+How large a listener's response is does not matter. Most of it is series the
+dashboard never reads — `gha_job_execution_duration_seconds` and
+`gha_job_startup_duration_seconds` carry a bucket per repository, workflow, job
+name and result, and the Go runtime families come along for free — so the
+exposition is filtered as it streams and only the ten gauge and counter families
+behind queue depth are held in memory. What is bounded is that kept subset, not
+the response, which is why a busy listener serving tens of megabytes is scraped
+like any other.
+
 ## Kubernetes
 
 ```bash
