@@ -60,6 +60,22 @@ func init() {
 	jobobservationDescMemByteSeconds := jobobservationFields[10].Descriptor()
 	// jobobservation.DefaultMemByteSeconds holds the default value on creation for the mem_byte_seconds field.
 	jobobservation.DefaultMemByteSeconds = jobobservationDescMemByteSeconds.Default.(float64)
+	// jobobservationDescCPURequest is the schema descriptor for cpu_request field.
+	jobobservationDescCPURequest := jobobservationFields[11].Descriptor()
+	// jobobservation.DefaultCPURequest holds the default value on creation for the cpu_request field.
+	jobobservation.DefaultCPURequest = jobobservationDescCPURequest.Default.(float64)
+	// jobobservationDescCPULimit is the schema descriptor for cpu_limit field.
+	jobobservationDescCPULimit := jobobservationFields[12].Descriptor()
+	// jobobservation.DefaultCPULimit holds the default value on creation for the cpu_limit field.
+	jobobservation.DefaultCPULimit = jobobservationDescCPULimit.Default.(float64)
+	// jobobservationDescMemRequest is the schema descriptor for mem_request field.
+	jobobservationDescMemRequest := jobobservationFields[13].Descriptor()
+	// jobobservation.DefaultMemRequest holds the default value on creation for the mem_request field.
+	jobobservation.DefaultMemRequest = jobobservationDescMemRequest.Default.(float64)
+	// jobobservationDescMemLimit is the schema descriptor for mem_limit field.
+	jobobservationDescMemLimit := jobobservationFields[14].Descriptor()
+	// jobobservation.DefaultMemLimit holds the default value on creation for the mem_limit field.
+	jobobservation.DefaultMemLimit = jobobservationDescMemLimit.Default.(float64)
 	jobsampleFields := schema.JobSample{}.Fields()
 	_ = jobsampleFields
 	// jobsampleDescCPUCores is the schema descriptor for cpu_cores field.

@@ -272,6 +272,7 @@ func TestJobsMapOntoTheViewContract(t *testing.T) {
 			Workflow: "ci.yml", Job: "build", RunID: 91,
 			StartedAt: time.Unix(1000, 0).UTC(), FinishedAt: time.Unix(1600, 0).UTC(),
 			Succeeded: true, CPUSeconds: 600, MemByteSeconds: 4 * gib,
+			CPURequest: 2, CPULimit: 4, MemRequest: 4 * gib, MemLimit: 8 * gib,
 		}},
 	}
 
@@ -286,6 +287,12 @@ func TestJobsMapOntoTheViewContract(t *testing.T) {
 	// Byte-seconds for a real job is a fourteen-digit number, so the views take
 	// GiB-seconds and the conversion has to happen exactly once.
 	assert.InDelta(t, 4.0, got.Jobs[0].MemGiBSecs, 1e-9, "byte-seconds should become GiB-seconds")
+	// The reservations, unlike the totals, stay in the store's own units: they
+	// are plotted against the usage series rather than summarised.
+	assert.InDelta(t, 2.0, got.Jobs[0].CPURequest, 1e-9, "cpu request")
+	assert.InDelta(t, 4.0, got.Jobs[0].CPULimit, 1e-9, "cpu limit")
+	assert.InDelta(t, 4*gib, got.Jobs[0].MemRequest, 1e-3, "memory request should stay in bytes")
+	assert.InDelta(t, 8*gib, got.Jobs[0].MemLimit, 1e-3, "memory limit should stay in bytes")
 	assert.Equal(t, "acme/api", q.gotFilter.Repository, "the filter should reach the store")
 }
 

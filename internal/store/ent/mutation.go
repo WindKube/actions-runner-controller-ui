@@ -582,6 +582,14 @@ type JobObservationMutation struct {
 	addcpu_seconds      *float64
 	mem_byte_seconds    *float64
 	addmem_byte_seconds *float64
+	cpu_request         *float64
+	addcpu_request      *float64
+	cpu_limit           *float64
+	addcpu_limit        *float64
+	mem_request         *float64
+	addmem_request      *float64
+	mem_limit           *float64
+	addmem_limit        *float64
 	clearedFields       map[string]struct{}
 	done                bool
 	oldValue            func(context.Context) (*JobObservation, error)
@@ -1182,6 +1190,230 @@ func (m *JobObservationMutation) ResetMemByteSeconds() {
 	m.addmem_byte_seconds = nil
 }
 
+// SetCPURequest sets the "cpu_request" field.
+func (m *JobObservationMutation) SetCPURequest(f float64) {
+	m.cpu_request = &f
+	m.addcpu_request = nil
+}
+
+// CPURequest returns the value of the "cpu_request" field in the mutation.
+func (m *JobObservationMutation) CPURequest() (r float64, exists bool) {
+	v := m.cpu_request
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCPURequest returns the old "cpu_request" field's value of the JobObservation entity.
+// If the JobObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobObservationMutation) OldCPURequest(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCPURequest is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCPURequest requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCPURequest: %w", err)
+	}
+	return oldValue.CPURequest, nil
+}
+
+// AddCPURequest adds f to the "cpu_request" field.
+func (m *JobObservationMutation) AddCPURequest(f float64) {
+	if m.addcpu_request != nil {
+		*m.addcpu_request += f
+	} else {
+		m.addcpu_request = &f
+	}
+}
+
+// AddedCPURequest returns the value that was added to the "cpu_request" field in this mutation.
+func (m *JobObservationMutation) AddedCPURequest() (r float64, exists bool) {
+	v := m.addcpu_request
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCPURequest resets all changes to the "cpu_request" field.
+func (m *JobObservationMutation) ResetCPURequest() {
+	m.cpu_request = nil
+	m.addcpu_request = nil
+}
+
+// SetCPULimit sets the "cpu_limit" field.
+func (m *JobObservationMutation) SetCPULimit(f float64) {
+	m.cpu_limit = &f
+	m.addcpu_limit = nil
+}
+
+// CPULimit returns the value of the "cpu_limit" field in the mutation.
+func (m *JobObservationMutation) CPULimit() (r float64, exists bool) {
+	v := m.cpu_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCPULimit returns the old "cpu_limit" field's value of the JobObservation entity.
+// If the JobObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobObservationMutation) OldCPULimit(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCPULimit is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCPULimit requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCPULimit: %w", err)
+	}
+	return oldValue.CPULimit, nil
+}
+
+// AddCPULimit adds f to the "cpu_limit" field.
+func (m *JobObservationMutation) AddCPULimit(f float64) {
+	if m.addcpu_limit != nil {
+		*m.addcpu_limit += f
+	} else {
+		m.addcpu_limit = &f
+	}
+}
+
+// AddedCPULimit returns the value that was added to the "cpu_limit" field in this mutation.
+func (m *JobObservationMutation) AddedCPULimit() (r float64, exists bool) {
+	v := m.addcpu_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCPULimit resets all changes to the "cpu_limit" field.
+func (m *JobObservationMutation) ResetCPULimit() {
+	m.cpu_limit = nil
+	m.addcpu_limit = nil
+}
+
+// SetMemRequest sets the "mem_request" field.
+func (m *JobObservationMutation) SetMemRequest(f float64) {
+	m.mem_request = &f
+	m.addmem_request = nil
+}
+
+// MemRequest returns the value of the "mem_request" field in the mutation.
+func (m *JobObservationMutation) MemRequest() (r float64, exists bool) {
+	v := m.mem_request
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMemRequest returns the old "mem_request" field's value of the JobObservation entity.
+// If the JobObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobObservationMutation) OldMemRequest(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMemRequest is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMemRequest requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMemRequest: %w", err)
+	}
+	return oldValue.MemRequest, nil
+}
+
+// AddMemRequest adds f to the "mem_request" field.
+func (m *JobObservationMutation) AddMemRequest(f float64) {
+	if m.addmem_request != nil {
+		*m.addmem_request += f
+	} else {
+		m.addmem_request = &f
+	}
+}
+
+// AddedMemRequest returns the value that was added to the "mem_request" field in this mutation.
+func (m *JobObservationMutation) AddedMemRequest() (r float64, exists bool) {
+	v := m.addmem_request
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMemRequest resets all changes to the "mem_request" field.
+func (m *JobObservationMutation) ResetMemRequest() {
+	m.mem_request = nil
+	m.addmem_request = nil
+}
+
+// SetMemLimit sets the "mem_limit" field.
+func (m *JobObservationMutation) SetMemLimit(f float64) {
+	m.mem_limit = &f
+	m.addmem_limit = nil
+}
+
+// MemLimit returns the value of the "mem_limit" field in the mutation.
+func (m *JobObservationMutation) MemLimit() (r float64, exists bool) {
+	v := m.mem_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMemLimit returns the old "mem_limit" field's value of the JobObservation entity.
+// If the JobObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobObservationMutation) OldMemLimit(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMemLimit is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMemLimit requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMemLimit: %w", err)
+	}
+	return oldValue.MemLimit, nil
+}
+
+// AddMemLimit adds f to the "mem_limit" field.
+func (m *JobObservationMutation) AddMemLimit(f float64) {
+	if m.addmem_limit != nil {
+		*m.addmem_limit += f
+	} else {
+		m.addmem_limit = &f
+	}
+}
+
+// AddedMemLimit returns the value that was added to the "mem_limit" field in this mutation.
+func (m *JobObservationMutation) AddedMemLimit() (r float64, exists bool) {
+	v := m.addmem_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMemLimit resets all changes to the "mem_limit" field.
+func (m *JobObservationMutation) ResetMemLimit() {
+	m.mem_limit = nil
+	m.addmem_limit = nil
+}
+
 // Where appends a list predicates to the JobObservationMutation builder.
 func (m *JobObservationMutation) Where(ps ...predicate.JobObservation) {
 	m.predicates = append(m.predicates, ps...)
@@ -1216,7 +1448,7 @@ func (m *JobObservationMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *JobObservationMutation) Fields() []string {
-	fields := make([]string, 0, 11)
+	fields := make([]string, 0, 15)
 	if m.runner_name != nil {
 		fields = append(fields, jobobservation.FieldRunnerName)
 	}
@@ -1250,6 +1482,18 @@ func (m *JobObservationMutation) Fields() []string {
 	if m.mem_byte_seconds != nil {
 		fields = append(fields, jobobservation.FieldMemByteSeconds)
 	}
+	if m.cpu_request != nil {
+		fields = append(fields, jobobservation.FieldCPURequest)
+	}
+	if m.cpu_limit != nil {
+		fields = append(fields, jobobservation.FieldCPULimit)
+	}
+	if m.mem_request != nil {
+		fields = append(fields, jobobservation.FieldMemRequest)
+	}
+	if m.mem_limit != nil {
+		fields = append(fields, jobobservation.FieldMemLimit)
+	}
 	return fields
 }
 
@@ -1280,6 +1524,14 @@ func (m *JobObservationMutation) Field(name string) (ent.Value, bool) {
 		return m.CPUSeconds()
 	case jobobservation.FieldMemByteSeconds:
 		return m.MemByteSeconds()
+	case jobobservation.FieldCPURequest:
+		return m.CPURequest()
+	case jobobservation.FieldCPULimit:
+		return m.CPULimit()
+	case jobobservation.FieldMemRequest:
+		return m.MemRequest()
+	case jobobservation.FieldMemLimit:
+		return m.MemLimit()
 	}
 	return nil, false
 }
@@ -1311,6 +1563,14 @@ func (m *JobObservationMutation) OldField(ctx context.Context, name string) (ent
 		return m.OldCPUSeconds(ctx)
 	case jobobservation.FieldMemByteSeconds:
 		return m.OldMemByteSeconds(ctx)
+	case jobobservation.FieldCPURequest:
+		return m.OldCPURequest(ctx)
+	case jobobservation.FieldCPULimit:
+		return m.OldCPULimit(ctx)
+	case jobobservation.FieldMemRequest:
+		return m.OldMemRequest(ctx)
+	case jobobservation.FieldMemLimit:
+		return m.OldMemLimit(ctx)
 	}
 	return nil, fmt.Errorf("unknown JobObservation field %s", name)
 }
@@ -1397,6 +1657,34 @@ func (m *JobObservationMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetMemByteSeconds(v)
 		return nil
+	case jobobservation.FieldCPURequest:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCPURequest(v)
+		return nil
+	case jobobservation.FieldCPULimit:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCPULimit(v)
+		return nil
+	case jobobservation.FieldMemRequest:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMemRequest(v)
+		return nil
+	case jobobservation.FieldMemLimit:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMemLimit(v)
+		return nil
 	}
 	return fmt.Errorf("unknown JobObservation field %s", name)
 }
@@ -1420,6 +1708,18 @@ func (m *JobObservationMutation) AddedFields() []string {
 	if m.addmem_byte_seconds != nil {
 		fields = append(fields, jobobservation.FieldMemByteSeconds)
 	}
+	if m.addcpu_request != nil {
+		fields = append(fields, jobobservation.FieldCPURequest)
+	}
+	if m.addcpu_limit != nil {
+		fields = append(fields, jobobservation.FieldCPULimit)
+	}
+	if m.addmem_request != nil {
+		fields = append(fields, jobobservation.FieldMemRequest)
+	}
+	if m.addmem_limit != nil {
+		fields = append(fields, jobobservation.FieldMemLimit)
+	}
 	return fields
 }
 
@@ -1438,6 +1738,14 @@ func (m *JobObservationMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedCPUSeconds()
 	case jobobservation.FieldMemByteSeconds:
 		return m.AddedMemByteSeconds()
+	case jobobservation.FieldCPURequest:
+		return m.AddedCPURequest()
+	case jobobservation.FieldCPULimit:
+		return m.AddedCPULimit()
+	case jobobservation.FieldMemRequest:
+		return m.AddedMemRequest()
+	case jobobservation.FieldMemLimit:
+		return m.AddedMemLimit()
 	}
 	return nil, false
 }
@@ -1481,6 +1789,34 @@ func (m *JobObservationMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddMemByteSeconds(v)
+		return nil
+	case jobobservation.FieldCPURequest:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCPURequest(v)
+		return nil
+	case jobobservation.FieldCPULimit:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCPULimit(v)
+		return nil
+	case jobobservation.FieldMemRequest:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMemRequest(v)
+		return nil
+	case jobobservation.FieldMemLimit:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMemLimit(v)
 		return nil
 	}
 	return fmt.Errorf("unknown JobObservation numeric field %s", name)
@@ -1541,6 +1877,18 @@ func (m *JobObservationMutation) ResetField(name string) error {
 		return nil
 	case jobobservation.FieldMemByteSeconds:
 		m.ResetMemByteSeconds()
+		return nil
+	case jobobservation.FieldCPURequest:
+		m.ResetCPURequest()
+		return nil
+	case jobobservation.FieldCPULimit:
+		m.ResetCPULimit()
+		return nil
+	case jobobservation.FieldMemRequest:
+		m.ResetMemRequest()
+		return nil
+	case jobobservation.FieldMemLimit:
+		m.ResetMemLimit()
 		return nil
 	}
 	return fmt.Errorf("unknown JobObservation field %s", name)

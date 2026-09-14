@@ -72,7 +72,7 @@ now; three are about what it already did.
 | **Runner detail** | one ephemeral runner: phase history, CPU and memory against requests and limits, the events that explain a stuck pod |
 | **Workflows** | which workflow runs went through the fleet, what they cost, and which of them failed |
 | **Jobs** | every job the dashboard watched, filterable by repository, searchable by name |
-| **Job detail** | one job's own CPU and memory over its lifetime, and what it cost |
+| **Job detail** | one job's own CPU and memory over its lifetime against what its runner reserved, and what it cost |
 
 The fleet overview is the screenshot at the top of this page.
 
@@ -106,7 +106,8 @@ failed run. Clicking one opens **Jobs** narrowed to that run.
 
 A **Jobs** row is one job. Clicking one opens its detail view: what it cost in
 core-seconds and GiB-seconds, the averages those imply over its duration, and
-its CPU and memory as a chart.
+its CPU and memory as a chart, drawn against the requests and limits its runner
+pod held.
 
 ### What the job chart is, and what it is not
 
@@ -128,6 +129,12 @@ has three consequences worth knowing before reading a chart:
   "No resource samples recorded for this job" is a different statement from a
   job that used nothing, and the panel never renders the second when it means
   the first.
+
+The dashed request and limit lines are what the runner pod held, copied onto the
+job row while it ran — the pod is long gone by the time you open the chart, so
+they are stored rather than looked up. A reservation the dashboard never managed
+to read is not drawn at all: no line is honest where a line at zero would not be,
+and no CPU limit is the usual ARC configuration.
 
 ### What it costs on disk
 

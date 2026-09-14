@@ -813,7 +813,6 @@ func runnerLine(title string, at []time.Time, vals []float64, request, limit flo
 		c.Refs = append(c.Refs, RefLine{
 			Points: chart.FlatLine(request, chartW, lineH, peak),
 			Stroke: strokeMuted,
-			Label:  "request " + format(request),
 		})
 	}
 	if limit > 0 {
@@ -1338,8 +1337,10 @@ func (b *Builder) Job(ctx context.Context, id int, sig Signals, now time.Time) (
 	}
 
 	ticks := jobTicks(j.Duration(now))
-	view.CPU = jobLine("cpu", series.CPU, ticks, strokeCPU, fillCPU, ToneCPU, fleet.FormatCores)
-	view.Mem = jobLine("memory", series.Mem, ticks, strokeMem, fillMem, ToneMemory, fleet.FormatGiB)
+	view.CPU = jobLine("cpu", series.CPU, ticks,
+		j.CPURequest, j.CPULimit, strokeCPU, fillCPU, ToneCPU, fleet.FormatCores)
+	view.Mem = jobLine("memory", series.Mem, ticks,
+		j.MemRequest, j.MemLimit, strokeMem, fillMem, ToneMemory, fleet.FormatGiB)
 	return view, true
 }
 
@@ -1605,25 +1606,50 @@ func jobTicks(d time.Duration) []string {
 	return out
 }
 
-// jobLine draws one of the job's two usage series.
+// jobLine draws one of the job's two usage series against what its runner
+// reserved.
 //
-// There are no request or limit reference lines here, unlike the runner chart:
-// a pod's requests are not retained per runner, so for a job that finished last
-// week there is nothing honest to draw them from.
-func jobLine(title string, vals []float64, ticks []string, stroke, fill string, tone Tone, format func(float64) string) LineChart {
+// The reference lines come off the job row rather than the live pod, which no
+// longer exists for a job that finished last week. A zero is not drawn: it
+// means the reservation was never observed, and an undrawn line is honest
+// where a line at zero would not be.
+//
+// The numbers go in the legend rather than beside the rules: LineChartView
+// draws a RefLine as a dashed polyline and nothing else, so an unlabelled one
+// is an anonymous line across the chart.
+func jobLine(
+	title string, vals []float64, ticks []string,
+	request, limit float64, stroke, fill string, tone Tone, format func(float64) string,
+) LineChart {
 	if len(vals) == 0 {
 		return LineChart{Title: title, Empty: true, Ticks: ticks}
 	}
-	peak := PeakOf(vals)
-	return LineChart{
+	peak := PeakOf(vals, []float64{request, limit})
+	c := LineChart{
 		Width: chartW,
 		Title: title,
 		Line:  chart.Plot(vals, chartW, lineH, peak, fill, stroke),
 		Grid:  chart.Grid(2, chartW, lineH, 6, peak, lineH, format),
 		Ticks: ticks,
 		Legend: []LegendItem{
-			{Label: "peak", Tone: tone, Value: format(peak)},
+			{Label: "peak", Tone: tone, Value: format(PeakOf(vals))},
 			{Label: "last", Tone: tone, Value: format(lastOf(vals))},
 		},
 	}
+	if request > 0 {
+		c.Refs = append(c.Refs, RefLine{
+			Points: chart.FlatLine(request, chartW, lineH, peak),
+			Stroke: strokeMuted,
+			Label:  "request " + format(request),
+		})
+		c.Legend = append(c.Legend, LegendItem{Label: "request", Tone: ToneMuted, Value: format(request)})
+	}
+	if limit > 0 {
+		c.Refs = append(c.Refs, RefLine{
+			Points: chart.FlatLine(limit, chartW, lineH, peak),
+			Stroke: strokeDanger,
+		})
+		c.Legend = append(c.Legend, LegendItem{Label: "limit", Tone: ToneDanger, Value: format(limit)})
+	}
+	return c
 }

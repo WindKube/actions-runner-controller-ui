@@ -53,6 +53,10 @@ var (
 		{Name: "succeeded", Type: field.TypeBool, Default: false},
 		{Name: "cpu_seconds", Type: field.TypeFloat64, Default: 0},
 		{Name: "mem_byte_seconds", Type: field.TypeFloat64, Default: 0},
+		{Name: "cpu_request", Type: field.TypeFloat64, Default: 0},
+		{Name: "cpu_limit", Type: field.TypeFloat64, Default: 0},
+		{Name: "mem_request", Type: field.TypeFloat64, Default: 0},
+		{Name: "mem_limit", Type: field.TypeFloat64, Default: 0},
 	}
 	// JobObservationsTable holds the schema information for the "job_observations" table.
 	JobObservationsTable = &schema.Table{

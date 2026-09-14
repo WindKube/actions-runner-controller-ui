@@ -295,6 +295,10 @@ func job(j store.JobRecord) web.Job {
 		// The store integrates byte-seconds; the views show GiB-seconds,
 		// because byte-seconds for a real job is a fourteen-digit number.
 		MemGiBSecs: j.MemByteSeconds / gib,
+		CPURequest: j.CPURequest,
+		CPULimit:   j.CPULimit,
+		MemRequest: j.MemRequest,
+		MemLimit:   j.MemLimit,
 	}
 }
 

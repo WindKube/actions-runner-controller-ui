@@ -1337,6 +1337,72 @@ func TestJobSamplesSurviveAReplayedSnapshot(t *testing.T) {
 	assert.InDelta(t, 2.0, rows[0].CPU, 1e-9, "a replayed reading should not move the average")
 }
 
+func TestJobKeepsWhatItsRunnerReserved(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	r := busyRunner("runner-a", base, 2)
+	r.CPU.Limit, r.Mem.Limit = 4, 8*fleet.GiB
+
+	require.NoError(t, s.RecordSnapshot(t.Context(), snapshot(base, r)), "RecordSnapshot")
+
+	job := onlyJob(t, s)
+	assert.InDelta(t, 2.0, job.CPURequest, 1e-9, "cpu request")
+	assert.InDelta(t, 4.0, job.CPULimit, 1e-9, "cpu limit")
+	assert.InDelta(t, 4*fleet.GiB, job.MemRequest, 1e-3, "memory request")
+	assert.InDelta(t, 8*fleet.GiB, job.MemLimit, 1e-3, "memory limit")
+
+	// The list and the detail view read the job through different code paths,
+	// and the chart's reference lines come from the second one.
+	byID, ok, err := s.Job(t.Context(), job.ID)
+	require.NoError(t, err, "Job")
+	require.True(t, ok, "job %d should exist", job.ID)
+	assert.Equal(t, job, byID, "Job by id should agree with the list")
+}
+
+func TestJobReservationsSurviveAScrapeThatCannotSeeThem(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	r := busyRunner("runner-a", base, 2)
+	r.CPU.Limit = 4
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(base, r)), "first record")
+
+	// The next scrape finds neither the pod nor its scale set in the informer
+	// cache, so it reports no reservations at all. Letting that overwrite would
+	// strip the chart's reference lines off a job that is still running.
+	blind := busyRunner("runner-a", base.Add(time.Minute), 2)
+	blind.CPU.Request, blind.CPU.Limit = 0, 0
+	blind.Mem.Request = 0
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(base.Add(time.Minute), blind)), "blind record")
+
+	job := onlyJob(t, s)
+	assert.InDelta(t, 2.0, job.CPURequest, 1e-9, "cpu request should survive a blind scrape")
+	assert.InDelta(t, 4.0, job.CPULimit, 1e-9, "cpu limit should survive a blind scrape")
+	assert.InDelta(t, 4*fleet.GiB, job.MemRequest, 1e-3, "memory request should survive a blind scrape")
+}
+
+func TestJobReservationsTakeALaterReading(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	ctx := t.Context()
+
+	// The first scrape saw the job before it could read the pod; the second
+	// one can. Zero is "not observed yet", not a value worth defending.
+	blind := busyRunner("runner-a", base, 2)
+	blind.CPU.Request, blind.Mem.Request = 0, 0
+	require.NoError(t, s.RecordSnapshot(ctx, snapshot(base, blind)), "blind record")
+	require.NoError(t, s.RecordSnapshot(ctx,
+		snapshot(base.Add(time.Minute), busyRunner("runner-a", base.Add(time.Minute), 2))), "second record")
+
+	job := onlyJob(t, s)
+	assert.InDelta(t, 2.0, job.CPURequest, 1e-9, "a later scrape should fill in what the first missed")
+	assert.InDelta(t, 4*fleet.GiB, job.MemRequest, 1e-3, "memory request should be filled in too")
+}
+
 func TestJobSeriesBucketsToTheRequestedPoints(t *testing.T) {
 	t.Parallel()
 

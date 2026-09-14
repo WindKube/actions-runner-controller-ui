@@ -38,6 +38,17 @@ func (JobObservation) Fields() []ent.Field {
 		// metrics-server first scrapes it contributes nothing.
 		field.Float("cpu_seconds").Default(0),
 		field.Float("mem_byte_seconds").Default(0),
+		// What the runner pod reserved, in cores and bytes, so the detail
+		// chart can draw reference lines long after the pod is gone. They live
+		// here rather than on job_samples because a pod's resources cannot
+		// change without replacing the pod, and a pod runs one job.
+		//
+		// Zero means "never observed", which is also how an unset limit reads.
+		// Neither is worth distinguishing: both mean there is no line to draw.
+		field.Float("cpu_request").Default(0),
+		field.Float("cpu_limit").Default(0),
+		field.Float("mem_request").Default(0),
+		field.Float("mem_limit").Default(0),
 	}
 }
 

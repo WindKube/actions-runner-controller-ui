@@ -182,6 +182,13 @@ type JobRecord struct {
 	// MemByteSeconds carries the same caveats as RepoTotal's: both are lower
 	// bounds on a short job and are billed forwards across a handover.
 	MemByteSeconds float64
+	// What the runner pod reserved, in cores and bytes. Zero means no
+	// reservation was ever observed, which reads the same as one that was
+	// genuinely unset — no CPU limit is the usual ARC configuration.
+	CPURequest float64
+	CPULimit   float64
+	MemRequest float64
+	MemLimit   float64
 }
 
 // Running reports whether the job had not finished when it was last observed.

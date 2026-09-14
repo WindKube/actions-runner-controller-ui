@@ -91,6 +91,10 @@ func previewJobs() []Job {
 			Repository: "WindKube/platform", Workflow: "ci.yml", Name: "build (ubuntu-2xl)",
 			RunID: 4_182_993, StartedAt: mins(42), Succeeded: false,
 			CPUSeconds: 2_940, MemGiBSecs: 5_880,
+			// The detail preview is rendered from this row. Memory is
+			// burstable and CPU has no limit, which is the ARC default and
+			// gives the chart one line on one axis and two on the other.
+			CPURequest: 2, MemRequest: 3 * fleet.GiB, MemLimit: 4 * fleet.GiB,
 		},
 		{
 			ID: 2, Runner: "arc-ubuntu-2xl-h9z1w", Set: "arc-ubuntu-2xl",

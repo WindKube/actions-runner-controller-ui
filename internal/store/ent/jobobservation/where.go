@@ -108,6 +108,26 @@ func MemByteSeconds(v float64) predicate.JobObservation {
 	return predicate.JobObservation(sql.FieldEQ(FieldMemByteSeconds, v))
 }
 
+// CPURequest applies equality check predicate on the "cpu_request" field. It's identical to CPURequestEQ.
+func CPURequest(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldEQ(FieldCPURequest, v))
+}
+
+// CPULimit applies equality check predicate on the "cpu_limit" field. It's identical to CPULimitEQ.
+func CPULimit(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldEQ(FieldCPULimit, v))
+}
+
+// MemRequest applies equality check predicate on the "mem_request" field. It's identical to MemRequestEQ.
+func MemRequest(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldEQ(FieldMemRequest, v))
+}
+
+// MemLimit applies equality check predicate on the "mem_limit" field. It's identical to MemLimitEQ.
+func MemLimit(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldEQ(FieldMemLimit, v))
+}
+
 // RunnerNameEQ applies the EQ predicate on the "runner_name" field.
 func RunnerNameEQ(v string) predicate.JobObservation {
 	return predicate.JobObservation(sql.FieldEQ(FieldRunnerName, v))
@@ -641,6 +661,166 @@ func MemByteSecondsLT(v float64) predicate.JobObservation {
 // MemByteSecondsLTE applies the LTE predicate on the "mem_byte_seconds" field.
 func MemByteSecondsLTE(v float64) predicate.JobObservation {
 	return predicate.JobObservation(sql.FieldLTE(FieldMemByteSeconds, v))
+}
+
+// CPURequestEQ applies the EQ predicate on the "cpu_request" field.
+func CPURequestEQ(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldEQ(FieldCPURequest, v))
+}
+
+// CPURequestNEQ applies the NEQ predicate on the "cpu_request" field.
+func CPURequestNEQ(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldNEQ(FieldCPURequest, v))
+}
+
+// CPURequestIn applies the In predicate on the "cpu_request" field.
+func CPURequestIn(vs ...float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldIn(FieldCPURequest, vs...))
+}
+
+// CPURequestNotIn applies the NotIn predicate on the "cpu_request" field.
+func CPURequestNotIn(vs ...float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldNotIn(FieldCPURequest, vs...))
+}
+
+// CPURequestGT applies the GT predicate on the "cpu_request" field.
+func CPURequestGT(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldGT(FieldCPURequest, v))
+}
+
+// CPURequestGTE applies the GTE predicate on the "cpu_request" field.
+func CPURequestGTE(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldGTE(FieldCPURequest, v))
+}
+
+// CPURequestLT applies the LT predicate on the "cpu_request" field.
+func CPURequestLT(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldLT(FieldCPURequest, v))
+}
+
+// CPURequestLTE applies the LTE predicate on the "cpu_request" field.
+func CPURequestLTE(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldLTE(FieldCPURequest, v))
+}
+
+// CPULimitEQ applies the EQ predicate on the "cpu_limit" field.
+func CPULimitEQ(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldEQ(FieldCPULimit, v))
+}
+
+// CPULimitNEQ applies the NEQ predicate on the "cpu_limit" field.
+func CPULimitNEQ(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldNEQ(FieldCPULimit, v))
+}
+
+// CPULimitIn applies the In predicate on the "cpu_limit" field.
+func CPULimitIn(vs ...float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldIn(FieldCPULimit, vs...))
+}
+
+// CPULimitNotIn applies the NotIn predicate on the "cpu_limit" field.
+func CPULimitNotIn(vs ...float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldNotIn(FieldCPULimit, vs...))
+}
+
+// CPULimitGT applies the GT predicate on the "cpu_limit" field.
+func CPULimitGT(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldGT(FieldCPULimit, v))
+}
+
+// CPULimitGTE applies the GTE predicate on the "cpu_limit" field.
+func CPULimitGTE(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldGTE(FieldCPULimit, v))
+}
+
+// CPULimitLT applies the LT predicate on the "cpu_limit" field.
+func CPULimitLT(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldLT(FieldCPULimit, v))
+}
+
+// CPULimitLTE applies the LTE predicate on the "cpu_limit" field.
+func CPULimitLTE(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldLTE(FieldCPULimit, v))
+}
+
+// MemRequestEQ applies the EQ predicate on the "mem_request" field.
+func MemRequestEQ(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldEQ(FieldMemRequest, v))
+}
+
+// MemRequestNEQ applies the NEQ predicate on the "mem_request" field.
+func MemRequestNEQ(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldNEQ(FieldMemRequest, v))
+}
+
+// MemRequestIn applies the In predicate on the "mem_request" field.
+func MemRequestIn(vs ...float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldIn(FieldMemRequest, vs...))
+}
+
+// MemRequestNotIn applies the NotIn predicate on the "mem_request" field.
+func MemRequestNotIn(vs ...float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldNotIn(FieldMemRequest, vs...))
+}
+
+// MemRequestGT applies the GT predicate on the "mem_request" field.
+func MemRequestGT(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldGT(FieldMemRequest, v))
+}
+
+// MemRequestGTE applies the GTE predicate on the "mem_request" field.
+func MemRequestGTE(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldGTE(FieldMemRequest, v))
+}
+
+// MemRequestLT applies the LT predicate on the "mem_request" field.
+func MemRequestLT(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldLT(FieldMemRequest, v))
+}
+
+// MemRequestLTE applies the LTE predicate on the "mem_request" field.
+func MemRequestLTE(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldLTE(FieldMemRequest, v))
+}
+
+// MemLimitEQ applies the EQ predicate on the "mem_limit" field.
+func MemLimitEQ(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldEQ(FieldMemLimit, v))
+}
+
+// MemLimitNEQ applies the NEQ predicate on the "mem_limit" field.
+func MemLimitNEQ(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldNEQ(FieldMemLimit, v))
+}
+
+// MemLimitIn applies the In predicate on the "mem_limit" field.
+func MemLimitIn(vs ...float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldIn(FieldMemLimit, vs...))
+}
+
+// MemLimitNotIn applies the NotIn predicate on the "mem_limit" field.
+func MemLimitNotIn(vs ...float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldNotIn(FieldMemLimit, vs...))
+}
+
+// MemLimitGT applies the GT predicate on the "mem_limit" field.
+func MemLimitGT(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldGT(FieldMemLimit, v))
+}
+
+// MemLimitGTE applies the GTE predicate on the "mem_limit" field.
+func MemLimitGTE(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldGTE(FieldMemLimit, v))
+}
+
+// MemLimitLT applies the LT predicate on the "mem_limit" field.
+func MemLimitLT(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldLT(FieldMemLimit, v))
+}
+
+// MemLimitLTE applies the LTE predicate on the "mem_limit" field.
+func MemLimitLTE(v float64) predicate.JobObservation {
+	return predicate.JobObservation(sql.FieldLTE(FieldMemLimit, v))
 }
 
 // And groups predicates with the AND operator between them.

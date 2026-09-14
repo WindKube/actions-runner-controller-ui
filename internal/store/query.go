@@ -370,22 +370,31 @@ func (s *Store) JobsForSet(ctx context.Context, setName string, limit int) ([]Jo
 	}
 	out := make([]JobRecord, 0, len(rows))
 	for _, j := range rows {
-		out = append(out, JobRecord{
-			ID:             j.ID,
-			Runner:         j.RunnerName,
-			Set:            j.SetName,
-			Repository:     j.Repository,
-			Workflow:       j.Workflow,
-			Job:            j.JobName,
-			RunID:          j.RunID,
-			StartedAt:      fromUnix(j.StartedAt),
-			FinishedAt:     fromUnix(j.FinishedAt),
-			Succeeded:      j.Succeeded,
-			CPUSeconds:     j.CPUSeconds,
-			MemByteSeconds: j.MemByteSeconds,
-		})
+		out = append(out, jobRecordOf(j))
 	}
 	return out, nil
+}
+
+// jobRecordOf converts an ent row to the store's own job type.
+func jobRecordOf(j *ent.JobObservation) JobRecord {
+	return JobRecord{
+		ID:             j.ID,
+		Runner:         j.RunnerName,
+		Set:            j.SetName,
+		Repository:     j.Repository,
+		Workflow:       j.Workflow,
+		Job:            j.JobName,
+		RunID:          j.RunID,
+		StartedAt:      fromUnix(j.StartedAt),
+		FinishedAt:     fromUnix(j.FinishedAt),
+		Succeeded:      j.Succeeded,
+		CPUSeconds:     j.CPUSeconds,
+		MemByteSeconds: j.MemByteSeconds,
+		CPURequest:     j.CPURequest,
+		CPULimit:       j.CPULimit,
+		MemRequest:     j.MemRequest,
+		MemLimit:       j.MemLimit,
+	}
 }
 
 // Failures returns the newest failures in the window, capped at limit, together
@@ -586,7 +595,8 @@ func (s *Store) Jobs(ctx context.Context, f JobFilter, r Range) ([]JobRecord, in
 	// of reshuffling between renders.
 	// #nosec G202 -- the only concatenation is this file's own clause text
 	q := `SELECT id, runner_name, set_name, repository, workflow, job_name, run_id,
-	             started_at, finished_at, succeeded, cpu_seconds, mem_byte_seconds
+	             started_at, finished_at, succeeded, cpu_seconds, mem_byte_seconds,
+	             cpu_request, cpu_limit, mem_request, mem_limit
 	      FROM job_observations` + where + ` ORDER BY started_at DESC, id DESC LIMIT ?`
 
 	rows, err := s.db.QueryContext(ctx, q, append(args, limit)...)
@@ -598,17 +608,22 @@ func (s *Store) Jobs(ctx context.Context, f JobFilter, r Range) ([]JobRecord, in
 	out := make([]JobRecord, 0, limit)
 	for rows.Next() {
 		var (
-			j        JobRecord
-			started  int64
-			finished int64
-			cpu, mem sql.NullFloat64
+			j              JobRecord
+			started        int64
+			finished       int64
+			cpu, mem       sql.NullFloat64
+			cpuReq, cpuLim sql.NullFloat64
+			memReq, memLim sql.NullFloat64
 		)
 		if err := rows.Scan(&j.ID, &j.Runner, &j.Set, &j.Repository, &j.Workflow, &j.Job,
-			&j.RunID, &started, &finished, &j.Succeeded, &cpu, &mem); err != nil {
+			&j.RunID, &started, &finished, &j.Succeeded, &cpu, &mem,
+			&cpuReq, &cpuLim, &memReq, &memLim); err != nil {
 			return nil, 0, fmt.Errorf("scan job row: %w", err)
 		}
 		j.StartedAt, j.FinishedAt = fromUnix(started), fromUnix(finished)
 		j.CPUSeconds, j.MemByteSeconds = cpu.Float64, mem.Float64
+		j.CPURequest, j.CPULimit = cpuReq.Float64, cpuLim.Float64
+		j.MemRequest, j.MemLimit = memReq.Float64, memLim.Float64
 		out = append(out, j)
 	}
 	if err := rows.Err(); err != nil {
@@ -699,20 +714,7 @@ func (s *Store) Job(ctx context.Context, id int) (JobRecord, bool, error) {
 		}
 		return JobRecord{}, false, fmt.Errorf("query job %d: %w", id, err)
 	}
-	return JobRecord{
-		ID:             j.ID,
-		Runner:         j.RunnerName,
-		Set:            j.SetName,
-		Repository:     j.Repository,
-		Workflow:       j.Workflow,
-		Job:            j.JobName,
-		RunID:          j.RunID,
-		StartedAt:      fromUnix(j.StartedAt),
-		FinishedAt:     fromUnix(j.FinishedAt),
-		Succeeded:      j.Succeeded,
-		CPUSeconds:     j.CPUSeconds,
-		MemByteSeconds: j.MemByteSeconds,
-	}, true, nil
+	return jobRecordOf(j), true, nil
 }
 
 // JobSeries returns one job's resource usage over the range, bucketed to at

@@ -217,7 +217,11 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 				SetRunID(r.Job.RunID).
 				SetStartedAt(started.Unix()).
 				SetCPUSeconds(cpuDelta).
-				SetMemByteSeconds(memDelta))
+				SetMemByteSeconds(memDelta).
+				SetCPURequest(r.CPU.Request).
+				SetCPULimit(r.CPU.Limit).
+				SetMemRequest(r.Mem.Request).
+				SetMemLimit(r.Mem.Limit))
 
 			// This scrape's reading, for the job's own usage chart. Unlike the
 			// cost columns above it is an instantaneous value, not an
@@ -382,6 +386,10 @@ func (w snapshotWrite) exec(ctx context.Context, tx *ent.Tx) error {
 				u.UpdateWorkflow()
 				addExcluded(u, jobobservation.FieldCPUSeconds)
 				addExcluded(u, jobobservation.FieldMemByteSeconds)
+				keepObserved(u, jobobservation.FieldCPURequest)
+				keepObserved(u, jobobservation.FieldCPULimit)
+				keepObserved(u, jobobservation.FieldMemRequest)
+				keepObserved(u, jobobservation.FieldMemLimit)
 			}).
 			Exec(ctx)
 		if err != nil {
@@ -617,6 +625,21 @@ func foldMean(u *ent.JobSampleUpsert, column string) {
 func addExcluded(u *ent.JobObservationUpsert, column string) {
 	u.Set(column, entsql.ExprFunc(func(b *entsql.Builder) {
 		b.Ident(column).WriteString(" + excluded.").Ident(column)
+	}))
+}
+
+// keepObserved resolves a conflicting insert by taking the incoming value only
+// when there is one, where the generated UpdateX would overwrite regardless.
+//
+// A pod's reservations cannot change while it runs, so what varies between
+// scrapes is not the numbers but whether a scrape could read them: neither the
+// pod nor its scale set is guaranteed to be in the informer cache. Overwriting
+// regardless would let one such scrape blank out what an earlier one saw, and
+// the chart would lose its reference lines.
+func keepObserved(u *ent.JobObservationUpsert, column string) {
+	u.Set(column, entsql.ExprFunc(func(b *entsql.Builder) {
+		b.WriteString("CASE WHEN excluded.").Ident(column).WriteString(" > 0 THEN excluded.").
+			Ident(column).WriteString(" ELSE ").Ident(column).WriteString(" END")
 	}))
 }
 

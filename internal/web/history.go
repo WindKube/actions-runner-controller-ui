@@ -222,6 +222,15 @@ type Job struct {
 	// lower bounds: a job that died between two scrapes contributes nothing.
 	CPUSeconds float64
 	MemGiBSecs float64
+
+	// What the runner pod reserved, in cores and bytes, which is what the
+	// detail chart draws its reference lines from. Unlike the totals above
+	// these stay in bytes: they are plotted against the usage series, not
+	// summarised. Zero means there is no line to draw.
+	CPURequest float64
+	CPULimit   float64
+	MemRequest float64
+	MemLimit   float64
 }
 
 // Running reports whether the job had not finished when it was last observed.

@@ -1050,6 +1050,9 @@ func sampleJob() Job {
 		Repository: "WindKube/platform", Workflow: "ci.yml", Name: "build",
 		RunID: 991, StartedAt: now.Add(-10 * time.Minute), FinishedAt: now.Add(-4 * time.Minute),
 		Succeeded: true, CPUSeconds: 720, MemGiBSecs: 1440,
+		// No CPU limit, which is the usual ARC configuration and the case the
+		// chart has to draw nothing for.
+		CPURequest: 4, MemRequest: 8 * fleet.GiB, MemLimit: 8 * fleet.GiB,
 	}
 }
 
@@ -1193,6 +1196,74 @@ func TestJobWithSamplesDrawsThem(t *testing.T) {
 	assert.Equal(t, 2, v.Buckets)
 	assert.False(t, v.CPU.Empty, "a job with samples draws them")
 	assert.NotEmpty(t, v.CPU.Line.Points, "and the line has geometry")
+}
+
+// The reference lines are the only thing on the job chart that says whether the
+// usage below them was a tight fit or a rounding error.
+func TestJobChartDrawsWhatTheRunnerReserved(t *testing.T) {
+	t.Parallel()
+
+	j := sampleJob()
+	h := &stubHistory{
+		enabled: true, job: j, jobFound: true,
+		series: JobSeries{
+			At:  []time.Time{now.Add(-9 * time.Minute), now.Add(-8 * time.Minute)},
+			CPU: []float64{0.5, 1.5},
+			Mem: []float64{fleet.GiB, 2 * fleet.GiB},
+		},
+	}
+	v, ok := builderWith(h).Job(context.Background(), j.ID, Signals{}, now)
+	require.True(t, ok)
+
+	require.Len(t, v.CPU.Refs, 1, "a request with no limit is one line, not a line at zero")
+	require.Len(t, v.Mem.Refs, 2, "memory has both")
+
+	// The series peaks at 1.5 cores and the request is 4, so a scale taken from
+	// the series alone would put the request line above the chart.
+	assert.Contains(t, legendValue(t, v.CPU, "request"), "4", "the request is named in the legend")
+	assert.Equal(t, "1.5", legendValue(t, v.CPU, "peak"), "peak still reports the series, not the scale")
+
+	assert.Equal(t, "8Gi", legendValue(t, v.Mem, "limit"), "the limit is named too")
+
+	// The dashes carry no text of their own, which is why the legend above has
+	// to: both have to survive as far as the markup.
+	html := renderComponent(t, v.Page, JobPage(v))
+	assert.Contains(t, html, `stroke="`+strokeDanger+`" stroke-width="1" stroke-dasharray="4 4"`,
+		"the limit is drawn as a dashed rule")
+	assert.Contains(t, html, `request <span class="font-mono text-fg-body">4.0</span>`,
+		"and the legend says what it was")
+}
+
+func TestJobChartDrawsNoReferenceLinesForAJobWithNoneRecorded(t *testing.T) {
+	t.Parallel()
+
+	// A job recorded before reservations were stored. Zero is "never observed",
+	// and a line at zero would read as a pod that was promised nothing.
+	j := sampleJob()
+	j.CPURequest, j.MemRequest, j.MemLimit = 0, 0, 0
+	h := &stubHistory{
+		enabled: true, job: j, jobFound: true,
+		series: JobSeries{At: []time.Time{now.Add(-9 * time.Minute)}, CPU: []float64{0.5}, Mem: []float64{fleet.GiB}},
+	}
+	v, ok := builderWith(h).Job(context.Background(), j.ID, Signals{}, now)
+	require.True(t, ok)
+
+	assert.Empty(t, v.CPU.Refs, "nothing observed is nothing drawn")
+	assert.Empty(t, v.Mem.Refs, "for memory too")
+	for _, it := range append(v.CPU.Legend, v.Mem.Legend...) {
+		assert.NotContains(t, []string{"request", "limit"}, it.Label, "and nothing claimed in the legend")
+	}
+}
+
+func legendValue(t *testing.T, c LineChart, label string) string {
+	t.Helper()
+	for _, it := range c.Legend {
+		if it.Label == label {
+			return it.Value
+		}
+	}
+	t.Fatalf("no %q in legend %+v", label, c.Legend)
+	return ""
 }
 
 func TestMissingJobIsNotFoundNotAnError(t *testing.T) {
