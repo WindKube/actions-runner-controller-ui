@@ -51,14 +51,13 @@ func (r Range) window() (from, to, bucket int64, ok bool) {
 	return from, to, bucket, true
 }
 
-// tierFor picks the coarsest tier whose native resolution still fits inside
-// the requested bucket width.
+// tierFor picks the coarsest tier whose native resolution still fits inside the
+// requested bucket width.
 //
-// This is what keeps a thirty-day query off the raw table. A thirty-day window
-// rendered as ninety points has seven-hour buckets, so the hourly tier is
-// exact enough and is four orders of magnitude smaller to scan; a fifteen
-// minute window has fifteen-second buckets, finer than any rollup, so it must
-// read raw.
+// This is what keeps a thirty-day query off the raw table. Thirty days as ninety
+// points has seven-hour buckets, so the hourly tier is exact enough and four
+// orders of magnitude smaller to scan; a fifteen-minute window has fifteen-second
+// buckets, finer than any rollup, so it must read raw.
 func tierFor(bucket int64) Tier {
 	best := TierRaw
 	for _, t := range []Tier{Tier1m, Tier5m, Tier1h} {
@@ -69,13 +68,13 @@ func tierFor(bucket int64) Tier {
 	return best
 }
 
-// Series returns bucketed values for the given metrics over the range,
-// choosing the coarsest tier that still resolves the requested bucket width.
+// Series returns bucketed values for the given metrics over the range, choosing
+// the coarsest tier that still resolves the requested bucket width.
 //
 // The result has an entry for every requested metric, empty when the store has
 // nothing. Within a series only buckets that actually contain samples appear:
-// gaps are gaps, not zeros. A gauge padded with zeros would draw a fleet
-// dropping to nothing every time the sampler missed a tick.
+// gaps are gaps, not zeros. A gauge padded with zeros would draw a fleet dropping
+// to nothing every time the sampler missed a tick.
 func (s *Store) Series(ctx context.Context, scope Scope, scopeID string, metrics []Metric, r Range) (map[Metric][]Point, error) {
 	out := make(map[Metric][]Point, len(metrics))
 	if len(metrics) == 0 {
@@ -219,12 +218,11 @@ func bucketBy(tsColumn string, bucket int64) func(*entsql.Selector) {
 	}
 }
 
-// Churn returns created and terminated counts bucketed over the range. An
-// empty setName covers the whole fleet.
+// Churn returns created and terminated counts bucketed over the range. An empty
+// setName covers the whole fleet.
 //
-// Both slices always have the same length and the same bucket starts, so a
-// caller can zip them without checking. On an empty store they are empty, not
-// nil-of-different-lengths.
+// Both slices always have the same length and the same bucket starts, so a caller
+// can zip them without checking.
 func (s *Store) Churn(ctx context.Context, setName string, r Range) (created, terminated []Point, err error) {
 	from, to, bucket, ok := r.window()
 	if !ok {
@@ -258,9 +256,8 @@ func (s *Store) Churn(ctx context.Context, setName string, r Range) (created, te
 // Throughput returns completed and failed job counts bucketed over the range,
 // keyed on when each job finished. An empty setName covers the whole fleet.
 //
-// Jobs still running are excluded rather than counted in the newest bucket:
-// they have not finished, and putting them anywhere would make the newest
-// bucket lie until the next refresh moved them.
+// Jobs still running are excluded rather than counted in the newest bucket: they
+// have not finished, and putting them anywhere would make the newest bucket lie.
 func (s *Store) Throughput(ctx context.Context, setName string, r Range) (ok, failed []Point, err error) {
 	from, to, bucket, valid := r.window()
 	if !valid {
@@ -311,14 +308,13 @@ func denseOr(p []Point, buckets []int64) []Point {
 	return densePoints(buckets)
 }
 
-// RepoConsumption totals jobs and integrated cost per repository over the
-// range, busiest first.
+// RepoConsumption totals jobs and integrated cost per repository over the range,
+// busiest first.
 //
-// A job counts when it overlapped the window, not when it started, so a
-// six-hour build is not invisible in the last hour's chart. That does mean a
-// long job's whole cost is attributed to any window it touches; the
-// alternative is storing per-bucket cost for every job, which is exactly the
-// row explosion this package is built to avoid.
+// A job counts when it overlapped the window, not when it started, so a six-hour
+// build is not invisible in the last hour's chart. That does mean a long job's
+// whole cost is attributed to any window it touches; the alternative is storing
+// per-bucket cost for every job, which is the row explosion this package avoids.
 func (s *Store) RepoConsumption(ctx context.Context, r Range) ([]RepoTotal, error) {
 	from, to, _, ok := r.window()
 	if !ok {
@@ -401,10 +397,9 @@ func jobRecordOf(j *ent.JobObservation) JobRecord {
 // Failures returns the newest failures in the window, capped at limit, together
 // with how many the window holds in total.
 //
-// The total is counted rather than derived from the page because the lane shows
-// a handful of rows and says how many there are: a "+41 more" footer computed
-// from a page of six would always read "+0 more". An empty setName means the
-// whole fleet.
+// The total is counted rather than derived from the page because the lane shows a
+// handful of rows and says how many there are: a "+41 more" footer computed from a
+// page of six would always read "+0 more". An empty setName means the whole fleet.
 func (s *Store) Failures(
 	ctx context.Context, setName string, r Range, limit int,
 ) ([]FailureRecord, int64, error) {

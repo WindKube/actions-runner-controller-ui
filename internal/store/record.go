@@ -24,22 +24,19 @@ type metricValue struct {
 
 // RecordSnapshot persists one observation of the fleet.
 //
-// It writes four things: scope samples for the fleet and each set, raw samples
-// for each runner, and the churn and job rows implied by the difference from
-// the previous snapshot. The differences are the interesting part — a
-// Snapshot alone cannot say that a runner is new or that a job just finished,
-// so the store keeps the previous frame in memory and compares.
+// It writes scope samples for the fleet and each set, raw samples for each runner,
+// and the churn and job rows implied by the difference from the previous snapshot.
+// A Snapshot alone cannot say that a runner is new or that a job just finished, so
+// the store keeps the previous frame in memory.
 //
-// Every write is an upsert keyed on natural identity rather than on a
-// surrogate ID, so replaying the same snapshot, or restarting the process and
-// re-observing runners it already knew about, converges instead of doubling
-// the counts. The one exception is a job's integrated cost, which accumulates
-// in the database rather than being overwritten. Recording the same snapshot
-// twice adds nothing to it, because the increment is integrated over the gap
-// between the two snapshots' own timestamps and that gap is zero for the same
-// frame. A snapshot that carries no timestamp is stamped with time.Now()
-// below, so re-recording one of those is a second observation rather than a
-// replay: the gap is real and so is the increment.
+// Every write is an upsert keyed on natural identity rather than on a surrogate
+// ID, so replaying the same snapshot converges instead of doubling the counts.
+// The one exception is a job's integrated cost, which accumulates in the database.
+// Recording the same snapshot twice adds nothing to it, because the increment is
+// integrated over the gap between the two snapshots' own timestamps and that gap
+// is zero for the same frame. A snapshot carrying no timestamp is stamped with
+// time.Now() below, so re-recording one of those is a second observation rather
+// than a replay.
 func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 	at := snap.At
 	if at.IsZero() {
@@ -90,11 +87,10 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 	)
 
 	for _, r := range snap.Runners {
-		// The runner name is the identity every row below is written under, so
-		// a snapshot that lists one runner twice is recorded once. Skipping is
-		// not tidiness: the job upsert ADDS its increment to the stored row, so
-		// a second copy conflicts with the row its own statement just inserted
-		// and bills the interval again.
+		// The runner name is the identity every row below is written under, so a snapshot
+		// that lists one runner twice is recorded once. Skipping is not tidiness: the job
+		// upsert ADDS its increment to the stored row, so a second copy conflicts with the
+		// row its own statement just inserted and bills the interval again.
 		if _, seen := cur[r.Name]; seen {
 			continue
 		}
@@ -119,42 +115,33 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 
 		next := &runnerState{set: r.SetName, state: r.State, job: r.Job}
 
-		// cpuDelta and memDelta are this interval's consumption: the usage this
-		// scrape reports, integrated over dt. They are credited to whatever the
-		// runner is doing *now*: the job row written below, or nothing at all
-		// when it is idle.
+		// cpuDelta and memDelta are this interval's consumption: the usage this scrape
+		// reports, integrated over dt. They are credited to whatever the runner is doing
+		// *now* — the job row written below, or nothing at all when it is idle.
 		//
-		// That rule is what decides the handover. When a persistent runner has
-		// moved from one job to the next, the interval genuinely spans both,
-		// and nothing here can place the boundary inside it: usage is measured
-		// per pod and the pod ran both jobs, and the reading carries
-		// metrics-server's own timestamp, which this code never consults. So the
-		// increment is credited to exactly one of the two jobs, never split and
-		// never to both, and the one it goes to is the successor — the row this
-		// scrape is already writing. The price is that at each handover the
-		// successor is credited for a stretch it only partly ran, at most that
-		// one interval, and the job the runner left gets nothing for it.
-		// Billing it backwards would be the same error with its sign flipped.
-		// Either way the error crosses repositories whenever the two jobs
-		// belong to different ones, which on a persistent runner is routine.
+		// That rule is what decides the handover. When a persistent runner has moved from
+		// one job to the next, the interval genuinely spans both, and nothing here can
+		// place the boundary inside it: usage is measured per pod and the pod ran both
+		// jobs. So the increment goes to exactly one of the two, never split and never to
+		// both, and the one it goes to is the successor. The price is that at each
+		// handover the successor is credited for a stretch it only partly ran, at most one
+		// interval, and the job the runner left gets nothing for it. Billing it backwards
+		// would be the same error with its sign flipped.
 		//
-		// A runner that finishes a job and goes idle drops that interval
-		// instead, since there is no job row left to bill it to. So a job's
-		// cost is neither a lower nor an upper bound on what it consumed — see
-		// RepoTotal.
+		// A runner that finishes a job and goes idle drops that interval instead, since
+		// there is no job row left to bill it to. So a job's cost is neither a lower nor
+		// an upper bound on what it consumed — see RepoTotal.
 		//
-		// Both stay zero for a runner this snapshot is seeing for the first
-		// time — including every runner in the first snapshot after a restart —
-		// because there is no earlier observation of it to integrate from.
+		// Both stay zero for a runner this snapshot is seeing for the first time, because
+		// there is no earlier observation of it to integrate from.
 		var cpuDelta, memDelta float64
 
 		if prev, known := s.prev[r.Name]; known {
 			cpuDelta, memDelta = r.CPU.Used*dt, r.Mem.Used*dt
 			if prev.job.Present() && !sameJob(prev.job, r.Job) {
-				// A persistent runner moving off its job. Close the old one
-				// here; the ephemeral case, where the runner disappears with
-				// the job, is handled below. Only the outcome needs writing:
-				// the old job's row already holds every increment observed
+				// A persistent runner moving off its job. Close the old one here; the ephemeral
+				// case, where the runner disappears with the job, is handled below. Only the
+				// outcome needs writing: the old job's row already holds every increment observed
 				// while the runner was on it.
 				switched = append(switched, jobClose{
 					runner: r.Name,
@@ -237,11 +224,10 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 		if !prev.job.Present() {
 			continue
 		}
-		// A runner that vanished while its last observed state was Failed
-		// failed; anything else is treated as success. This is a heuristic and
-		// it is the best one available without the GitHub API: ARC tears down
-		// a healthy runner the instant its job ends, so "gone" and "done" are
-		// the same event.
+		// A runner that vanished while its last observed state was Failed failed; anything
+		// else is treated as success. This is the best heuristic available without the
+		// GitHub API: ARC tears down a healthy runner the instant its job ends, so "gone"
+		// and "done" are the same event.
 		if prev.state == fleet.StateFailed {
 			goneFailed = append(goneFailed, name)
 		} else {
@@ -287,11 +273,9 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 
 // jobClose finalises one job that ended without its runner disappearing.
 //
-// It carries the outcome and nothing else. Cost needs no flush here: every
-// scrape adds its own increment to the job's row as it goes, so by the time
-// the runner is seen on something else the row is already complete — and the
-// interval straddling the handover was deliberately billed to the job that
-// replaced this one.
+// It carries the outcome and nothing else. Cost needs no flush here: every scrape
+// adds its own increment to the job's row as it goes, and the interval straddling
+// the handover was deliberately billed to the job that replaced this one.
 type jobClose struct {
 	runner string
 	runID  int64
@@ -344,17 +328,15 @@ func (w snapshotWrite) exec(ctx context.Context, tx *ent.Tx) error {
 	}
 
 	if len(w.jobs) > 0 {
-		// started_at must keep the first observation, and finished_at/succeeded
-		// belong to the completion path below — letting the per-scrape upsert
-		// touch them would resurrect finished jobs.
+		// started_at must keep the first observation, and finished_at/succeeded belong to
+		// the completion path below — letting the per-scrape upsert touch them would
+		// resurrect finished jobs.
 		//
-		// The cost columns are added to rather than overwritten, because the
-		// incoming row carries one scrape's increment. Accumulating in the
-		// database instead of in memory is what makes the total survive a
-		// restart: a fresh process contributes a zero increment for its first
-		// scrape of a job it has never seen, where overwriting from its empty
-		// accumulator would reset that job's total to zero and lose every
-		// core-second recorded before the restart.
+		// The cost columns are added to rather than overwritten, because the incoming row
+		// carries one scrape's increment. Accumulating in the database is what makes the
+		// total survive a restart: a fresh process contributes a zero increment for its
+		// first scrape of a job it has never seen, where overwriting from its empty
+		// accumulator would reset that job's total to zero.
 		err := tx.JobObservation.CreateBulk(w.jobs...).
 			OnConflict(entsql.ConflictColumns(
 				jobobservation.FieldRunnerName, jobobservation.FieldRunID, jobobservation.FieldJobName,
@@ -394,14 +376,14 @@ func (w snapshotWrite) exec(ctx context.Context, tx *ent.Tx) error {
 	}
 
 	if len(w.failures) > 0 {
-		// ts is deliberately left alone on conflict: the first observation of a
-		// failure is the honest one, and every later scrape of the same broken
-		// runner reports the same reason with a newer scrape behind it.
+		// ts is deliberately left alone on conflict: the first observation of a failure is
+		// the honest one, and every later scrape of the same broken runner reports the
+		// same reason with a newer scrape behind it.
 		//
-		// severe only ever ratchets up. A runner can be seen with a reason while
-		// still idle and reach the failed state a scrape later; taking the
-		// incoming value would let the reverse — the pod recovering enough to
-		// look idle again — quietly downgrade a failure that did happen.
+		// severe only ever ratchets up. A runner can be seen with a reason while still
+		// idle and reach the failed state a scrape later; taking the incoming value would
+		// let the pod recovering enough to look idle again quietly downgrade a failure
+		// that did happen.
 		err := tx.RunnerFailure.CreateBulk(w.failures...).
 			OnConflict(entsql.ConflictColumns(
 				runnerfailure.FieldRunnerName, runnerfailure.FieldReason,
@@ -464,21 +446,19 @@ func (w snapshotWrite) exec(ctx context.Context, tx *ent.Tx) error {
 	return nil
 }
 
-// writeJobSamples records this scrape's resource readings against the jobs
-// they belong to.
+// writeJobSamples records this scrape's resource readings against the jobs they
+// belong to.
 //
 // The readings are staged under a job's natural identity because that is all a
-// snapshot knows, but they are stored under its row id, which is eight bytes
-// where the triple is closer to sixty — on the largest table this package
-// writes. Resolving one into the other is the lookup here, and it is why this
-// runs inside the snapshot's transaction rather than beside it: the ids it
-// reads were created by the upsert immediately above.
+// snapshot knows, but they are stored under its row id, which is eight bytes where
+// the triple is closer to sixty — on the largest table this package writes. That
+// lookup is why this runs inside the snapshot's transaction: the ids it reads were
+// created by the upsert immediately above.
 //
-// The lookup is bounded by the runners currently holding a job, not by the
-// table, and it asks for open jobs only. A persistent runner that has moved on
-// without its old row being closed yet will match twice; the exact triple
-// decides which row wins, and anything unmatched is dropped rather than
-// guessed at.
+// The lookup asks for open jobs only, bounded by the runners currently holding
+// one. A persistent runner that has moved on without its old row being closed yet
+// will match twice; the exact triple decides which row wins, and anything
+// unmatched is dropped rather than guessed at.
 func (w snapshotWrite) writeJobSamples(ctx context.Context, tx *ent.Tx) error {
 	if len(w.usage) == 0 {
 		return nil
@@ -533,16 +513,13 @@ func (w snapshotWrite) writeJobSamples(ctx context.Context, tx *ent.Tx) error {
 		return nil
 	}
 
-	// Every scrape inside one bucket folds into the mean already stored, so a
-	// bucket costs one row however often the fleet is polled. Keeping a running
-	// mean — mean + (x - mean)/(n+1) — rather than a sum to divide on read
-	// costs the same two columns and leaves the stored value already in the
-	// unit the chart draws, so nothing downstream has to know how many scrapes
-	// went into a row.
+	// Every scrape inside one bucket folds into the mean already stored, so a bucket
+	// costs one row however often the fleet is polled. A running mean — mean + (x -
+	// mean)/(n+1) — rather than a sum to divide on read leaves the stored value
+	// already in the unit the chart draws.
 	//
-	// Every right-hand side below reads the row as it was before this
-	// statement, which is what lets `samples` be incremented in the same SET
-	// that divides by it.
+	// Every right-hand side below reads the row as it was before this statement, which
+	// is what lets `samples` be incremented in the same SET that divides by it.
 	err = tx.JobSample.CreateBulk(samples...).
 		OnConflict(entsql.ConflictColumns(jobsample.FieldJobID, jobsample.FieldTs)).
 		Update(func(u *ent.JobSampleUpsert) {
@@ -560,11 +537,10 @@ func (w snapshotWrite) writeJobSamples(ctx context.Context, tx *ent.Tx) error {
 // foldMean rewrites a conflicting insert as one more reading folded into the
 // stored average, where ent's generated Update<Field> would replace it.
 //
-// `excluded` is the row that lost the conflict — this scrape's single reading
-// — and the bare column is the mean already there. The divisor has to be the
-// stored count plus one rather than a literal, because a bulk upsert shares
-// one conflict clause across every job in the snapshot and each of them is a
-// different number of scrapes into its own bucket.
+// `excluded` is the row that lost the conflict — this scrape's single reading —
+// and the bare column is the mean already there. The divisor has to be the stored
+// count plus one rather than a literal, because a bulk upsert shares one conflict
+// clause across every job in the snapshot.
 func foldMean(u *ent.JobSampleUpsert, column string) {
 	u.Set(column, entsql.ExprFunc(func(b *entsql.Builder) {
 		b.Ident(column).WriteString(" + (excluded.").
@@ -574,15 +550,14 @@ func foldMean(u *ent.JobSampleUpsert, column string) {
 	}))
 }
 
-// addExcluded resolves a conflicting insert by ADDING the incoming value to
-// the stored one, where ent's generated Update<Field> would replace it.
+// addExcluded resolves a conflicting insert by ADDING the incoming value to the
+// stored one, where ent's generated Update<Field> would replace it.
 //
 // The bare column name on the right-hand side of a DO UPDATE SET is the row
 // already in the table; `excluded` is the row that lost the conflict. Both are
-// per-row, which is the whole point: a bulk upsert carries a different
-// increment for every runner in the snapshot and shares one conflict clause
-// between them, so the increment has to come from the statement's own values
-// rather than from a literal bound once.
+// per-row, which is the whole point: a bulk upsert carries a different increment
+// for every runner and shares one conflict clause between them, so the increment
+// has to come from the statement's own values rather than a literal bound once.
 func addExcluded(u *ent.JobObservationUpsert, column string) {
 	u.Set(column, entsql.ExprFunc(func(b *entsql.Builder) {
 		b.Ident(column).WriteString(" + excluded.").Ident(column)
@@ -592,11 +567,10 @@ func addExcluded(u *ent.JobObservationUpsert, column string) {
 // keepObserved resolves a conflicting insert by taking the incoming value only
 // when there is one, where the generated UpdateX would overwrite regardless.
 //
-// A pod's reservations cannot change while it runs, so what varies between
-// scrapes is not the numbers but whether a scrape could read them: neither the
-// pod nor its scale set is guaranteed to be in the informer cache. Overwriting
-// regardless would let one such scrape blank out what an earlier one saw, and
-// the chart would lose its reference lines.
+// A pod's reservations cannot change while it runs, so what varies between scrapes
+// is not the numbers but whether a scrape could read them. Overwriting regardless
+// would let one such scrape blank out what an earlier one saw, and the chart would
+// lose its reference lines.
 func keepObserved(u *ent.JobObservationUpsert, column string) {
 	u.Set(column, entsql.ExprFunc(func(b *entsql.Builder) {
 		b.WriteString("CASE WHEN excluded.").Ident(column).WriteString(" > 0 THEN excluded.").
@@ -609,11 +583,10 @@ func sameJob(a, b fleet.Job) bool { return a.RunID == b.RunID && a.Name == b.Nam
 
 // scopeMetrics turns a fleet aggregate into the samples worth storing.
 //
-// Absent dimensions are omitted rather than written as zero. That is the
-// single most important rule in this file: a stored zero is indistinguishable
-// from a measurement, and the two cases it would erase — listener metrics
-// disabled, and metrics-server never having scraped a short-lived runner —
-// are both routine.
+// Absent dimensions are omitted rather than written as zero. That is the single
+// most important rule in this file: a stored zero is indistinguishable from a
+// measurement, and the two cases it would erase — listener metrics disabled, and
+// metrics-server never having scraped a short-lived runner — are both routine.
 func scopeMetrics(t fleet.Totals) []metricValue {
 	out := []metricValue{
 		{MetricRunners, float64(t.Runners)},
