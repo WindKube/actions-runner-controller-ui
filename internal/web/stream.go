@@ -178,6 +178,7 @@ func (h *Handler) StreamOverview(w http.ResponseWriter, r *http.Request) {
 		o := h.Builder.Overview(ctx, sig, now)
 		o.Stream = "/stream"
 		return regionSet{
+			"rangepicker": RangePicker(o.Page),
 			"filterbar":   FilterBar(o),
 			"tiles":       Tiles(o),
 			"history":     HistoryPanel(o),
@@ -259,13 +260,14 @@ func (h *Handler) StreamSet(w http.ResponseWriter, r *http.Request, name string)
 		}
 		d.Stream = url
 		return regionSet{
-			"tiles":     SetTiles(d),
-			"history":   SetHistory(d),
-			"resources": SetResources(d),
-			"config":    SetConfig(d),
-			"churn":     SetChurn(d),
-			"runners":   SetRunners(d),
-			"health":    HealthStrip(d.Page),
+			"rangepicker": RangePicker(d.Page),
+			"tiles":       SetTiles(d),
+			"history":     SetHistory(d),
+			"resources":   SetResources(d),
+			"config":      SetConfig(d),
+			"churn":       SetChurn(d),
+			"runners":     SetRunners(d),
+			"health":      HealthStrip(d.Page),
 		}, true
 	})
 }
@@ -280,11 +282,12 @@ func (h *Handler) StreamRunner(w http.ResponseWriter, r *http.Request, name stri
 		}
 		d.Stream = url
 		return regionSet{
-			"resources": RunnerResources(d),
-			"events":    RunnerEvents(d),
-			"setjobs":   SetJobsPanel(d),
-			"facts":     RunnerFacts(d),
-			"health":    HealthStrip(d.Page),
+			"rangepicker": RangePicker(d.Page),
+			"resources":   RunnerResources(d),
+			"events":      RunnerEvents(d),
+			"setjobs":     SetJobsPanel(d),
+			"facts":       RunnerFacts(d),
+			"health":      HealthStrip(d.Page),
 		}, true
 	})
 }

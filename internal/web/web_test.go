@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -136,9 +137,9 @@ func TestOverviewRendersEveryPatchTarget(t *testing.T) {
 	// Every id the stream patches must exist in the initial document, or the
 	// first push lands nowhere and that panel silently stops updating.
 	for _, id := range []string{
-		"filterbar", "tiles", "history", "utilization", "resources",
-		"throughput", "churn", "runnersets", "runners", "repos",
-		"failures", "store", "health", "live-indicator",
+		"rangepicker", "filterbar", "tiles", "history", "utilization",
+		"resources", "throughput", "churn", "runnersets", "runners",
+		"repos", "failures", "store", "health", "live-indicator",
 	} {
 		assert.Contains(t, html, `id="`+id+`"`, "missing patch target id=%q", id)
 	}
@@ -592,6 +593,80 @@ func TestLivePageOpensItsStreamOnLoad(t *testing.T) {
 	assert.Contains(t, doc, `"live":true`, "the live preference did not reach the page")
 	assert.Contains(t, toggleTag(t, doc), `aria-pressed="true"`, "the toggle renders unpressed on a live page")
 	assert.Contains(t, doc, ">last event —<", "a live page should show the staleness readout, not the paused one")
+}
+
+// readElementsUntilSignal collects the markup of every element patch in the
+// initial paint, with the SSE framing stripped, so a test can assert on what
+// the browser would actually morph into the page.
+func readElementsUntilSignal(t *testing.T, r *bufio.Reader) string {
+	t.Helper()
+
+	var b strings.Builder
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		line, err := r.ReadString('\n')
+		require.NoError(t, err, "reading stream")
+		if strings.HasPrefix(line, "event: datastar-patch-signals") {
+			return b.String()
+		}
+		if markup, ok := strings.CutPrefix(line, "data: elements "); ok {
+			b.WriteString(strings.TrimSuffix(markup, "\n"))
+		}
+	}
+	t.Fatal("no signal frame arrived before the deadline")
+	return ""
+}
+
+// pressedRange reports which pill the streamed range picker marks as selected.
+// It reads only the picker's own markup, so the topbar's other aria-pressed
+// control — the autorefresh toggle — cannot be mistaken for a range.
+func pressedRange(t *testing.T, markup string) string {
+	t.Helper()
+
+	_, picker, ok := strings.Cut(markup, `id="rangepicker"`)
+	require.True(t, ok, "no range picker in the streamed markup")
+	picker, _, ok = strings.Cut(picker, "</div>")
+	require.True(t, ok, "the range picker markup is not closed")
+
+	pill := regexp.MustCompile(`aria-pressed="(true|false)"[^>]*>([^<]+)</button>`)
+	var pressed []string
+	for _, m := range pill.FindAllStringSubmatch(picker, -1) {
+		if m[1] == "true" {
+			pressed = append(pressed, m[2])
+		}
+	}
+	require.Len(t, pressed, 1, "exactly one range pill must be pressed, got %v", pressed)
+	return pressed[0]
+}
+
+// TestStreamPatchesTheRangePickerItself is the regression guard for a picker
+// that changed every chart but never its own highlight: the topbar is painted
+// once by Document, so a range the stream does not push back leaves the pills
+// showing whatever the page loaded with.
+func TestStreamPatchesTheRangePickerItself(t *testing.T) {
+	t.Parallel()
+
+	handler := testHandler(hub.New())
+	srv := httptest.NewServer(http.HandlerFunc(handler.StreamOverview))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// Exactly what a click on the 6h pill sends: the signal, then a reopened
+	// stream carrying it.
+	signals := url.Values{"datastar": {`{"range":"6h"}`}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"?"+signals.Encode(), nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	markup := readElementsUntilSignal(t, bufio.NewReader(resp.Body))
+
+	require.Contains(t, markup, `id="rangepicker"`, "the stream never sent the range picker")
+	assert.Equal(t, "6h", pressedRange(t, markup), "the highlighted pill does not match the range signal")
+	assert.Contains(t, markup, "last 6 hours", "the charts did not follow the range either")
 }
 
 func TestStreamRegistryClosesOpenStreams(t *testing.T) {
