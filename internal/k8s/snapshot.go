@@ -20,10 +20,9 @@ import (
 // before we call it broken.
 //
 // A runner registers within a couple of seconds of its pod starting; anything
-// still unregistered after this has almost always failed to reach GitHub —
-// wrong config URL, expired app credentials, blocked egress — and shows nothing
-// else wrong on the pod, so without this check it sits in the table looking
-// perfectly healthy forever.
+// still unregistered after this has almost always failed to reach GitHub — wrong
+// config URL, expired credentials, blocked egress — and shows nothing else wrong
+// on the pod, so without this check it looks perfectly healthy forever.
 const registrationGrace = 5 * time.Minute
 
 // EventRetention is the API server's default --event-ttl. Events older than
@@ -67,14 +66,13 @@ type SnapshotInput struct {
 
 	Sources []fleet.Source
 
-	// RunnersDegraded says the Runners slice cannot be trusted to be the whole
-	// truth right now: the EphemeralRunner informer has not finished its initial
-	// LIST, its watch recently failed, or it is not running at all. It is
-	// specifically about that one informer — NOT the arc-crds source, which is
-	// an aggregate over four resources and is probed once at boot.
+	// RunnersDegraded says the Runners slice cannot be trusted to be the whole truth
+	// right now: the EphemeralRunner informer has not finished its initial LIST, its
+	// watch recently failed, or it is not running at all. It is specifically about
+	// that one informer — NOT the arc-crds source, which is probed once at boot.
 	//
-	// The zero value means trusted, so an input assembled by hand (every test,
-	// anything without a collector) behaves as if nothing were broken.
+	// The zero value means trusted, so an input assembled by hand behaves as if
+	// nothing were broken.
 	RunnersDegraded bool
 
 	// JobStarts remembers when each runner first reported a job. May be nil, in
@@ -105,8 +103,6 @@ func BuildSnapshot(in SnapshotInput) fleet.Snapshot {
 		Sources:           slices.Clone(in.Sources),
 	}
 	sortSources(snap.Sources)
-
-	// --- runner sets -------------------------------------------------------
 
 	snap.Sets = make([]fleet.RunnerSet, 0, len(in.Sets))
 	for _, ars := range in.Sets {
@@ -187,8 +183,6 @@ func BuildSnapshot(in SnapshotInput) fleet.Snapshot {
 		)
 	})
 
-	// --- runners -----------------------------------------------------------
-
 	live := make(map[types.UID]struct{}, len(in.Runners))
 	snap.Runners = make([]fleet.Runner, 0, len(in.Runners))
 	for _, er := range in.Runners {
@@ -201,21 +195,18 @@ func BuildSnapshot(in SnapshotInput) fleet.Snapshot {
 		snap.Runners = append(snap.Runners, buildRunner(er, pod, setName, scaleSets.byName[objectKey(er.Namespace, setName)], in, now))
 	}
 
-	// Runners come and go constantly; without this the job-start map is an
-	// unbounded leak that grows for the life of the process.
+	// Runners come and go constantly; without this the job-start map is an unbounded
+	// leak that grows for the life of the process.
 	//
-	// Gated, because an empty runner list has two very different causes. An
-	// informer that has synced and is watching cleanly reporting nothing means
-	// the fleet really is idle and the entries are dead weight. A degraded one —
-	// a watch error, a re-LIST in flight, an RBAC blip — reports nothing too,
-	// and evicting on that would drop every tracked job start, after which job
-	// ages silently fall back to pod start times and every running job looks
-	// like it just restarted.
+	// Gated, because an empty runner list has two very different causes. A synced,
+	// cleanly watching informer reporting nothing means the fleet really is idle. A
+	// degraded one reports nothing too, and evicting on that would drop every tracked
+	// job start, after which job ages fall back to pod start times and every running
+	// job looks like it just restarted.
 	//
-	// Skipping the sweep leaks nothing durable, because the gate is a LIVE
-	// signal that heals on its own: RunnersDegraded is recomputed per snapshot
-	// from the informer's HasSynced and an expiring watch-failure stamp, so the
-	// next good snapshot sweeps whatever accumulated meanwhile.
+	// Skipping the sweep leaks nothing durable: RunnersDegraded is recomputed per
+	// snapshot from a live signal, so the next good snapshot sweeps whatever
+	// accumulated meanwhile.
 	if !in.RunnersDegraded {
 		in.JobStarts.Retain(live)
 	}
@@ -245,11 +236,11 @@ func buildRunner(er *arcapi.EphemeralRunner, pod *corev1.Pod, setName string, ar
 		}
 	}
 
-	// ARC records no job start time anywhere — status.jobId simply appears — so
-	// the only honest source is our own first observation of it. The pod's start
-	// time is the fallback for a runner that was already busy when this process
-	// started; it overstates the job by however long the runner idled first, but
-	// that beats reporting the job as brand new after every restart.
+	// ARC records no job start time anywhere — status.jobId simply appears — so the
+	// only honest source is our own first observation of it. The pod's start time is
+	// the fallback for a runner that was already busy when this process started; it
+	// overstates the job by however long the runner idled first, but that beats
+	// reporting the job as brand new after every restart.
 	started := in.JobStarts.Observe(er.UID, er.HasJob(), now)
 	if er.HasJob() {
 		if started.IsZero() && pod != nil && pod.Status.StartTime != nil {
@@ -304,9 +295,8 @@ func buildRunner(er *arcapi.EphemeralRunner, pod *corev1.Pod, setName string, ar
 // runnerState maps ARC's phases onto the states the dashboard shows.
 //
 // The first rule is the one that matters: busy is a non-empty status.jobId, not
-// phase == "Running". An idle runner sitting in the pool waiting for work
-// reports Running too, so using the phase makes a fleet of idle runners look
-// fully utilised.
+// phase == "Running". An idle runner waiting for work reports Running too, so
+// using the phase makes a fleet of idle runners look fully utilised.
 func runnerState(er *arcapi.EphemeralRunner, pod *corev1.Pod) fleet.State {
 	if er.HasJob() {
 		return fleet.StateBusy
@@ -365,8 +355,8 @@ var waitingFailures = map[string]bool{
 	"ErrImageNeverPull":          true,
 }
 
-// failureReason derives the human-facing cause shown in the failure lane, and
-// when it was observed.
+// failureReason derives the human-facing cause shown in the failure lane, and when
+// it was observed.
 //
 // The order is by usefulness to an operator: a container that cannot start beats
 // one that exited, which beats whatever the controller wrote into status, which
@@ -438,8 +428,6 @@ func podFailureTime(pod *corev1.Pod) time.Time {
 	return pod.CreationTimestamp.Time
 }
 
-// --- joins ------------------------------------------------------------------
-
 // indexPods keys pods for the runner join. The pod always shares its
 // EphemeralRunner's name in the same namespace, one to one, which is the whole
 // join: no label matching, no owner walking.
@@ -494,12 +482,12 @@ func (idx scaleSetIndex) ownerOf(ers *arcapi.EphemeralRunnerSet) *arcapi.Autosca
 	return nil
 }
 
-// newestEphemeralSetPerOwner picks the EphemeralRunnerSet whose counts a scale
-// set should report.
+// newestEphemeralSetPerOwner picks the EphemeralRunnerSet whose counts a scale set
+// should report.
 //
-// During a rollout the controller runs several generations at once, draining
-// the old one while the new one fills. The newest by creation timestamp is the
-// one the listener is scaling, so it is the one whose numbers mean anything.
+// During a rollout the controller runs several generations at once. The newest by
+// creation timestamp is the one the listener is scaling, so it is the one whose
+// numbers mean anything.
 func newestEphemeralSetPerOwner(sets []*arcapi.EphemeralRunnerSet, owners scaleSetIndex) map[string]*arcapi.EphemeralRunnerSet {
 	out := make(map[string]*arcapi.EphemeralRunnerSet, len(owners.byName))
 	for _, ers := range sets {
@@ -559,10 +547,9 @@ func setNameForRunner(er *arcapi.EphemeralRunner, ersOwner map[string]string) st
 // listenerHealth reports, per scale set, whether its listener pod is up.
 //
 // AutoscalingListenerStatus is an empty struct upstream, so the custom resource
-// says nothing about health. The listener pod is the only evidence — and it
-// lives in the controller's namespace with no ownerReference back to the scale
-// set, so the correlation has to go through the listener spec's explicit
-// namespace and name fields.
+// says nothing about health. The listener pod is the only evidence — and it lives
+// in the controller's namespace with no ownerReference back to the scale set, so
+// the correlation goes through the listener spec's explicit namespace and name.
 func listenerHealth(listeners []*arcapi.AutoscalingListener, controllerPods []*corev1.Pod, sets []*arcapi.AutoscalingRunnerSet) map[string]bool {
 	podsByKey := indexPods(controllerPods)
 	out := make(map[string]bool, len(sets))
@@ -612,8 +599,6 @@ func podReady(pod *corev1.Pod) bool {
 	}
 	return false
 }
-
-// --- small helpers ----------------------------------------------------------
 
 func objectKey(namespace, name string) string { return namespace + "/" + name }
 

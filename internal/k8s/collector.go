@@ -60,11 +60,10 @@ const (
 
 // Collector owns the informers and produces fleet.Snapshot.
 //
-// It keeps its own typed maps rather than reading through the informer stores
-// on demand: decoding unstructured objects is reflection-heavy, and doing it
-// once per watch event instead of once per object per HTTP request is the
-// difference between a dashboard that scales to a few thousand runners and one
-// that does not.
+// It keeps its own typed maps rather than reading through the informer stores on
+// demand: decoding unstructured objects is reflection-heavy, and doing it once
+// per watch event instead of once per object per HTTP request is what lets this
+// scale to a few thousand runners.
 type Collector struct {
 	clients *Clients
 	cfg     config.Config
@@ -143,10 +142,9 @@ func NewCollector(clients *Clients, cfg config.Config, log zerolog.Logger) *Coll
 // Start probes the available data sources, launches the informers and blocks
 // until their caches sync or the boot deadline passes.
 //
-// ctx governs the lifetime of every informer, not just the wait: cancelling it
-// shuts the watches down. A missing CRD, an absent metrics-server or denied
-// RBAC all return nil and leave a fleet.Source explaining the gap; only a
-// cluster we cannot reach at all is an error.
+// ctx governs the lifetime of every informer, not just the wait. A missing CRD,
+// an absent metrics-server or denied RBAC all return nil and leave a fleet.Source
+// explaining the gap; only a cluster we cannot reach at all is an error.
 func (c *Collector) Start(ctx context.Context) error {
 	now := time.Now()
 	scope := c.scope()
@@ -195,9 +193,8 @@ func (c *Collector) HasSynced() bool { return c.synced.Load() }
 // Snapshot returns the current fleet state. Safe for concurrent use.
 //
 // The result is rebuilt only when something changed, then handed out with its
-// top-level slices copied. The copy is not paranoia: fleet.SortRunners sorts in
-// place, so a view that sorts a shared slice would race against every other
-// request.
+// top-level slices copied. fleet.SortRunners sorts in place, so a view that
+// sorted a shared slice would race against every other request.
 func (c *Collector) Snapshot() fleet.Snapshot {
 	c.mu.RLock()
 	// A pending watch failure expires on a timer rather than on an event, so
@@ -261,20 +258,14 @@ func (c *Collector) snapshotInputLocked() SnapshotInput {
 // c.mu.
 //
 // It deliberately does not consult the arc-crds source. That verdict is an
-// aggregate over four resources — probeARCCRDs marks it unavailable when any
-// one of them is absent or denied while the rest keep working — and it is
-// computed exactly once, at boot, with nothing that ever re-probes it. Reading
-// it here would let a missing autoscalinglisteners rule pin a "we cannot see
-// runners" answer for the life of the process.
-//
-// Both inputs here are live and self-healing: HasSynced flips true when the
-// initial LIST lands, and the watch stamp ages out on the same TTL that clears
-// the source overlay.
+// aggregate over four resources and is computed exactly once, at boot, with
+// nothing that ever re-probes it. Reading it here would let a missing
+// autoscalinglisteners rule pin a "we cannot see runners" answer for the life of
+// the process. Both inputs used here are live and self-healing instead.
 //
 // Calling HasSynced under c.mu is safe because the dependency only runs one way:
 // it takes the informer's own locks, and the event handlers that take c.mu are
-// invoked from the shared informer's own goroutine rather than inline while
-// those locks are held.
+// invoked from the informer's goroutine rather than inline while those are held.
 func (c *Collector) runnersDegradedLocked(now time.Time) bool {
 	// No informer at all: the runner list is empty for a reason that has
 	// nothing to do with the fleet being idle. Nothing is ever tracked in that
@@ -315,15 +306,12 @@ const defaultListenerMetricsPath = "/metrics"
 // metrics, so the scraper can cover a whole fleet instead of one scale set.
 //
 // ARC runs one AutoscalingListener pod per AutoscalingRunnerSet and each serves
-// only its own scale set's series, so a single configured URL covers exactly one
-// set however many there are — and a Service in front of them is worse, because
-// a keep-alive connection pins to whichever pod it reached first and then jumps
-// to another when it is recycled.
+// only its own series, so a single configured URL covers exactly one set. A
+// Service in front of them is worse: a keep-alive connection pins to whichever
+// pod it reached first and then jumps to another when it is recycled.
 //
-// Everything this needs is already cached: the controller namespace is watched
-// unfiltered for listener health, and trimPod keeps status.podIP and the
-// container ports. Targets are rebuilt on every call rather than remembered,
-// because a pod IP is recycled the moment the address is.
+// Targets are rebuilt on every call rather than remembered, because a pod IP is
+// recycled the moment the address is.
 func (c *Collector) ListenerTargets() []fleet.ListenerTarget {
 	path := c.cfg.ListenerMetricsPath
 	if path == "" {
@@ -345,21 +333,18 @@ func (c *Collector) ListenerTargets() []fleet.ListenerTarget {
 		if pod.Status.Phase != corev1.PodRunning {
 			continue
 		}
-		// The scale set labels are what separates a listener from the controller
-		// manager, which lives in the same namespace and also serves metrics —
-		// its own gha_controller_* series, which this parser does not read. They
-		// are also the only link that survives across ARC versions; the
-		// component label does not, which is why the informer above is
-		// unfiltered.
+		// The scale set labels are what separates a listener from the controller manager,
+		// which lives in the same namespace and also serves metrics. They are also the
+		// only link that survives across ARC versions — the component label does not,
+		// which is why the informer above is unfiltered.
 		set := pod.Labels[arcapi.LabelScaleSetName]
 		ns := pod.Labels[arcapi.LabelScaleSetNamespace]
 		if set == "" || ns == "" {
 			continue
 		}
-		// Runner pods carry those same labels, and land here if runners share
-		// the controller namespace. They expose no ports, so the port lookup
-		// below already excludes them — this is belt and braces for the day
-		// something gives them one.
+		// Runner pods carry those same labels, and land here if runners share the
+		// controller namespace. They expose no ports, so the port lookup below already
+		// excludes them — this is belt and braces.
 		if pod.Labels[arcapi.LabelEphemeralRunner] == "True" {
 			continue
 		}
@@ -385,7 +370,6 @@ func (c *Collector) ListenerTargets() []fleet.ListenerTarget {
 	return out
 }
 
-// metricsPortOf finds the listener's metrics port by name.
 func metricsPortOf(pod *corev1.Pod) (int32, bool) {
 	for _, ctr := range pod.Spec.Containers {
 		for _, p := range ctr.Ports {
@@ -420,16 +404,14 @@ func (c *Collector) SetQueueDepth(perSet map[string]int, known bool) {
 	c.touch()
 }
 
-// SetSource records the health of an externally-owned source, such as the
-// metrics poller or the listener scraper.
+// SetSource records the health of an externally-owned source, such as the metrics
+// poller or the listener scraper.
 //
-// Only a change of verdict wakes subscribers. CheckedAt moves on every probe,
-// so treating each call as news would make a source that reports the same thing
-// on a timer indistinguishable from one that just changed — and worse, a source
-// whose failure is itself reported by a subscriber would sustain a loop: the
-// history store reports a failed write through here, that wakes the recorder,
-// the recorder writes and fails again. The freshest CheckedAt is still stored,
-// so the strip keeps its real timestamp; it just rides out on the next change.
+// Only a change of verdict wakes subscribers. CheckedAt moves on every probe, and
+// a source whose failure is itself reported by a subscriber would otherwise
+// sustain a loop: the history store reports a failed write through here, that
+// wakes the recorder, the recorder writes and fails again. The freshest CheckedAt
+// is still stored; it just rides out on the next change.
 func (c *Collector) SetSource(s fleet.Source) {
 	if s.CheckedAt.IsZero() {
 		s.CheckedAt = time.Now()
@@ -505,8 +487,6 @@ func (c *Collector) runNotifier(ctx context.Context) {
 	}
 }
 
-// --- informers --------------------------------------------------------------
-
 // scope resolves which namespaces to watch. An empty namespace list means the
 // whole cluster, which the informer factories spell as the empty string.
 func (c *Collector) scope() namespaceScope {
@@ -520,10 +500,10 @@ func (c *Collector) scope() namespaceScope {
 // startCustomResourceInformers launches one dynamic informer per available ARC
 // resource per watched namespace.
 //
-// Every informer is gated on the RESTMapper verdict computed earlier. This is
-// not an optimisation: a dynamic informer over a resource whose CRD is not
-// installed never reports an error from ForResource, it just retries the 404
-// forever and blocks WaitForCacheSync until the boot deadline.
+// Every informer is gated on the RESTMapper verdict computed earlier. This is not
+// an optimisation: a dynamic informer over a resource whose CRD is not installed
+// never reports an error from ForResource, it retries the 404 forever and blocks
+// WaitForCacheSync until the boot deadline.
 func (c *Collector) startCustomResourceInformers(ctx context.Context, scope namespaceScope, usable map[schema.GroupVersionResource]bool) []cache.InformerSynced {
 	var synced []cache.InformerSynced
 
@@ -651,15 +631,13 @@ func (c *Collector) attachWatchErrorHandler(informer cache.SharedIndexInformer, 
 // noteWatchFailure records a watch error against a data source, and against the
 // resource it came from.
 //
-// Kept apart from the probe results because it has to expire. The reflector
-// retries roughly once a second while a watch is broken, so a failure we have
-// not seen for a minute has healed — whereas writing it into the probe results
-// would leave the control-plane strip red for the rest of the process's life
+// Kept apart from the probe results because it has to expire. Writing it into
+// them would leave the control-plane strip red for the rest of the process's life
 // after one blip, with nothing able to clear it.
 //
 // resource is tracked as well as source because the source is coarse: every ARC
-// resource reports as arc-crds, so the source alone cannot say whether the
-// runner cache in particular is trustworthy.
+// resource reports as arc-crds, so the source alone cannot say whether the runner
+// cache in particular is trustworthy.
 func (c *Collector) noteWatchFailure(source, resource, reason string) {
 	now := time.Now()
 	c.mu.Lock()
@@ -698,9 +676,8 @@ func displayNamespace(ns string) string {
 // trimPod strips the parts of a runner pod nobody renders.
 //
 // ARC injects a large environment block into every runner container, and
-// managedFields on a pod that several controllers have touched is comparable in
-// size to the spec. At a few thousand runners those two dominate the process's
-// RSS, and neither is ever displayed.
+// managedFields on a much-touched pod is comparable in size to the spec. At a few
+// thousand runners those two dominate the process's RSS.
 func trimPod(obj any) (any, error) {
 	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
 		trimmed, err := trimPod(tombstone.Obj)
@@ -730,12 +707,10 @@ func trimPod(obj any) (any, error) {
 // trimCustomResource strips what the dynamic caches would otherwise hold and
 // nothing would ever read.
 //
-// EphemeralRunner.spec embeds an entire pod template — ARC's large environment
-// block included — and there is one per runner. Nothing in this package touches
-// it (image, resources and node all come from the pod or from the scale set's
-// template), so at a few thousand runners it is simply the biggest thing in the
-// process for no reason. Anything that later needs a field from that spec has
-// to stop dropping it here.
+// EphemeralRunner.spec embeds an entire pod template, and there is one per
+// runner. Nothing in this package touches it — image, resources and node all come
+// from the pod or from the scale set's template. Anything that later needs a
+// field from that spec has to stop dropping it here.
 func trimCustomResource(gvr schema.GroupVersionResource) cache.TransformFunc {
 	return func(obj any) (any, error) {
 		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
@@ -758,14 +733,11 @@ func trimCustomResource(gvr schema.GroupVersionResource) cache.TransformFunc {
 	}
 }
 
-// --- event handlers ---------------------------------------------------------
-
 // applyCustomResource decodes one unstructured object into its vendored type.
 //
 // The decode happens here, once per watch event, because
 // DefaultUnstructuredConverter is reflection-heavy — running it per object per
-// HTTP request is what turns a 3000-runner fleet into a second of CPU per page
-// view.
+// HTTP request is what turns a 3000-runner fleet into a second of CPU per page.
 func (c *Collector) applyCustomResource(gvr schema.GroupVersionResource, obj any, remove bool) {
 	u, ok := asUnstructured(obj)
 	if !ok {
@@ -864,8 +836,6 @@ func asPod(obj any) (*corev1.Pod, bool) {
 	pod, ok := obj.(*corev1.Pod)
 	return pod, ok
 }
-
-// --- controller version -----------------------------------------------------
 
 func (c *Collector) setControllerVersion(v string) {
 	if v == "" {

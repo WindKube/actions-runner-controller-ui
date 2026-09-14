@@ -29,16 +29,15 @@ const MetricsGroupVersion = "metrics.k8s.io/v1beta1"
 // server we cannot talk to at all, as opposed to one that merely refuses us.
 const unreachablePrefix = "api server unreachable"
 
-// Three different questions get asked with three different APIs, and mixing
-// them up produces confidently wrong answers:
+// Three different questions get asked with three different APIs, and mixing them
+// up produces confidently wrong answers:
 //
 //   - "does this aggregated API exist?" is discovery. metrics.k8s.io is an
 //     APIService, not a CRD, so the RESTMapper is the wrong instrument.
 //   - "is this CRD installed?" is the RESTMapper, because a dynamic informer on
 //     a missing resource does not fail, it retries forever.
 //   - "am I allowed?" is SelfSubjectAccessReview, which needs no permissions of
-//     its own — it is granted to system:authenticated — so it is the one probe
-//     that cannot itself be blocked by the RBAC it is checking.
+//     its own, so it cannot be blocked by the RBAC it is checking.
 
 // probeKubernetes checks that the API server answers and that we may list and
 // watch the pods every view depends on.
@@ -54,11 +53,10 @@ func probeKubernetes(ctx context.Context, kube kubernetes.Interface, disc discov
 			accessCheck{namespace: ns, resource: "pods", verb: "watch"},
 		)
 	}
-	// Both verbs here too. startPodInformers runs a real informer in the
-	// controller namespace, and an informer watches as well as lists — probing
-	// only `list` lets a missing `watch` through, so boot reports Kubernetes as
-	// available and the gap shows up later as a reflector error in the logs,
-	// far from anything that names RBAC.
+	// Both verbs here too. startPodInformers runs a real informer, and an informer
+	// watches as well as lists — probing only `list` lets a missing `watch` through,
+	// so boot reports Kubernetes as available and the gap surfaces later as a
+	// reflector error far from anything that names RBAC.
 	checks = append(checks,
 		accessCheck{namespace: cfg.controller, resource: "pods", verb: "list"},
 		accessCheck{namespace: cfg.controller, resource: "pods", verb: "watch"},
@@ -138,10 +136,8 @@ func probeARCCRDs(ctx context.Context, kube kubernetes.Interface, mapper meta.RE
 		slices.Sort(denied)
 		return unavailable(fleet.SourceARCCRDs, "missing RBAC: "+strings.Join(denied, ", "), now), usable
 	}
-	// Built into a fresh slice rather than appended onto notInstalled: append
-	// would write through that slice's spare capacity, so the two would alias.
-	// Nothing reads notInstalled afterwards today, which is exactly the kind of
-	// thing a later edit quietly invalidates.
+	// Built into a fresh slice rather than appended onto notInstalled: append would
+	// write through that slice's spare capacity, so the two would alias.
 	missing := make([]string, 0, len(notInstalled)+len(unreadable))
 	missing = append(missing, notInstalled...)
 	missing = append(missing, unreadable...)
@@ -199,8 +195,8 @@ func (a accessCheck) String() string {
 //
 // A failure to run the review at all is deliberately NOT reported as a denial:
 // SelfSubjectAccessReview requires no permissions, so an error means the API
-// server is unhappy, and guessing "denied" would blank the dashboard for a
-// reason that has nothing to do with RBAC.
+// server is unhappy, and guessing "denied" would blank the dashboard for a reason
+// unrelated to RBAC.
 func deniedChecks(ctx context.Context, kube kubernetes.Interface, checks []accessCheck) []string {
 	var denied []string
 	for _, chk := range checks {

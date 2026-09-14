@@ -34,27 +34,21 @@ const (
 
 	// eventPageSize bounds ONE API response, and nothing else.
 	//
-	// ListOptions.Limit is PAGINATION, not selection: the API server answers
-	// with the first page in its own key order, and event names embed the
-	// emission time, so page one is the OLDEST events. A single limited list
-	// therefore cannot see the newest event for any pod with more history than
-	// the limit, and no amount of local sorting recovers what was never sent —
-	// which is why EventsForPod follows list.Continue instead of reading one
-	// page. This number only keeps a single response (and the memory it decodes
-	// into) bounded against the busiest collection in the cluster.
+	// ListOptions.Limit is PAGINATION, not selection: the API server answers with the
+	// first page in its own key order, and event names embed the emission time, so
+	// page one is the OLDEST events. A single limited list therefore cannot see the
+	// newest event for any pod with more history than the limit, which is why
+	// EventsForPod follows list.Continue instead of reading one page.
 	eventPageSize = 500
 
 	// eventPageBudget caps how many pages one uncached call will follow, so a
-	// pathological emitter cannot turn opening a runner page into an unbounded
-	// walk over its event history. The budget is counted in PAGES, not events:
-	// Limit is a maximum, so eventPageSize * eventPageBudget is a ceiling on
-	// what the loop can read and never a floor. See EventsForPod.
+	// pathological emitter cannot turn opening a runner page into an unbounded walk.
+	// The budget is counted in PAGES, not events: Limit is a maximum, so
+	// eventPageSize * eventPageBudget is a ceiling and never a floor.
 	eventPageBudget = 20
 )
 
 // EventsForPod fetches recent events for one pod, on demand and cached ~10s.
-//
-// Three deliberate choices:
 //
 // The core/v1 Event API, not events.k8s.io/v1 — the involvedObject.* field
 // selectors the API server indexes only exist on the legacy type, and without
@@ -62,34 +56,22 @@ const (
 //
 // The uid is part of the selector, not just the name. ARC derives runner pod
 // names from the scale set, so names DO repeat across generations; filtering on
-// name alone shows a live runner the death throes of a pod that was deleted an
-// hour ago.
+// name alone shows a live runner the death throes of a pod deleted an hour ago.
 //
-// No informer. Events are the highest-churn objects in any cluster — watching
-// them cluster-wide costs more than the rest of this dashboard combined, to
-// serve one panel almost nobody has open.
+// No informer. Events are the highest-churn objects in any cluster, and watching
+// them cluster-wide would cost more than the rest of this dashboard combined.
 //
-// An empty result is normal: the API server's default --event-ttl is one hour
-// (see EventRetention), so anything older has been garbage collected. Callers
-// should render "no recent events", not "nothing ever happened".
+// An empty result is normal: the API server's default --event-ttl is one hour, so
+// anything older has been garbage collected. Callers should render "no recent
+// events", not "nothing ever happened".
 //
-// What is guaranteed: the continue token is followed (until it is empty or the
-// page budget below runs out) and the running set is re-sorted as each page
-// arrives, so the result is the newest maxEventsPerPod events of everything
-// read, newest first. A single limited list returns the OLDEST page instead,
-// which is the whole reason for the loop.
-//
-// The remaining bound: paging stops after eventPageBudget pages, and that is a
-// bound on pages, not on this pod's events. ListOptions.Limit documents that a
-// limited list "may return fewer than the requested amount of items (up to zero
-// items) in the event all requested objects are filtered out", which is what a
-// field selector over a namespace-wide event stream does, so the pages read
-// cover at most eventPageSize * eventPageBudget of this pod's events and may
-// cover far fewer. Whatever the budget bought, the result is the newest of it;
-// anything older than that window is invisible, and the log says so. Cost per
-// uncached call is at most eventPageBudget requests of eventPageSize items,
-// decoded one page at a time and drawn from the rate limiter every client here
-// shares; the ~10s cache absorbs repeats.
+// The continue token is followed until it is empty or the page budget runs out,
+// and the running set is re-sorted as each page arrives, so the result is the
+// newest maxEventsPerPod events of everything read. The budget bounds pages, not
+// this pod's events: a field selector over a namespace-wide stream may return a
+// short or empty page, so the pages read cover at most eventPageSize *
+// eventPageBudget of this pod's events and may cover far fewer. Anything older
+// than that window is invisible, and the log says so.
 func (c *Collector) EventsForPod(ctx context.Context, namespace, name string, uid types.UID) ([]fleet.Event, error) {
 	key := fmt.Sprintf("%s/%s/%s", namespace, name, uid)
 	if cached, ok := c.events.Get(key); ok {
@@ -115,11 +97,10 @@ func (c *Collector) EventsForPod(ctx context.Context, namespace, name string, ui
 		for i := range list.Items {
 			events = append(events, convertEvent(&list.Items[i]))
 		}
-		// Sorted and trimmed per page rather than once at the end: the newest
-		// still win across every page read, while the slice never holds more
-		// than one page plus the panel's worth. A field selector may also return
-		// a short — even empty — page with a continue token, so the loop keys
-		// off the token and never off how much a page contained.
+		// Sorted and trimmed per page rather than once at the end: the newest still win
+		// across every page read, while the slice never holds more than one page plus the
+		// panel's worth. A field selector may also return a short — even empty — page
+		// with a continue token, so the loop keys off the token, never off page size.
 		events = newestEvents(events)
 		if list.Continue == "" {
 			break
@@ -162,14 +143,13 @@ func newestEvents(events []fleet.Event) []fleet.Event {
 	return events
 }
 
-// convertEvent picks the most recent of the three timestamps an Event may
-// carry. Modern emitters set eventTime and leave the legacy fields zero, while
-// the kubelet still sets lastTimestamp, so checking only one loses half of them.
+// convertEvent picks the most recent of the three timestamps an Event may carry.
+// Modern emitters set eventTime and leave the legacy fields zero, while the
+// kubelet still sets lastTimestamp, so checking only one loses half of them.
 //
-// The genuine maximum, not the first non-zero in some fixed order: an emitter
-// that writes both — a fresh eventTime beside a lastTimestamp it stopped
-// updating — would otherwise be stamped with the stale one and sort into the
-// past, which is precisely backwards for a panel ordered by recency.
+// The genuine maximum, not the first non-zero in a fixed order: an emitter that
+// writes both — a fresh eventTime beside a lastTimestamp it stopped updating —
+// would otherwise be stamped with the stale one and sort into the past.
 func convertEvent(e *corev1.Event) fleet.Event {
 	at := newestTime(e.LastTimestamp.Time, e.EventTime.Time, e.FirstTimestamp.Time)
 	count := e.Count

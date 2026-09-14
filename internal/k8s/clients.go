@@ -1,19 +1,16 @@
-// Package k8s is the dashboard's read-only Kubernetes access layer: one bundle
-// of clients derived from a single rest.Config, a set of informers over the ARC
-// custom resources and runner pods, and the builder that turns those caches
-// into a fleet.Snapshot.
+// Package k8s is the dashboard's read-only Kubernetes access layer: one bundle of
+// clients derived from a single rest.Config, a set of informers over the ARC
+// custom resources and runner pods, and the builder that turns those caches into
+// a fleet.Snapshot.
 //
-// Two ideas shape everything here.
+// Nothing is mandatory. A cluster with no metrics-server, no ARC CRDs installed
+// and RBAC that grants us half of what we ask for must still let the process boot
+// and serve. Every such gap becomes a fleet.Source marked unavailable, never an
+// error at startup and never a page of plausible zeros.
 //
-// First, nothing is mandatory. A cluster with no metrics-server, no ARC CRDs
-// installed and RBAC that grants us half of what we ask for must still let the
-// process boot and serve. Every such gap becomes a fleet.Source marked
-// unavailable, never an error at startup and never a page of plausible zeros.
-//
-// Second, the interesting logic must be testable without a cluster. The ARC
-// semantics that are easy to get subtly wrong — busy is a job id and not a pod
-// phase, counts live on the EphemeralRunnerSet, a nil maxRunners is unbounded —
-// all live in BuildSnapshot, a pure function over typed objects.
+// The ARC semantics that are easy to get subtly wrong — busy is a job id and not
+// a pod phase, counts live on the EphemeralRunnerSet, a nil maxRunners is
+// unbounded — all live in BuildSnapshot, a pure function over typed objects.
 package k8s
 
 import (
@@ -35,10 +32,8 @@ import (
 	"arc-ui/internal/config"
 )
 
-// Clients bundles everything derived from one *rest.Config.
-//
-// All four clientsets share a single rate limiter — see NewClients for why that
-// is not the default and why it matters.
+// Clients bundles everything derived from one *rest.Config. All four clientsets
+// share a single rate limiter; see NewClients for why that is not the default.
 type Clients struct {
 	Kube      kubernetes.Interface
 	Dynamic   dynamic.Interface
@@ -50,9 +45,8 @@ type Clients struct {
 
 // NewClients resolves a cluster connection and builds every client from it.
 //
-// It returns an error only when no connection can be established at all.
-// Whether any particular API is actually present or permitted is a question for
-// the source probes, not for construction.
+// It returns an error only when no connection can be established at all. Whether
+// any particular API is present or permitted is a question for the source probes.
 func NewClients(cfg config.Config, log zerolog.Logger, userAgent string) (*Clients, error) {
 	base, err := resolveRESTConfig(cfg, log)
 	if err != nil {
@@ -67,11 +61,10 @@ func NewClients(cfg config.Config, log zerolog.Logger, userAgent string) (*Clien
 	base.Burst = cfg.KubeBurst
 	base.UserAgent = userAgent
 
-	// Every clientset built from a config with a nil RateLimiter constructs its
-	// OWN token bucket from QPS/Burst. Four clientsets at QPS=50 therefore mean
-	// 200 QPS against the API server, which is exactly the kind of surprise that
-	// gets a read-only dashboard blamed for a control-plane outage. Handing them
-	// one shared limiter makes the configured budget the real budget.
+	// Every clientset built from a config with a nil RateLimiter constructs its OWN
+	// token bucket from QPS/Burst. Four clientsets at QPS=50 therefore mean 200 QPS
+	// against the API server. Handing them one shared limiter makes the configured
+	// budget the real budget.
 	base.RateLimiter = flowcontrol.NewTokenBucketRateLimiter(cfg.KubeQPS, cfg.KubeBurst)
 
 	kube, err := kubernetes.NewForConfig(rest.CopyConfig(base))
