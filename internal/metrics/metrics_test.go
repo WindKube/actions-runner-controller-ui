@@ -374,23 +374,3 @@ func TestKey(t *testing.T) {
 
 	assert.Equal(t, "arc-runners/runner-1", Key("arc-runners", "runner-1"), "Key")
 }
-
-func TestHealthTrackerLogsTransitionsOnly(t *testing.T) {
-	t.Parallel()
-
-	var buf strings.Builder
-	log := zerolog.New(&buf).Level(zerolog.InfoLevel)
-
-	var h healthTracker
-	h.fail(log, "boom")
-	h.fail(log, "boom")
-	h.fail(log, "boom")
-	assert.Equal(t, 1, strings.Count(buf.String(), "source unavailable"), "identical failures must be logged once above debug")
-
-	h.fail(log, "different boom")
-	assert.Equal(t, 2, strings.Count(buf.String(), "source unavailable"), "a changed failure mode must be logged")
-
-	h.ok(log)
-	h.ok(log)
-	assert.Equal(t, 1, strings.Count(buf.String(), "source recovered"), "recovery must be logged once")
-}

@@ -21,6 +21,7 @@ import (
 
 	arcv1alpha1 "arc-ui/internal/arcapi/v1alpha1"
 	"arc-ui/internal/fleet"
+	"arc-ui/internal/health"
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
@@ -57,7 +58,7 @@ type Poller struct {
 	log        zerolog.Logger
 	sink       Sink
 
-	health healthTracker
+	health health.Tracker
 	// now is swapped in tests; production always uses time.Now.
 	now func() time.Time
 }
@@ -70,6 +71,7 @@ func NewPoller(client metricsclient.Interface, namespaces []string, interval tim
 	}
 	return &Poller{
 		client:     client,
+		health:     health.New("poll"),
 		namespaces: namespaces,
 		interval:   interval,
 		log:        log.With().Str("component", "metrics-poller").Logger(),
@@ -133,7 +135,7 @@ func (p *Poller) tick(ctx context.Context) {
 			// cluster of being broken.
 			return
 		}
-		p.health.fail(p.log, err.Error())
+		p.health.Fail(p.log, err.Error())
 		p.sink.SetSource(fleet.Source{
 			Name:      fleet.SourceMetrics,
 			Available: false,
@@ -147,7 +149,7 @@ func (p *Poller) tick(ctx context.Context) {
 			return
 		}
 	} else {
-		p.health.ok(p.log)
+		p.health.OK(p.log)
 		p.sink.SetSource(fleet.Source{
 			Name:      fleet.SourceMetrics,
 			Available: true,

@@ -11,6 +11,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	"github.com/samber/lo"
 )
 
 // Metric names ARC's listener exposes. Only the ones the dashboard reads are
@@ -101,30 +102,19 @@ type Metrics struct {
 	CompletedJobsTotal map[string]float64
 }
 
-// Parse reads Prometheus text-format exposition into Metrics.
+// parse reads Prometheus text-format exposition into Metrics, along with the
+// namespace index it built on the way, from which the scale set name collisions
+// fall out — a deployment mistake worth naming, but not a parse error.
 //
 // It is deliberately tolerant: unknown metric families are ignored, histograms
 // and summaries are skipped, and a family the listener never exposed just
 // leaves its map nil. A scrape that parses cleanly but contains nothing we
 // recognise is a valid — if useless — result, not an error.
 //
-// This entry point discards the collision report a cross-namespace scale set
-// name produces (see collision). Callers that scrape on a timer want it, and
-// should use parse.
-func Parse(r io.Reader) (Metrics, error) {
-	m, _, err := parse(r)
-	return m, err
-}
-
-// parse is Parse plus the namespace index it built on the way, from which the
-// scale set name collisions fall out — a deployment mistake worth naming, but
-// not a parse error.
-//
-// The index rather than the collisions themselves, because one listener serves
-// one scale set: two same-named sets in different namespaces now produce two
-// separate bodies, and the collision only exists once their indexes are unioned.
-// Parse keeps the two-result signature because that is the surface outside this
-// package compiles against.
+// It returns the index rather than the collisions themselves, because one
+// listener serves one scale set: two same-named sets in different namespaces
+// produce two separate bodies, and the collision only exists once their indexes
+// are unioned.
 func parse(r io.Reader) (Metrics, namespaceIndex, error) {
 	// The validation scheme must be passed explicitly: a zero-valued
 	// TextParser carries model.UnsetValidation and panics on the first metric
@@ -207,38 +197,6 @@ func foldKeep(dst *map[string]float64, src map[string]float64) {
 	}
 }
 
-// union folds other into i, so a name claimed by two listeners in two
-// namespaces is the collision it would have been inside one body.
-func (i namespaceIndex) union(other namespaceIndex) {
-	for set, namespaces := range other {
-		for ns := range namespaces {
-			i.add(set, ns)
-		}
-	}
-}
-
-// collision is one scale set name that turned up under more than one distinct
-// namespace label value in the families whose values cannot be added together
-// (see perScaleSet). It is a property of how the exposition is labelled rather
-// than of this scrape: the same labels next tick produce the same report, and
-// will until someone changes them.
-//
-// That is why parse reports collisions rather than logging them where it finds
-// them. The body is untrusted and can carry tens of thousands of them, the same
-// fact repeats in every ceiling family, and a scraper re-reads all of it every
-// interval — so how loudly to say this needs to know how often it is being
-// told, which only the caller knows. See collisionTracker.
-type collision struct {
-	// set is the scale set name every namespace in namespaces laid claim to.
-	set string
-	// namespaces is each namespace that carried it, sorted, always at least
-	// two. "" is a member like any other and means a series carried no
-	// namespace label. Within one family a labelled series always beats it
-	// (see preferNamespace) — but a family only that member reached, because a
-	// proxy stripped the label from it alone, still reports its value.
-	namespaces []string
-}
-
 // namespaceIndex records which namespaces claimed each scale set name.
 //
 // Collisions are spotted on the namespace label alone, because it is the only
@@ -249,6 +207,12 @@ type collision struct {
 // wins and the rest are dropped. ARC's listener always labels these gauges, so
 // this needs a listener or a proxy that does not — but when it happens it is
 // silent, and nothing here promises otherwise.
+//
+// The index is reported rather than logged where it is found: the body is
+// untrusted and can carry tens of thousands of collisions, the same fact repeats
+// in every ceiling family, and a scraper re-reads all of it every interval — so
+// how loudly to say this needs to know how often it is being told, which only
+// the caller knows. See collisionTracker.
 type namespaceIndex map[string]map[string]struct{}
 
 // add records that set was seen under ns, which is "" when the series carries
@@ -262,22 +226,49 @@ func (i namespaceIndex) add(set, ns string) {
 	seen[ns] = struct{}{}
 }
 
-// collisions lists the names more than one namespace claimed.
+// collisions reports the names more than one namespace claimed: how many there
+// are, and at most maxNamedCollisions of them rendered for a log line.
 //
-// Both the list and each name's namespaces are sorted, so the same deployment
-// produces byte-identical reports scrape after scrape however the listener
+// Both the list and each name's namespaces are sorted, and every part that comes
+// from the scrape body is cut down by truncateLabel, so the same deployment
+// produces the same bounded report scrape after scrape however the listener
 // ordered its series. collisionTracker's dedup depends on that: an unstable
 // report would look like a new fact every tick, which is the noise the report
 // exists to avoid.
-func (i namespaceIndex) collisions() []collision {
-	var out []collision
+func (i namespaceIndex) collisions() (count int, rendered []string) {
+	names := make([]string, 0, len(i))
 	for set, seen := range i {
 		if len(seen) > 1 {
-			out = append(out, collision{set: set, namespaces: slices.Sorted(maps.Keys(seen))})
+			names = append(names, set)
 		}
 	}
-	slices.SortFunc(out, func(a, b collision) int { return strings.Compare(a.set, b.set) })
-	return out
+	slices.Sort(names)
+
+	for _, set := range names[:min(len(names), maxNamedCollisions)] {
+		all := slices.Sorted(maps.Keys(i[set]))
+		shown := lo.Map(all[:min(len(all), maxNamedNamespaces)], func(ns string, _ int) string {
+			if ns == "" {
+				return unlabelledNamespace
+			}
+			return truncateLabel(ns)
+		})
+		entry := truncateLabel(set) + " in " + strings.Join(shown, ", ")
+		if extra := len(all) - len(shown); extra > 0 {
+			entry += fmt.Sprintf(" and %d more", extra)
+		}
+		rendered = append(rendered, entry)
+	}
+	return len(names), rendered
+}
+
+// union folds other into i, so a name claimed by two listeners in two
+// namespaces is the collision it would have been inside one body.
+func (i namespaceIndex) union(other namespaceIndex) {
+	for set, namespaces := range other {
+		for ns := range namespaces {
+			i.add(set, ns)
+		}
+	}
 }
 
 // collect pulls one metric family out, keyed by scale set name.
