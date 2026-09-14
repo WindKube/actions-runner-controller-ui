@@ -53,6 +53,12 @@ metrics is worse than one that says so.
 server: deep links work, back and forward work, and the whole thing degrades to
 plain HTML. [Datastar][datastar]'s only job is keeping it fresh over SSE.
 
+**Auto-refresh is opt-in.** A page load holds no stream open. The `⟳ auto`
+toggle beside the range picker is what starts one, and `?live=1` in the URL is
+what a shared link or a wall display carries to come back live. Changing a range
+or a filter still refreshes what you are looking at either way — with the toggle
+off it simply does not leave a connection behind.
+
 ## Screenshots
 
 Three views, each answering a different question.

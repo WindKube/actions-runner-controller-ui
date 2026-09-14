@@ -29,7 +29,7 @@ templ Document(p Page, body templ.Component) {
 		<body
 			class="bg-canvas text-fg-body font-sans text-[13px] antialiased min-h-screen"
 			data-signals={ p.Signals.JSON() }
-			data-init={ StreamCall(p.Stream) }
+			data-init={ InitStream(p.Stream) }
 		>
 			@Topbar(p)
 			<main class="mx-auto max-w-[1600px] px-4 pb-10">
@@ -57,6 +57,7 @@ templ Topbar(p Page) {
 			</nav>
 			<div class="flex-1"></div>
 			@RangePicker(p)
+			@LiveToggle(p)
 			@LiveIndicator(p)
 		</div>
 	</header>
@@ -79,6 +80,32 @@ templ RangePicker(p Page) {
 	</div>
 }
 
+// LiveToggle turns autorefresh on and off.
+//
+// Its appearance is driven by the signal rather than by p.Signals, unlike every
+// other control in this file. The topbar is not one of the regions the stream
+// patches, so a server-rendered pressed state would still say "off" after the
+// click that turned it on, and stay wrong until the next full page load.
+//
+// aria-pressed is the exception, and is rendered both ways on purpose: the
+// static attribute is what a page whose script never ran exposes, and Datastar
+// overwrites it from the signal from the first evaluation onwards.
+templ LiveToggle(p Page) {
+	<button
+		type="button"
+		class="flex items-center gap-1.5 h-[26px] px-2 rounded-md border text-[11px] font-mono cursor-pointer shrink-0"
+		data-class="{'border-accent/40 bg-accent/15 text-accent': $live, 'border-default text-fg-subtle hover:text-fg hover:bg-inset': !$live}"
+		aria-pressed={ fmt.Sprint(p.Signals.Live) }
+		data-attr="{'aria-pressed': $live ? 'true' : 'false'}"
+		title="auto-refresh: stream live updates into this page"
+		aria-label="auto-refresh"
+		data-on:click={ ToggleLive(p.Stream) }
+	>
+		<span aria-hidden="true">⟳</span>
+		auto
+	</button>
+}
+
 // LiveIndicator shows how long ago the last update arrived.
 //
 // The elapsed time is counted in the browser, not rendered by the server, and
@@ -86,6 +113,11 @@ templ RangePicker(p Page) {
 // whatever it last said when the stream died — displaying "1.2s" forever on a
 // page that had stopped updating entirely. Counting locally means a dead
 // stream is visible as a number that climbs.
+//
+// That climb is an alarm, so it must not fire at a page that is deliberately
+// not following the fleet: with autorefresh off this reads "paused" instead.
+// A red "stalled 47s" on a dashboard nobody asked to keep live would train
+// operators to ignore the one readout that tells them the stream has died.
 //
 // _seen and _ago are prefixed with an underscore so Datastar keeps them local:
 // signals matching /(^|\.)_/ are excluded from outgoing requests by default.
@@ -100,14 +132,20 @@ templ LiveIndicator(p Page) {
 	>
 		<span
 			class="inline-block w-[7px] h-[7px] rounded-full"
-			data-class="{'bg-success': $_ago < 30, 'bg-danger': $_ago >= 30, 'animate-pulse': $_ago < 30}"
+			data-class="{'bg-fg-subtle': !$live, 'bg-success': $live && $_ago < 30, 'bg-danger': $live && $_ago >= 30, 'animate-pulse': $live && $_ago < 30}"
 			aria-hidden="true"
 		></span>
 		<span
 			class="text-[11px] font-mono tabular-nums"
-			data-class="{'text-fg-subtle': $_ago < 30, 'text-danger': $_ago >= 30}"
-			data-text="$_ago < 30 ? `last event ${$_ago.toFixed(1)}s` : `stalled ${Math.round($_ago)}s`"
-		>last event —</span>
+			data-class="{'text-fg-subtle': !$live || $_ago < 30, 'text-danger': $live && $_ago >= 30}"
+			data-text="!$live ? 'paused' : ($_ago < 30 ? `last event ${$_ago.toFixed(1)}s` : `stalled ${Math.round($_ago)}s`)"
+		>
+			if p.Signals.Live {
+				last event —
+			} else {
+				paused
+			}
+		</span>
 	</div>
 }
 
