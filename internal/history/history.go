@@ -1,11 +1,6 @@
-// Package history adapts the time-series store to the contract the views
-// declare.
-//
-// It exists so that neither side has to know about the other: internal/web
-// states what a chart needs, internal/store states what SQLite can answer
-// efficiently, and this package is the twenty lines in between. Without it the
-// views would either import ent transitively or the store would grow
-// presentation types.
+// Package history adapts the time-series store to the contract the views declare,
+// so that neither side has to know about the other. Without it the views would
+// import ent transitively, or the store would grow presentation types.
 package history
 
 import (
@@ -23,8 +18,7 @@ import (
 //
 // COUNT(*) over samples scans an index — millions of rows once the hourly tier
 // has a year in it — and the SSE stream re-renders every panel on every snapshot
-// change, for every connected browser. Counted per render, the cheapest panel on
-// the page would be the most expensive thing the store does.
+// change, for every connected browser.
 const statsTTL = time.Minute
 
 // Queries is the slice of the store this adapter uses. Declaring it as an
@@ -54,7 +48,6 @@ type Adapter struct {
 
 var _ web.History = Adapter{}
 
-// New returns an adapter over q.
 func New(q Queries) Adapter {
 	return Adapter{Q: q, stats: &statsCache{clock: time.Now}}
 }
@@ -105,9 +98,7 @@ func (a Adapter) Stats(ctx context.Context) (web.StoreStats, error) {
 //
 // The lock is held across the count rather than only around the fields. Every
 // connected browser renders the footer on the same tick, so releasing it first
-// would let a cold cache launch one COUNT(*) per stream against a database with
-// one writer and a handful of readers; serialised, the first caller counts and
-// the rest read what it stored.
+// would let a cold cache launch one COUNT(*) per stream.
 func (c *statsCache) get(
 	ctx context.Context,
 	count func(context.Context) (web.StoreStats, error),
@@ -122,10 +113,9 @@ func (c *statsCache) get(
 
 	val, err := count(ctx)
 	if err != nil {
-		// Deliberately not cached: a failed count is usually a database busy
-		// for milliseconds, and memoising that would keep the footer broken for
-		// a minute after the store recovered. There is nothing worth serving
-		// from the cache in this branch anyway.
+		// Deliberately not cached: a failed count is usually a database busy for
+		// milliseconds, and memoising that would keep the footer broken for a minute
+		// after the store recovered.
 		return web.StoreStats{}, err
 	}
 
@@ -393,12 +383,10 @@ func storeScope(s web.Scope) (store.Scope, string) {
 
 // axisOf builds one time axis covering every metric returned.
 //
-// The metrics are bucketed identically by the store today, but they are
-// returned as independent slices and a metric with no rows for a bucket is
-// simply absent. Deriving the axis from the union and aligning onto it means a
-// partially populated result — metrics-server down for ten minutes, say —
-// leaves a gap in one series rather than shifting every later point of it
-// leftwards against the others.
+// The metrics are returned as independent slices, and a metric with no rows for
+// a bucket is simply absent. Deriving the axis from the union means a partially
+// populated result leaves a gap in one series rather than shifting every later
+// point of it leftwards against the others.
 func axisOf(series map[store.Metric][]store.Point) []time.Time {
 	seen := make(map[int64]struct{})
 	var axis []time.Time

@@ -1,6 +1,6 @@
 // Package config loads and validates the process configuration from the
 // environment. Everything is a single flat struct so the full surface is
-// visible in one place; nested prefixes buy nothing at this size.
+// visible in one place.
 package config
 
 import (
@@ -27,9 +27,8 @@ type Config struct {
 	// means "in-cluster if possible, else kubeconfig".
 	//
 	// metrics.k8s.io is an aggregated API served *through* the API server, so
-	// this one URL covers custom resources, pods, events and pod metrics
-	// alike. MetricsServerURL is a deprecated alias kept because earlier
-	// compose files set it; Load() folds it in and warns.
+	// this one URL covers custom resources, pods, events and pod metrics alike.
+	// MetricsServerURL is a deprecated alias; Load() folds it in and warns.
 	KubeAPIURL       string `env:"KUBE_API_URL"`
 	MetricsServerURL string `env:"METRICS_SERVER_URL"`
 
@@ -50,12 +49,10 @@ type Config struct {
 	// data and only burns API server quota.
 	ScrapeInterval time.Duration `env:"ARC_UI_SCRAPE_INTERVAL" envDefault:"15s"`
 	// ListenerMetricsURL is one ARC listener metrics endpoint, or an aggregator
-	// in front of several. Setting it disables discovery: it names a single
-	// endpoint to scrape, which is what a Prometheus /federate URL or a proxy
-	// needs. Left empty, the listener pods are discovered from the controller
-	// namespace instead, which is what a stock install wants — ARC runs one
-	// listener per scale set and each serves only its own series, so one URL
-	// covers one scale set out of however many there are.
+	// in front of several. Setting it disables discovery. Left empty, listener
+	// pods are discovered from the controller namespace instead: ARC runs one
+	// listener per scale set and each serves only its own series, so a single
+	// URL covers one scale set out of however many there are.
 	ListenerMetricsURL string `env:"ARC_UI_LISTENER_METRICS_URL"`
 	// ListenerMetricsPath is the path discovered listeners serve metrics on. It
 	// mirrors the controller chart's metrics.listenerEndpoint, which is
@@ -154,13 +151,12 @@ func Load() (Config, []Warning, error) {
 		return Config{}, warns, fmt.Errorf("ARC_UI_LISTENER_METRICS_PATH=%q must begin with /", cfg.ListenerMetricsPath)
 	}
 
-	// Both halves of the shutdown sequence are fed to time.After and
-	// context.WithTimeout, neither of which rejects a negative duration — they
-	// just fire immediately. Unchecked, ARC_UI_PRESTOP_DELAY=-1s silently skips
-	// the window that keeps the pod serving while endpoints controllers stop
+	// time.After and context.WithTimeout both accept negative durations and
+	// just fire immediately. Unchecked, ARC_UI_PRESTOP_DELAY=-1s skips the
+	// window that keeps the pod serving while endpoints controllers stop
 	// routing to it, and a non-positive ARC_UI_SHUTDOWN_TIMEOUT cuts in-flight
-	// requests and SSE streams at once and leaves the store no time to
-	// checkpoint. Both look like a clean shutdown in the logs.
+	// requests at once and leaves the store no time to checkpoint. Both look
+	// like a clean shutdown in the logs.
 	if cfg.PreStopDelay < 0 {
 		return Config{}, warns, fmt.Errorf("ARC_UI_PRESTOP_DELAY=%s must not be negative", cfg.PreStopDelay)
 	}

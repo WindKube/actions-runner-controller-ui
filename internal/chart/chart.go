@@ -1,10 +1,7 @@
 // Package chart turns numbers into SVG geometry strings.
 //
-// Every chart in this dashboard is server-rendered inline SVG: there is no
-// client-side charting library, so these functions produce the exact
-// `points="..."` attributes that the templates interpolate. That keeps live
-// updates cheap — a new sample means recomputing one polygon and pushing a
-// couple of kilobytes of markup down an already-open stream.
+// Every chart is server-rendered inline SVG, so these functions produce the
+// exact `points="..."` attributes the templates interpolate.
 //
 // All functions are pure and total: degenerate inputs (no samples, a zero
 // maximum, a single point) yield empty or flat geometry rather than NaN, so a
@@ -56,9 +53,8 @@ type DivergingBar struct {
 // Stacked builds cumulative area polygons for a stacked chart.
 //
 // values[b][i] is band b's value at sample i; every band must have the same
-// length. top is the padding reserved above the plot so the topmost band never
-// touches the frame. Bands are returned in reverse order so that the first
-// band in the input paints last and therefore sits visually on top.
+// length. top is padding reserved above the plot. Bands are returned in
+// reverse order so the first band in the input paints last and sits on top.
 func Stacked(values [][]float64, bands []Band, w, h, top, max float64) []Area {
 	n := sampleCount(values)
 	if n == 0 || max <= 0 || len(bands) == 0 {
@@ -97,8 +93,7 @@ func Stacked(values [][]float64, bands []Band, w, h, top, max float64) []Area {
 
 // Plot builds a line and the filled area beneath it. The series is compressed
 // by 18 units — zero sits 6 above the bottom edge, a full-scale value 12 below
-// the top — so the stroke stays clear of the viewBox edges and a value at the
-// maximum still shows its cap.
+// the top — so a value at the maximum still shows its cap.
 func Plot(vals []float64, w, h, max float64, fill, stroke string) Line {
 	if len(vals) == 0 || max <= 0 {
 		return Line{Fill: fill, Stroke: stroke}
@@ -184,9 +179,8 @@ func Diverging(up, down []float64, count int, w, h, centre, max, gap float64) []
 // GridLine is a horizontal rule with its right-margin value label.
 type GridLine struct {
 	Y string
-	// X2 is where the rule ends. Rules start at x=0 and span the full plot
-	// width, and carrying that width here is what keeps the template from
-	// having to know the viewBox the geometry was computed against.
+	// X2 is where the rule ends. Carrying it here is what keeps the template
+	// from having to know the viewBox the geometry was computed against.
 	X2    string
 	Label string
 	// TopPx positions the label in CSS pixels, since the label lives in the
@@ -260,8 +254,8 @@ func columns(count int, w, gap float64) (pitch, barW float64) {
 	return pitch, barW
 }
 
-// writePoint appends "x,y" to sb, space-separated from whatever is already
-// there, so callers never have to track which point is first.
+// writePoint appends "x,y" to sb, space-separated, so callers never have to
+// track which point is first.
 func writePoint(sb *strings.Builder, x, y string) {
 	if sb.Len() > 0 {
 		sb.WriteByte(' ')
