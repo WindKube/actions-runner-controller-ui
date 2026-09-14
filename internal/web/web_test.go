@@ -1596,3 +1596,98 @@ func TestJobStreamRejectsANonNumericID(t *testing.T) {
 	handler.StreamJob(rec, httptest.NewRequest(http.MethodGet, "/stream/jobs/nope", nil), "nope")
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
+
+// The history tabs came after autorefresh became opt-in, so they have to obey
+// it too: a filter click on a paused page opens a stream that paints the new
+// table once and closes, rather than holding a connection open per tab.
+func TestHistoryStreamsHonourTheAutorefreshToggle(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		stream func(*Handler) http.HandlerFunc
+	}{
+		{"jobs", func(h *Handler) http.HandlerFunc { return h.StreamJobs }},
+		{"workflows", func(h *Handler) http.HandlerFunc { return h.StreamWorkflows }},
+		{
+			"job detail",
+			func(h *Handler) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) { h.StreamJob(w, r, "7") }
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := handlerWith(&stubHistory{
+				enabled:  true,
+				jobs:     JobList{Jobs: []Job{sampleJob()}, Total: 1},
+				job:      sampleJob(),
+				jobFound: true,
+			})
+			srv := httptest.NewServer(tc.stream(handler))
+			defer srv.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+				streamAt(t, srv.URL, Signals{}), nil)
+			require.NoError(t, err)
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			reader := bufio.NewReader(resp.Body)
+			assert.NotZero(t, readUntilSignal(t, reader), "the paused stream sent no element patches")
+
+			// The table the click asked for is on screen, so the connection
+			// must end. Leaving it open would make the toggle a label.
+			done := make(chan error, 1)
+			go func() {
+				_, err := io.ReadAll(reader)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				assert.NoError(t, err, "the paused stream should end cleanly")
+			case <-time.After(5 * time.Second):
+				t.Fatal("a paused stream stayed open")
+			}
+		})
+	}
+}
+
+// And with the toggle on they stay open and re-render, so a job's usage chart
+// follows a run that is still going.
+func TestLiveJobStreamStaysOpenAndRepaints(t *testing.T) {
+	t.Parallel()
+
+	h := hub.New()
+	handler := handlerWith(&stubHistory{
+		enabled: true,
+		jobs:    JobList{Jobs: []Job{sampleJob()}, Total: 1},
+	})
+	handler.Hub = h
+	srv := httptest.NewServer(http.HandlerFunc(handler.StreamJobs))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		streamAt(t, srv.URL, Signals{Live: true}), nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	reader := bufio.NewReader(resp.Body)
+	require.NotZero(t, readUntilSignal(t, reader), "no initial paint")
+
+	// A fleet change has to reach a live history tab, or a job that just
+	// finished keeps reading as running until someone reloads.
+	h.Broadcast(now.Add(time.Second))
+	assert.NotPanics(t, func() { readUntilSignal(t, reader) },
+		"a live stream should paint again on a fleet change")
+}
