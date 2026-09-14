@@ -11,11 +11,14 @@ import (
 	"testing"
 	"time"
 
+	entsql "entgo.io/ent/dialect/sql"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"arc-ui/internal/fleet"
+	"arc-ui/internal/store/ent"
+	"arc-ui/internal/store/ent/jobobservation"
 )
 
 // defaultRetention mirrors config.Config's defaults, so the tests exercise the
@@ -111,7 +114,7 @@ func TestOpenCreatesParentDirectoryAndMigrates(t *testing.T) {
 
 	// Migrations applied means every table the store writes to answers.
 	for _, table := range []string{
-		"samples", "job_observations", "phase_transitions", "churn_events", "runner_failures",
+		"samples", "job_observations", "churn_events", "runner_failures",
 	} {
 		var n int
 		assert.NoError(t, s.db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM "+table).Scan(&n), "table %s missing", table)
@@ -235,7 +238,6 @@ func TestRecordSnapshotIsIdempotent(t *testing.T) {
 	require.NoError(t, err, "Stats")
 	assert.Equal(t, int64(1), st.ChurnEvents, "want 1 churn event after replaying the same snapshot")
 	assert.Equal(t, int64(1), st.Jobs, "want 1 job")
-	assert.Equal(t, int64(1), st.Phases, "want 1 phase")
 }
 
 func TestTierFor(t *testing.T) {
@@ -556,17 +558,16 @@ func TestSwitchedJobKeepsItsFinalInterval(t *testing.T) {
 	second.Job.StartedAt = at
 	require.NoError(t, s.RecordSnapshot(ctx, snapshot(at, second)), "second snapshot")
 
-	jobs, err := s.JobsForSet(ctx, "linux-x64", 10)
-	require.NoError(t, err, "JobsForSet")
+	jobs := jobsForSet(t, s, "linux-x64")
 	require.Len(t, jobs, 2, "want both jobs: %+v", jobs)
-	byName := map[string]JobRecord{}
+	byName := map[string]*ent.JobObservation{}
 	for _, j := range jobs {
-		byName[j.Job] = j
+		byName[j.JobName] = j
 	}
 
 	build, ok := byName["build"]
 	require.True(t, ok, "the switched-away job is missing: %+v", jobs)
-	assert.False(t, build.Running(), "the switched-away job should be closed")
+	assert.NotZero(t, build.FinishedAt, "the switched-away job should be closed")
 	// The interval is 30s at 2 cores, and a handover bills it forwards, to the
 	// job the runner moved to.
 	assert.InDelta(t, 60, byName["test"].CPUSeconds, 1e-9, "the final interval vanished at the handover")
@@ -655,12 +656,11 @@ func TestBulkUpsertAccumulatesPerRow(t *testing.T) {
 	require.NoError(t, s.RecordSnapshot(ctx, scrape(base)), "first snapshot")
 	require.NoError(t, s.RecordSnapshot(ctx, scrape(base.Add(30*time.Second))), "second snapshot")
 
-	jobs, err := s.JobsForSet(ctx, "linux-x64", 10)
-	require.NoError(t, err, "JobsForSet")
+	jobs := jobsForSet(t, s, "linux-x64")
 	require.Len(t, jobs, 2, "want both jobs: %+v", jobs)
-	byName := map[string]JobRecord{}
+	byName := map[string]*ent.JobObservation{}
 	for _, j := range jobs {
-		byName[j.Job] = j
+		byName[j.JobName] = j
 	}
 	assert.InDelta(t, 30, byName["build"].CPUSeconds, 1e-9, "runner-a's job took someone else's increment: %+v", jobs)
 	assert.InDelta(t, 90, byName["test"].CPUSeconds, 1e-9, "runner-b's job took someone else's increment: %+v", jobs)
@@ -684,8 +684,7 @@ func TestDuplicateRunnerInOneSnapshotIsBilledOnce(t *testing.T) {
 	dup := busyRunner("runner-a", at, 2.0)
 	require.NoError(t, s.RecordSnapshot(ctx, snapshot(at, dup, dup)), "duplicated snapshot")
 
-	jobs, err := s.JobsForSet(ctx, "linux-x64", 10)
-	require.NoError(t, err, "JobsForSet")
+	jobs := jobsForSet(t, s, "linux-x64")
 	require.Len(t, jobs, 1, "want 1 job: %+v", jobs)
 	assert.InDelta(t, 60, jobs[0].CPUSeconds, 1e-9, "30s at 2 cores, billed once: %+v", jobs)
 
@@ -698,7 +697,6 @@ func TestDuplicateRunnerInOneSnapshotIsBilledOnce(t *testing.T) {
 	st, err := s.Stats(ctx)
 	require.NoError(t, err, "Stats")
 	assert.Equal(t, int64(1), st.Jobs, "want 1 job row")
-	assert.Equal(t, int64(1), st.Phases, "want 1 phase")
 	assert.Equal(t, int64(1), st.ChurnEvents, "want 1 churn event")
 }
 
@@ -725,8 +723,7 @@ func TestJobCostSurvivesAProcessRestart(t *testing.T) {
 	}
 	cpuSeconds := func(s *Store) float64 {
 		t.Helper()
-		jobs, err := s.JobsForSet(ctx, "linux-x64", 10)
-		require.NoError(t, err, "JobsForSet")
+		jobs := jobsForSet(t, s, "linux-x64")
 		require.Len(t, jobs, 1, "want 1 job: %+v", jobs)
 		return jobs[0].CPUSeconds
 	}
@@ -876,24 +873,16 @@ func TestJobsPhasesAndRepoConsumption(t *testing.T) {
 	idle.Job = fleet.Job{}
 	require.NoError(t, s.RecordSnapshot(ctx, snapshot(idleAt, idle)), "third snapshot")
 
-	jobs, err := s.JobsForSet(ctx, "linux-x64", 10)
-	require.NoError(t, err, "JobsForSet")
+	jobs := jobsForSet(t, s, "linux-x64")
 	require.Len(t, jobs, 1, "want 1 job: %+v", jobs)
 	j := jobs[0]
-	assert.Equal(t, "runner-a", j.Runner, "job identity wrong: %+v", j)
+	assert.Equal(t, "runner-a", j.RunnerName, "job identity wrong: %+v", j)
 	assert.Equal(t, "acme/api", j.Repository, "job identity wrong: %+v", j)
-	assert.Equal(t, "build", j.Job, "job identity wrong: %+v", j)
+	assert.Equal(t, "build", j.JobName, "job identity wrong: %+v", j)
 	// 30s at 2 cores between the first and second scrape.
 	assert.InDelta(t, 60, j.CPUSeconds, 1e-9, "want 60 cpu seconds")
-	assert.False(t, j.Running(), "job should be closed once the runner moved off it")
+	assert.NotZero(t, j.FinishedAt, "job should be closed once the runner moved off it")
 	assert.True(t, j.Succeeded, "job should be recorded as succeeded")
-
-	phases, err := s.PhasesForRunner(ctx, "runner-a")
-	require.NoError(t, err, "PhasesForRunner")
-	require.Len(t, phases, 2, "want busy then idle: %+v", phases)
-	assert.Equal(t, string(fleet.StateBusy), phases[0].Phase, "phase order wrong: %+v", phases)
-	assert.Equal(t, string(fleet.StateIdle), phases[1].Phase, "phase order wrong: %+v", phases)
-	assert.Equal(t, 30*time.Second, phases[0].Duration(), "want a 30s busy phase")
 
 	repos, err := s.RepoConsumption(ctx, Range{From: base.Add(-time.Hour), To: base.Add(time.Hour), Points: 10})
 	require.NoError(t, err, "RepoConsumption")
@@ -919,8 +908,7 @@ func TestRecordSnapshotDoesNotIntegrateAcrossALongGap(t *testing.T) {
 	a2.Job = a.Job
 	require.NoError(t, s.RecordSnapshot(ctx, snapshot(late, a2)), "second snapshot")
 
-	jobs, err := s.JobsForSet(ctx, "linux-x64", 10)
-	require.NoError(t, err, "JobsForSet")
+	jobs := jobsForSet(t, s, "linux-x64")
 	require.Len(t, jobs, 1, "want 1 job")
 	assert.Zero(t, jobs[0].CPUSeconds, "want 0 cpu seconds across an implausible gap")
 }
@@ -966,16 +954,8 @@ func TestEmptyStoreReturnsEmptyNotError(t *testing.T) {
 
 	t.Run("jobs", func(t *testing.T) {
 		t.Parallel()
-		jobs, err := s.JobsForSet(ctx, "linux-x64", 10)
-		require.NoError(t, err, "JobsForSet")
+		jobs := jobsForSet(t, s, "linux-x64")
 		assert.Empty(t, jobs, "want no jobs")
-	})
-
-	t.Run("phases", func(t *testing.T) {
-		t.Parallel()
-		phases, err := s.PhasesForRunner(ctx, "runner-a")
-		require.NoError(t, err, "PhasesForRunner")
-		assert.Empty(t, phases, "want no phases")
 	})
 
 	t.Run("compact", func(t *testing.T) {
@@ -1056,7 +1036,7 @@ func TestStatsCountsRows(t *testing.T) {
 	assert.NotZero(t, st.Failures, "no failures counted")
 	// Every table the store writes to has to be in the footer's total, or the
 	// panel understates a database it is there to report the size of.
-	assert.Equal(t, st.Samples+st.Jobs+st.JobSamples+st.Phases+st.ChurnEvents+st.Failures, st.Rows,
+	assert.Equal(t, st.Samples+st.Jobs+st.JobSamples+st.ChurnEvents+st.Failures, st.Rows,
 		"Rows should be the sum of the per-table counts")
 	assert.False(t, st.Oldest.IsZero(), "Oldest should be set once samples exist")
 	assert.NotEmpty(t, st.Path, "Path should be reported")
@@ -1763,4 +1743,22 @@ func TestSamplesOfALiveJobSurviveTheJobSweep(t *testing.T) {
 	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM job_samples`).Scan(&samples))
 	assert.NotZero(t, jobs, "an hour-old job is well inside every window")
 	assert.NotZero(t, samples, "so its chart must still be drawable")
+}
+
+// jobsForSet reads a set's job observations straight off the ent client.
+//
+// The store exposes no query for this: nothing on the dashboard renders a
+// per-set job list, so a public method would be production code with only a
+// test to call it. The rows themselves are real — RepoConsumption and
+// Throughput read the same table — and this is how the tests check what
+// RecordSnapshot actually wrote into it.
+func jobsForSet(t *testing.T, s *Store, setName string) []*ent.JobObservation {
+	t.Helper()
+
+	jobs, err := s.client.JobObservation.Query().
+		Where(jobobservation.SetNameEQ(setName)).
+		Order(jobobservation.ByStartedAt(entsql.OrderDesc()), jobobservation.ByID(entsql.OrderDesc())).
+		All(t.Context())
+	require.NoError(t, err, "read job observations for %q", setName)
+	return jobs
 }

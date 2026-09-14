@@ -5,7 +5,6 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -179,17 +178,4 @@ func Load() (Config, []Warning, error) {
 func normalizeNamespaces(in []string) []string {
 	trimmed := lo.Map(in, func(ns string, _ int) string { return strings.TrimSpace(ns) })
 	return lo.Uniq(lo.Compact(trimmed))
-}
-
-// AllNamespaces reports whether the dashboard watches the whole cluster.
-func (c Config) AllNamespaces() bool { return len(c.Namespaces) == 0 }
-
-// Hostname is used to label the store and log lines. Failure is not
-// interesting enough to propagate.
-func Hostname() string {
-	h, err := os.Hostname()
-	if err != nil {
-		return "unknown"
-	}
-	return h
 }

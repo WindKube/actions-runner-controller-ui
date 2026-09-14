@@ -6,7 +6,6 @@ import (
 	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
 	"arc-ui/internal/store/ent/jobsample"
-	"arc-ui/internal/store/ent/phasetransition"
 	"arc-ui/internal/store/ent/runnerfailure"
 	"arc-ui/internal/store/ent/sample"
 	"context"
@@ -78,12 +77,11 @@ var (
 func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			churnevent.Table:      churnevent.ValidColumn,
-			jobobservation.Table:  jobobservation.ValidColumn,
-			jobsample.Table:       jobsample.ValidColumn,
-			phasetransition.Table: phasetransition.ValidColumn,
-			runnerfailure.Table:   runnerfailure.ValidColumn,
-			sample.Table:          sample.ValidColumn,
+			churnevent.Table:     churnevent.ValidColumn,
+			jobobservation.Table: jobobservation.ValidColumn,
+			jobsample.Table:      jobsample.ValidColumn,
+			runnerfailure.Table:  runnerfailure.ValidColumn,
+			sample.Table:         sample.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

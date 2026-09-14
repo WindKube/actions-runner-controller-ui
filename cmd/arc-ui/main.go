@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -241,7 +240,7 @@ func run(parent context.Context) error {
 	// mean by "at". Everything after the hand-off is the worker's problem,
 	// which is what keeps the slow half — the write — off the collector's
 	// notifier goroutine this callback runs on.
-	recorder := newSnapshotRecorder(
+	recorder := startSnapshotRecorder(ctx,
 		db.RecordSnapshot,
 		events.Broadcast,
 		func(err error) {
@@ -251,7 +250,6 @@ func run(parent context.Context) error {
 			collector.SetSource(storeSource(err, time.Now()))
 		},
 	)
-	recorder.start(ctx)
 
 	cancelWatch := collector.OnChange(func() { recorder.enqueue(collector.Snapshot()) })
 	defer cancelWatch()
@@ -333,22 +331,13 @@ func run(parent context.Context) error {
 
 // storeSource turns a write outcome into the health-strip verdict. A nil error
 // is a write that worked, and is what lets the row go green again.
-//
-// The two failures both land on the store row, since that is the only source
-// the history store has. The reason has to tell them apart: an orphaned
-// recorder drops its snapshots before any write is attempted, so calling that a
-// failing write blames the store for something it never did.
 func storeSource(err error, now time.Time) fleet.Source {
 	if err == nil {
 		return fleet.Source{Name: fleet.SourceStore, Available: true, CheckedAt: now}
 	}
-	reason := "writes failing"
-	if errors.Is(err, errRecorderNotStarted) {
-		reason = "snapshots are not being recorded"
-	}
 	return fleet.Source{
 		Name: fleet.SourceStore, Available: false,
-		Reason: reason, CheckedAt: now,
+		Reason: "writes failing", CheckedAt: now,
 	}
 }
 
@@ -381,16 +370,8 @@ type snapshotRecorder struct {
 	// strip blaming the store until restart.
 	onResult func(error)
 
-	// started is latched by start, synchronously, before the worker goroutine
-	// is launched. It distinguishes "nobody ever asked for a worker" — a wiring
-	// mistake enqueue must not swallow — from "the worker goroutine has not
-	// been scheduled yet", which is ordinary and must stay silent. Latching it
-	// inside run instead would collapse the two.
-	started  atomic.Bool
-	orphaned sync.Once
-	// stopped closes when the worker returns, so a caller (today only the
-	// tests) can tell a cancelled recorder has finished the write it was in
-	// the middle of.
+	// stopped closes when the worker returns, so a caller can tell a cancelled
+	// recorder has finished the write it was in the middle of.
 	stopped chan struct{}
 
 	mu      sync.Mutex
@@ -400,45 +381,33 @@ type snapshotRecorder struct {
 	wake chan struct{}
 }
 
-// errRecorderNotStarted reports a recorder nobody is draining.
-var errRecorderNotStarted = errors.New("snapshot recorder worker was never started; snapshots are being dropped")
-
-func newSnapshotRecorder(
+// startSnapshotRecorder builds a recorder and launches its worker.
+//
+// Construction and start are one call because enqueue neither blocks nor
+// fails: a recorder whose worker was never started would drop every snapshot
+// in silence — no history rows, no live updates, no error. Leaving no way to
+// build one without a worker is cheaper than detecting that someone did.
+//
+// It must be called at most once per recorder; run closes stopped on its way out.
+func startSnapshotRecorder(
+	ctx context.Context,
 	record func(context.Context, fleet.Snapshot) error,
 	broadcast func(time.Time),
 	onResult func(error),
 ) *snapshotRecorder {
-	return &snapshotRecorder{
+	r := &snapshotRecorder{
 		record:    record,
 		broadcast: broadcast,
 		onResult:  onResult,
 		stopped:   make(chan struct{}),
 		wake:      make(chan struct{}, 1),
 	}
-}
-
-// start launches the worker. Callers must use it rather than starting run
-// themselves: enqueue neither blocks nor fails, so a recorder whose worker was
-// never started drops every snapshot in silence — no history rows, no live
-// updates, no error. start latches that a worker was asked for, and enqueue
-// reports the recorders where one never was.
-//
-// It must be called at most once; run closes stopped on its way out.
-func (r *snapshotRecorder) start(ctx context.Context) {
-	r.started.Store(true)
 	go r.run(ctx)
+	return r
 }
 
-// enqueue makes snap the pending snapshot and returns without blocking, even
-// when no worker is draining.
+// enqueue makes snap the pending snapshot and returns without blocking.
 func (r *snapshotRecorder) enqueue(snap fleet.Snapshot) {
-	if !r.started.Load() {
-		// Once is enough to be loud: the condition is permanent — start is
-		// never called late — and the source flip it triggers leaves the
-		// history panel showing the store as unavailable until restart.
-		r.orphaned.Do(func() { r.onResult(errRecorderNotStarted) })
-	}
-
 	r.mu.Lock()
 	// Keep whichever snapshot is newer, not whichever call arrived last.
 	// Nothing the recorder owns serialises its callers, so two of them can
@@ -477,8 +446,7 @@ func (r *snapshotRecorder) take() (fleet.Snapshot, bool) {
 	return snap, true
 }
 
-// run records pending snapshots until ctx ends, then closes stopped. Enter it
-// through start, which is what tells enqueue somebody is draining.
+// run records pending snapshots until ctx ends, then closes stopped.
 //
 // Each broadcast follows its own write, and goes out whether that write
 // succeeded or failed — the fleet changed either way, and a failing store must

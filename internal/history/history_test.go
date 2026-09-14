@@ -85,7 +85,6 @@ func fixedStats() store.Stats {
 		SizeBytes:   12 * 1024 * 1024,
 		Samples:     1234567,
 		Jobs:        42,
-		Phases:      7,
 		ChurnEvents: 99,
 		Rows:        1234715,
 		Oldest:      time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
@@ -169,7 +168,6 @@ func TestStatsMapsEveryCountAndMarksTheStoreEnabled(t *testing.T) {
 	assert.Equal(t, "/data/arc-ui.db", got.Path, "path")
 	assert.Equal(t, int64(12*1024*1024), got.SizeBytes, "size")
 	assert.Equal(t, int64(42), got.Jobs, "jobs")
-	assert.Equal(t, int64(7), got.Phases, "phases")
 	assert.Equal(t, int64(99), got.ChurnEvents, "churn events")
 	assert.Equal(t, int64(1234715), got.Rows, "total rows")
 	assert.Equal(t, fixedStats().Oldest, got.Oldest, "oldest sample")

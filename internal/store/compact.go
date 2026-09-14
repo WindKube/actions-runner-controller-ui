@@ -3,8 +3,16 @@ package store
 import (
 	"context"
 	"fmt"
-	"math"
 	"time"
+
+	entsql "entgo.io/ent/dialect/sql"
+
+	"arc-ui/internal/store/ent/churnevent"
+	"arc-ui/internal/store/ent/jobobservation"
+	"arc-ui/internal/store/ent/jobsample"
+	"arc-ui/internal/store/ent/predicate"
+	"arc-ui/internal/store/ent/runnerfailure"
+	"arc-ui/internal/store/ent/sample"
 )
 
 // Compact rolls raw samples up into coarser tiers and applies retention.
@@ -141,17 +149,22 @@ const maxJobRuntime = 5 * 24 * time.Hour
 // applyRetention deletes everything past its window.
 //
 // The derived tables have no retention knob of their own, so they borrow one:
-// jobs and churn follow the 5-minute tier (the longest window the throughput
-// and consumption panels offer), and phases follow the 1-minute tier, because
-// the lifecycle bar is a minutes-to-hours view and nobody scrolls a runner's
-// phase history back a month.
+// jobs, churn and failures follow the 5-minute tier, which is the longest
+// window the throughput, consumption and failure panels offer.
 func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention) (int64, error) {
 	type sweep struct {
 		what      string
-		q         string
-		args      []any
 		retention time.Duration
-		cutoff    int64
+		// del deletes everything older than cutoff and reports how many rows
+		// went. Each is a closure rather than a SQL string so the predicates
+		// are the same generated ones the rest of the package writes through.
+		del func(ctx context.Context, cutoff int64) (int, error)
+		// cutoff is the boundary this sweep deletes below. The tiers that feed
+		// a rollup align it to the TARGET bucket width, matching what the
+		// rollup reads from, so a bucket straddling the edge is never
+		// re-averaged from whichever of its source rows survived. The rest are
+		// exact.
+		cutoff int64
 	}
 
 	sweeps := []sweep{
@@ -159,39 +172,46 @@ func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention
 			// Per-runner raw samples. Nothing is derived from them, so the
 			// cutoff needs no bucket alignment and is exact.
 			what:      "runner raw samples",
-			q:         `DELETE FROM samples WHERE tier = ? AND scope = ? AND ts < ?`,
-			args:      []any{string(TierRaw), string(ScopeRunner)},
 			retention: ret.RunnerRaw,
 			cutoff:    unixCutoff(now, ret.RunnerRaw),
+			del: func(ctx context.Context, cutoff int64) (int, error) {
+				return s.client.Sample.Delete().Where(
+					sample.TierEQ(string(TierRaw)),
+					sample.ScopeEQ(string(ScopeRunner)),
+					sample.TsLT(cutoff),
+				).Exec(ctx)
+			},
 		},
 		{
 			what:      "scope raw samples",
-			q:         `DELETE FROM samples WHERE tier = ? AND scope <> ? AND ts < ?`,
-			args:      []any{string(TierRaw), string(ScopeRunner)},
 			retention: ret.ScopeRaw,
 			cutoff:    rollupFloor(now, ret.ScopeRaw, int64(Tier1m.Resolution().Seconds())),
+			del: func(ctx context.Context, cutoff int64) (int, error) {
+				return s.client.Sample.Delete().Where(
+					sample.TierEQ(string(TierRaw)),
+					sample.ScopeNEQ(string(ScopeRunner)),
+					sample.TsLT(cutoff),
+				).Exec(ctx)
+			},
 		},
 		{
 			what:      "1m samples",
-			q:         `DELETE FROM samples WHERE tier = ? AND ts < ?`,
-			args:      []any{string(Tier1m)},
 			retention: ret.Scope1m,
 			cutoff:    rollupFloor(now, ret.Scope1m, int64(Tier5m.Resolution().Seconds())),
+			del:       s.deleteTier(Tier1m),
 		},
 		{
 			what:      "5m samples",
-			q:         `DELETE FROM samples WHERE tier = ? AND ts < ?`,
-			args:      []any{string(Tier5m)},
 			retention: ret.Scope5m,
 			cutoff:    rollupFloor(now, ret.Scope5m, int64(Tier1h.Resolution().Seconds())),
+			del:       s.deleteTier(Tier5m),
 		},
 		{
 			// The coarsest tier feeds nothing, so it too gets an exact cutoff.
 			what:      "1h samples",
-			q:         `DELETE FROM samples WHERE tier = ? AND ts < ?`,
-			args:      []any{string(Tier1h)},
 			retention: ret.Scope1h,
 			cutoff:    unixCutoff(now, ret.Scope1h),
+			del:       s.deleteTier(Tier1h),
 		},
 		{
 			// Per-job usage, on its own window. This is the knob that lets an
@@ -206,9 +226,11 @@ func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention
 			// alternative, holding every sample of any job with one foot in the
 			// window, makes the window a lower bound rather than a limit.
 			what:      "job samples",
-			q:         `DELETE FROM job_samples WHERE ts < ?`,
 			retention: ret.JobSamples,
 			cutoff:    unixCutoff(now, ret.JobSamples),
+			del: func(ctx context.Context, cutoff int64) (int, error) {
+				return s.client.JobSample.Delete().Where(jobsample.TsLT(cutoff)).Exec(ctx)
+			},
 		},
 		{
 			// Samples whose job is about to go. These two run BEFORE the job
@@ -217,15 +239,27 @@ func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention
 			// would be unreachable and immortal, since nothing else in this
 			// list would ever match it again.
 			what:      "job samples of expiring finished jobs",
-			q:         `DELETE FROM job_samples WHERE job_id IN (SELECT id FROM job_observations WHERE finished_at > 0 AND finished_at < ?)`,
 			retention: ret.Scope5m,
 			cutoff:    unixCutoff(now, ret.Scope5m),
+			del: func(ctx context.Context, cutoff int64) (int, error) {
+				return s.client.JobSample.Delete().Where(samplesOfJobs(
+					jobobservation.FinishedAtGT(0),
+					jobobservation.FinishedAtLT(cutoff),
+				)).Exec(ctx)
+			},
 		},
 		{
 			what:      "job samples of expiring abandoned jobs",
-			q:         `DELETE FROM job_samples WHERE job_id IN (SELECT id FROM job_observations WHERE finished_at <= 0 AND started_at < ?)`,
 			retention: ret.Scope5m,
-			cutoff:    unixCutoff(now, addWindows(ret.Scope5m, maxJobRuntime)),
+			// Same two-step subtraction as the abandoned-job sweep below, and
+			// for the same overflow reason.
+			cutoff: now.Add(-ret.Scope5m).Add(-maxJobRuntime).Unix(),
+			del: func(ctx context.Context, cutoff int64) (int, error) {
+				return s.client.JobSample.Delete().Where(samplesOfJobs(
+					jobobservation.FinishedAtLTE(0),
+					jobobservation.StartedAtLT(cutoff),
+				)).Exec(ctx)
+			},
 		},
 		{
 			// Finished jobs age from their completion, not from their start. A
@@ -233,9 +267,14 @@ func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention
 			// started_at would delete a week-long build that finished a minute
 			// ago — along with the throughput bucket it belongs in.
 			what:      "finished job observations",
-			q:         `DELETE FROM job_observations WHERE finished_at > 0 AND finished_at < ?`,
 			retention: ret.Scope5m,
 			cutoff:    unixCutoff(now, ret.Scope5m),
+			del: func(ctx context.Context, cutoff int64) (int, error) {
+				return s.client.JobObservation.Delete().Where(
+					jobobservation.FinishedAtGT(0),
+					jobobservation.FinishedAtLT(cutoff),
+				).Exec(ctx)
+			},
 		},
 		{
 			// Unfinished jobs have no completion to age from, so they are held
@@ -248,32 +287,37 @@ func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention
 			// would match neither `> 0` nor `= 0` and would then be the one row
 			// in this database that nothing ever expires.
 			what:      "abandoned job observations",
-			q:         `DELETE FROM job_observations WHERE finished_at <= 0 AND started_at < ?`,
 			retention: ret.Scope5m,
-			cutoff:    unixCutoff(now, addWindows(ret.Scope5m, maxJobRuntime)),
+			// Two subtractions rather than one sum of two windows: adding them
+			// first can overflow time.Duration's 292-year range and land the
+			// cutoff in the future, where the sweep deletes rows written
+			// seconds ago. time.Time.Add clamps, so stepping back twice cannot.
+			cutoff: now.Add(-ret.Scope5m).Add(-maxJobRuntime).Unix(),
+			del: func(ctx context.Context, cutoff int64) (int, error) {
+				return s.client.JobObservation.Delete().Where(
+					jobobservation.FinishedAtLTE(0),
+					jobobservation.StartedAtLT(cutoff),
+				).Exec(ctx)
+			},
 		},
 		{
 			what:      "churn events",
-			q:         `DELETE FROM churn_events WHERE ts < ?`,
 			retention: ret.Scope5m,
 			cutoff:    unixCutoff(now, ret.Scope5m),
+			del: func(ctx context.Context, cutoff int64) (int, error) {
+				return s.client.ChurnEvent.Delete().Where(churnevent.TsLT(cutoff)).Exec(ctx)
+			},
 		},
 		{
-			what:      "phase transitions",
-			q:         `DELETE FROM phase_transitions WHERE started_at < ?`,
-			retention: ret.Scope1m,
-			cutoff:    unixCutoff(now, ret.Scope1m),
-		},
-		{
-			// Failures follow the 5-minute tier because that window is the
-			// longest range the failure lane can be asked for. Without a sweep
-			// this would be the one table in the database that grows forever:
-			// nothing else deletes it, and a scale set with a bad image writes a
-			// row per runner it burns through.
+			// Without a sweep this would be the one table in the database that
+			// grows forever: nothing else deletes it, and a scale set with a bad
+			// image writes a row per runner it burns through.
 			what:      "runner failures",
-			q:         `DELETE FROM runner_failures WHERE ts < ?`,
 			retention: ret.Scope5m,
 			cutoff:    unixCutoff(now, ret.Scope5m),
+			del: func(ctx context.Context, cutoff int64) (int, error) {
+				return s.client.RunnerFailure.Delete().Where(runnerfailure.TsLT(cutoff)).Exec(ctx)
+			},
 		},
 	}
 
@@ -282,41 +326,40 @@ func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention
 		if sw.retention <= 0 {
 			continue
 		}
-		res, err := s.db.ExecContext(ctx, sw.q, append(sw.args, sw.cutoff)...)
+		n, err := sw.del(ctx, sw.cutoff)
 		if err != nil {
 			return total, fmt.Errorf("expire %s: %w", sw.what, err)
 		}
-		if n, err := res.RowsAffected(); err == nil {
-			total += n
-		}
+		total += int64(n)
 	}
 	return total, nil
+}
+
+// samplesOfJobs matches every sample belonging to a job the given predicates
+// select. JobSample.job_id is a plain column rather than an ent edge — the
+// samples are written and read by id and never traversed — so the IN subquery
+// is built here instead of coming from a generated HasJobWith.
+func samplesOfJobs(where ...predicate.JobObservation) predicate.JobSample {
+	return predicate.JobSample(func(s *entsql.Selector) {
+		jobs := entsql.Select(jobobservation.FieldID).From(entsql.Table(jobobservation.Table))
+		for _, p := range where {
+			p(jobs)
+		}
+		s.Where(entsql.In(s.C(jobsample.FieldJobID), jobs))
+	})
+}
+
+// deleteTier sweeps one whole sample tier, which is the shape three of the
+// sweeps above share.
+func (s *Store) deleteTier(tier Tier) func(context.Context, int64) (int, error) {
+	return func(ctx context.Context, cutoff int64) (int, error) {
+		return s.client.Sample.Delete().
+			Where(sample.TierEQ(string(tier)), sample.TsLT(cutoff)).
+			Exec(ctx)
+	}
 }
 
 // unixCutoff is the plain, unaligned retention boundary.
 func unixCutoff(now time.Time, retention time.Duration) int64 {
 	return now.Add(-retention).Unix()
-}
-
-// addWindows adds two retention windows, saturating instead of wrapping.
-//
-// time.Duration is int64 nanoseconds and so tops out at about 292 years. A
-// window configured within maxJobRuntime of that ceiling wraps NEGATIVE when
-// the two are added, and unixCutoff turns a negative window into a boundary in
-// the *future* — a sweep that then deletes every row it looks at, including
-// ones written seconds ago. The `retention <= 0` guard in the loop cannot
-// catch it, because what it tests is the configured window, which is still
-// perfectly positive.
-//
-// Saturating is safe in the other direction: subtracting the maximum duration
-// from any plausible `now` is an ordinary instant in the eighteenth century —
-// no second overflow, and time.Time.Add clamps rather than wrapping in any
-// case — so the cutoff predates every row and deletes nothing, which is what a
-// retention window of three centuries asked for.
-func addWindows(a, b time.Duration) time.Duration {
-	sum := a + b
-	if a > 0 && b > 0 && sum < 0 {
-		return math.MaxInt64
-	}
-	return sum
 }

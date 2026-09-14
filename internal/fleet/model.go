@@ -7,8 +7,9 @@
 package fleet
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -69,21 +70,12 @@ type Resources struct {
 // HasUsage reports whether a usage sample was actually observed.
 func (r Resources) HasUsage() bool { return !r.At.IsZero() }
 
-// Efficiency is usage as a fraction of request, or zero when either is absent.
-func (r Resources) Efficiency() float64 {
-	if r.Request <= 0 || !r.HasUsage() {
-		return 0
-	}
-	return r.Used / r.Request
-}
-
 // Job is the workflow job a runner is currently executing.
 type Job struct {
 	Repository string
 	Workflow   string // filename, parsed out of jobWorkflowRef
 	Name       string // jobDisplayName
 	RunID      int64
-	RequestID  int64
 	StartedAt  time.Time
 }
 
@@ -300,15 +292,12 @@ func (s Snapshot) Runner(name string) (Runner, bool) {
 // SortRunners orders runners for display: busy first and longest-running
 // first within that, so the work that has been going longest is at the top.
 func SortRunners(runners []Runner, now time.Time) {
-	sort.SliceStable(runners, func(i, j int) bool {
-		ri, rj := runners[i], runners[j]
-		if a, b := ri.State.sortRank(), rj.State.sortRank(); a != b {
-			return a < b
-		}
-		if ai, aj := ri.JobAge(now), rj.JobAge(now); ai != aj {
-			return ai > aj
-		}
-		return ri.Name < rj.Name
+	slices.SortStableFunc(runners, func(a, b Runner) int {
+		return cmp.Or(
+			cmp.Compare(a.State.sortRank(), b.State.sortRank()),
+			cmp.Compare(b.JobAge(now), a.JobAge(now)),
+			cmp.Compare(a.Name, b.Name),
+		)
 	})
 }
 
@@ -340,21 +329,20 @@ func ParseSetSort(v string) SetSort {
 func SortSets(sets []RunnerSet, by SetSort) {
 	switch by {
 	case SortRunnerCount:
-		sort.SliceStable(sets, func(i, j int) bool {
-			if sets[i].Current != sets[j].Current {
-				return sets[i].Current > sets[j].Current
-			}
-			return sets[i].Name < sets[j].Name
+		slices.SortStableFunc(sets, func(a, b RunnerSet) int {
+			return cmp.Or(
+				cmp.Compare(b.Current, a.Current),
+				cmp.Compare(a.Name, b.Name),
+			)
 		})
 	case SortName:
-		sort.SliceStable(sets, func(i, j int) bool { return sets[i].Name < sets[j].Name })
+		slices.SortStableFunc(sets, func(a, b RunnerSet) int { return cmp.Compare(a.Name, b.Name) })
 	default:
-		sort.SliceStable(sets, func(i, j int) bool {
-			a, b := sets[i], sets[j]
-			if a.Queued != b.Queued {
-				return a.Queued > b.Queued
-			}
-			return a.saturation() > b.saturation()
+		slices.SortStableFunc(sets, func(a, b RunnerSet) int {
+			return cmp.Or(
+				cmp.Compare(b.Queued, a.Queued),
+				cmp.Compare(b.saturation(), a.saturation()),
+			)
 		})
 	}
 }

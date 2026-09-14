@@ -17,8 +17,9 @@ import (
 // JobSampleUpdate is the builder for updating JobSample entities.
 type JobSampleUpdate struct {
 	config
-	hooks    []Hook
-	mutation *JobSampleMutation
+	hooks     []Hook
+	mutation  *JobSampleMutation
+	modifiers []func(*sql.UpdateBuilder)
 }
 
 // Where appends a list predicates to the JobSampleUpdate builder.
@@ -164,6 +165,12 @@ func (_u *JobSampleUpdate) ExecX(ctx context.Context) {
 	}
 }
 
+// Modify adds a statement modifier for attaching custom logic to the UPDATE statement.
+func (_u *JobSampleUpdate) Modify(modifiers ...func(u *sql.UpdateBuilder)) *JobSampleUpdate {
+	_u.modifiers = append(_u.modifiers, modifiers...)
+	return _u
+}
+
 func (_u *JobSampleUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	_spec := sqlgraph.NewUpdateSpec(jobsample.Table, jobsample.Columns, sqlgraph.NewFieldSpec(jobsample.FieldID, field.TypeInt))
 	if ps := _u.mutation.predicates; len(ps) > 0 {
@@ -203,6 +210,7 @@ func (_u *JobSampleUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedSamples(); ok {
 		_spec.AddField(jobsample.FieldSamples, field.TypeInt, value)
 	}
+	_spec.AddModifiers(_u.modifiers...)
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{jobsample.Label}
@@ -218,9 +226,10 @@ func (_u *JobSampleUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 // JobSampleUpdateOne is the builder for updating a single JobSample entity.
 type JobSampleUpdateOne struct {
 	config
-	fields   []string
-	hooks    []Hook
-	mutation *JobSampleMutation
+	fields    []string
+	hooks     []Hook
+	mutation  *JobSampleMutation
+	modifiers []func(*sql.UpdateBuilder)
 }
 
 // SetJobID sets the "job_id" field.
@@ -373,6 +382,12 @@ func (_u *JobSampleUpdateOne) ExecX(ctx context.Context) {
 	}
 }
 
+// Modify adds a statement modifier for attaching custom logic to the UPDATE statement.
+func (_u *JobSampleUpdateOne) Modify(modifiers ...func(u *sql.UpdateBuilder)) *JobSampleUpdateOne {
+	_u.modifiers = append(_u.modifiers, modifiers...)
+	return _u
+}
+
 func (_u *JobSampleUpdateOne) sqlSave(ctx context.Context) (_node *JobSample, err error) {
 	_spec := sqlgraph.NewUpdateSpec(jobsample.Table, jobsample.Columns, sqlgraph.NewFieldSpec(jobsample.FieldID, field.TypeInt))
 	id, ok := _u.mutation.ID()
@@ -429,6 +444,7 @@ func (_u *JobSampleUpdateOne) sqlSave(ctx context.Context) (_node *JobSample, er
 	if value, ok := _u.mutation.AddedSamples(); ok {
 		_spec.AddField(jobsample.FieldSamples, field.TypeInt, value)
 	}
+	_spec.AddModifiers(_u.modifiers...)
 	_node = &JobSample{config: _u.config}
 	_spec.Assign = _node.assignValues
 	_spec.ScanValues = _node.scanValues

@@ -102,8 +102,7 @@ func TestAllNamespaces(t *testing.T) {
 	cfg, _, err := Load()
 
 	require.NoError(t, err)
-	assert.Empty(t, cfg.Namespaces)
-	assert.True(t, cfg.AllNamespaces(), "a blank ARC_UI_NAMESPACES means all namespaces")
+	assert.Empty(t, cfg.Namespaces, "a blank ARC_UI_NAMESPACES means all namespaces")
 }
 
 // TestLoadRejectsRelativeListenerMetricsPath ensures the path is absolute,

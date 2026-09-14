@@ -397,7 +397,6 @@ type StoreStats struct {
 	Samples     int64
 	Jobs        int64
 	JobSamples  int64
-	Phases      int64
 	ChurnEvents int64
 	Failures    int64
 	Rows        int64

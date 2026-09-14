@@ -17,8 +17,9 @@ import (
 // ChurnEventUpdate is the builder for updating ChurnEvent entities.
 type ChurnEventUpdate struct {
 	config
-	hooks    []Hook
-	mutation *ChurnEventMutation
+	hooks     []Hook
+	mutation  *ChurnEventMutation
+	modifiers []func(*sql.UpdateBuilder)
 }
 
 // Where appends a list predicates to the ChurnEventUpdate builder.
@@ -122,6 +123,12 @@ func (_u *ChurnEventUpdate) ExecX(ctx context.Context) {
 	}
 }
 
+// Modify adds a statement modifier for attaching custom logic to the UPDATE statement.
+func (_u *ChurnEventUpdate) Modify(modifiers ...func(u *sql.UpdateBuilder)) *ChurnEventUpdate {
+	_u.modifiers = append(_u.modifiers, modifiers...)
+	return _u
+}
+
 func (_u *ChurnEventUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	_spec := sqlgraph.NewUpdateSpec(churnevent.Table, churnevent.Columns, sqlgraph.NewFieldSpec(churnevent.FieldID, field.TypeInt))
 	if ps := _u.mutation.predicates; len(ps) > 0 {
@@ -146,6 +153,7 @@ func (_u *ChurnEventUpdate) sqlSave(ctx context.Context) (_node int, err error) 
 	if value, ok := _u.mutation.AddedTs(); ok {
 		_spec.AddField(churnevent.FieldTs, field.TypeInt64, value)
 	}
+	_spec.AddModifiers(_u.modifiers...)
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{churnevent.Label}
@@ -161,9 +169,10 @@ func (_u *ChurnEventUpdate) sqlSave(ctx context.Context) (_node int, err error) 
 // ChurnEventUpdateOne is the builder for updating a single ChurnEvent entity.
 type ChurnEventUpdateOne struct {
 	config
-	fields   []string
-	hooks    []Hook
-	mutation *ChurnEventMutation
+	fields    []string
+	hooks     []Hook
+	mutation  *ChurnEventMutation
+	modifiers []func(*sql.UpdateBuilder)
 }
 
 // SetRunnerName sets the "runner_name" field.
@@ -274,6 +283,12 @@ func (_u *ChurnEventUpdateOne) ExecX(ctx context.Context) {
 	}
 }
 
+// Modify adds a statement modifier for attaching custom logic to the UPDATE statement.
+func (_u *ChurnEventUpdateOne) Modify(modifiers ...func(u *sql.UpdateBuilder)) *ChurnEventUpdateOne {
+	_u.modifiers = append(_u.modifiers, modifiers...)
+	return _u
+}
+
 func (_u *ChurnEventUpdateOne) sqlSave(ctx context.Context) (_node *ChurnEvent, err error) {
 	_spec := sqlgraph.NewUpdateSpec(churnevent.Table, churnevent.Columns, sqlgraph.NewFieldSpec(churnevent.FieldID, field.TypeInt))
 	id, ok := _u.mutation.ID()
@@ -315,6 +330,7 @@ func (_u *ChurnEventUpdateOne) sqlSave(ctx context.Context) (_node *ChurnEvent, 
 	if value, ok := _u.mutation.AddedTs(); ok {
 		_spec.AddField(churnevent.FieldTs, field.TypeInt64, value)
 	}
+	_spec.AddModifiers(_u.modifiers...)
 	_node = &ChurnEvent{config: _u.config}
 	_spec.Assign = _node.assignValues
 	_spec.ScanValues = _node.scanValues

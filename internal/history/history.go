@@ -147,7 +147,6 @@ func (a Adapter) countStats(ctx context.Context) (web.StoreStats, error) {
 		SizeBytes:   st.SizeBytes,
 		Samples:     st.Samples,
 		Jobs:        st.Jobs,
-		Phases:      st.Phases,
 		JobSamples:  st.JobSamples,
 		ChurnEvents: st.ChurnEvents,
 		Failures:    st.Failures,

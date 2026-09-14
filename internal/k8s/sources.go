@@ -1,9 +1,10 @@
 package k8s
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -134,7 +135,7 @@ func probeARCCRDs(ctx context.Context, kube kubernetes.Interface, mapper meta.RE
 	}
 
 	if len(denied) > 0 {
-		sort.Strings(denied)
+		slices.Sort(denied)
 		return unavailable(fleet.SourceARCCRDs, "missing RBAC: "+strings.Join(denied, ", "), now), usable
 	}
 	// Built into a fresh slice rather than appended onto notInstalled: append
@@ -145,7 +146,7 @@ func probeARCCRDs(ctx context.Context, kube kubernetes.Interface, mapper meta.RE
 	missing = append(missing, notInstalled...)
 	missing = append(missing, unreadable...)
 	if len(missing) > 0 {
-		sort.Strings(missing)
+		slices.Sort(missing)
 		return unavailable(fleet.SourceARCCRDs, "unavailable: "+strings.Join(missing, ", "), now), usable
 	}
 	return available(fleet.SourceARCCRDs, now), usable
@@ -254,16 +255,16 @@ var sourceOrder = map[string]int{
 // sortSources gives the strip a stable order regardless of which probe finished
 // first or which subsystem pushed an update last.
 func sortSources(sources []fleet.Source) {
-	sort.SliceStable(sources, func(i, j int) bool {
-		ri, oki := sourceOrder[sources[i].Name]
-		rj, okj := sourceOrder[sources[j].Name]
-		if oki != okj {
-			return oki
-		}
-		if ri != rj {
-			return ri < rj
-		}
-		return sources[i].Name < sources[j].Name
+	slices.SortStableFunc(sources, func(a, b fleet.Source) int {
+		ra, oka := sourceOrder[a.Name]
+		rb, okb := sourceOrder[b.Name]
+		return cmp.Or(
+			// A source the strip does not know about sorts after every one it
+			// does, rather than into rank 0 alongside kubernetes.
+			cmp.Compare(boolRank(!oka), boolRank(!okb)),
+			cmp.Compare(ra, rb),
+			cmp.Compare(a.Name, b.Name),
+		)
 	})
 }
 

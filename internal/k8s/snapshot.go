@@ -1,12 +1,13 @@
 package k8s
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/distribution/reference"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -179,11 +180,11 @@ func BuildSnapshot(in SnapshotInput) fleet.Snapshot {
 
 		snap.Sets = append(snap.Sets, set)
 	}
-	sort.Slice(snap.Sets, func(i, j int) bool {
-		if snap.Sets[i].Name != snap.Sets[j].Name {
-			return snap.Sets[i].Name < snap.Sets[j].Name
-		}
-		return snap.Sets[i].Namespace < snap.Sets[j].Namespace
+	slices.SortFunc(snap.Sets, func(a, b fleet.RunnerSet) int {
+		return cmp.Or(
+			cmp.Compare(a.Name, b.Name),
+			cmp.Compare(a.Namespace, b.Namespace),
+		)
 	})
 
 	// --- runners -----------------------------------------------------------
@@ -241,7 +242,6 @@ func buildRunner(er *arcapi.EphemeralRunner, pod *corev1.Pod, setName string, ar
 			Workflow:   arcapi.WorkflowFileFromRef(er.Status.JobWorkflowRef),
 			Name:       er.Status.JobDisplayName,
 			RunID:      er.Status.WorkflowRunID,
-			RequestID:  er.Status.JobRequestID,
 		}
 	}
 
@@ -673,17 +673,19 @@ func runnerContainerStatus(pod *corev1.Pod) (corev1.ContainerStatus, bool) {
 
 // imageTag extracts the version an image reference pins.
 //
-// Registries may carry a port ("registry:5000/x"), so a colon only names a tag
-// when it comes after the last slash. A digest reference pins no readable
-// version at all.
+// Parsing is delegated because an image reference is not the "split on the last
+// colon" string it looks like: a registry may carry a port ("registry:5000/x"),
+// a digest pins no readable version at all, and the canonical grammar lives
+// upstream. An unparseable reference has no tag to report rather than being an
+// error — this only feeds a label in the health strip.
 func imageTag(image string) string {
-	if i := strings.Index(image, "@"); i >= 0 {
-		image = image[:i]
+	ref, err := reference.Parse(image)
+	if err != nil {
+		return ""
 	}
-	slash := strings.LastIndex(image, "/")
-	colon := strings.LastIndex(image, ":")
-	if colon > slash {
-		return image[colon+1:]
+	tagged, ok := ref.(reference.Tagged)
+	if !ok {
+		return ""
 	}
-	return ""
+	return tagged.Tag()
 }

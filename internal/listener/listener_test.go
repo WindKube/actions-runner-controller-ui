@@ -73,7 +73,7 @@ func testLogger() zerolog.Logger { return zerolog.New(io.Discard) }
 func TestParse(t *testing.T) {
 	t.Parallel()
 
-	m, err := Parse(strings.NewReader(fixture))
+	m, _, err := parse(strings.NewReader(fixture))
 	require.NoError(t, err, "Parse")
 
 	tests := []struct {
@@ -133,7 +133,7 @@ some_other_thing{name="arc-linux-x64"} 7
 # TYPE gha_assigned_jobs gauge
 gha_assigned_jobs{name="arc-linux-x64"} 4
 `
-	m, err := Parse(strings.NewReader(input))
+	m, _, err := parse(strings.NewReader(input))
 	require.NoError(t, err, "Parse")
 	assert.Equal(t, float64(4), m.AssignedJobs["arc-linux-x64"], "AssignedJobs")
 	// Families the listener never exposed stay nil, not zero-valued maps: the
@@ -150,7 +150,7 @@ gha_assigned_jobs{runner_scale_set_name="legacy-set",namespace="arc-runners"} 6
 gha_assigned_jobs{name="modern-set",runner_scale_set_name="ignored",namespace="arc-runners"} 2
 gha_assigned_jobs{namespace="arc-runners"} 99
 `
-	m, err := Parse(strings.NewReader(input))
+	m, _, err := parse(strings.NewReader(input))
 	require.NoError(t, err, "Parse")
 	want := map[string]float64{"legacy-set": 6, "modern-set": 2}
 	require.Len(t, m.AssignedJobs, len(want), "AssignedJobs = %v, want %v (an unkeyable series must be dropped)", m.AssignedJobs, want)
@@ -162,7 +162,7 @@ gha_assigned_jobs{namespace="arc-runners"} 99
 func TestParseMalformed(t *testing.T) {
 	t.Parallel()
 
-	_, err := Parse(strings.NewReader("gha_assigned_jobs{name=\"broken\" 12\n"))
+	_, _, err := parse(strings.NewReader("gha_assigned_jobs{name=\"broken\" 12\n"))
 	require.Error(t, err, "Parse accepted malformed exposition")
 }
 
@@ -285,7 +285,7 @@ func TestParseNonFiniteGaugeEndToEnd(t *testing.T) {
 	const input = `# TYPE gha_assigned_jobs gauge
 gha_assigned_jobs{name="a",namespace="arc-runners"} +Inf
 `
-	m, err := Parse(strings.NewReader(input))
+	m, _, err := parse(strings.NewReader(input))
 	require.NoError(t, err, "Parse")
 	assert.Equal(t, 0, m.QueueDepth()["a"], "queue depth for a +Inf gauge")
 }
@@ -314,7 +314,7 @@ gha_started_jobs_total{job_workflow_ref="acme/web/.github/workflows/ci.yml@refs/
 func TestParseDoesNotSumCeilingsAcrossNamespaces(t *testing.T) {
 	t.Parallel()
 
-	m, err := Parse(strings.NewReader(collisions))
+	m, _, err := parse(strings.NewReader(collisions))
 	require.NoError(t, err, "Parse")
 
 	// The winner is the alphabetically first namespace, so the answer does not
@@ -335,10 +335,9 @@ func TestParseReportsScaleSetNameCollision(t *testing.T) {
 	_, index, err := parse(strings.NewReader(collisions))
 	require.NoError(t, err, "parse")
 
-	cols := index.collisions()
-	require.Len(t, cols, 1, "one name in two namespaces is one collision, got %+v", cols)
-	assert.Equal(t, "shared", cols[0].set, "collision set")
-	assert.Equal(t, []string{"team-a", "team-b"}, cols[0].namespaces, "collision namespaces")
+	count, named := index.collisions()
+	require.Equal(t, 1, count, "one name in two namespaces is one collision, got %+v", named)
+	assert.Equal(t, []string{"shared in team-a, team-b"}, named, "collision report")
 }
 
 // TestParseSingleNamespaceIsUnaffected guards the common install: one namespace
@@ -353,7 +352,8 @@ func TestParseSingleNamespaceIsUnaffected(t *testing.T) {
 	assert.Equal(t, float64(50), m.MaxRunners["arc-linux-x64"], "MaxRunners")
 	assert.Equal(t, float64(2), m.MinRunners["arc-linux-x64"], "MinRunners")
 	assert.Equal(t, float64(20), m.DesiredRunners["arc-linux-x64"], "DesiredRunners")
-	assert.Empty(t, index.collisions(), "a single-namespace scrape must not report a collision")
+	count, _ := index.collisions()
+	assert.Zero(t, count, "a single-namespace scrape must not report a collision")
 }
 
 // ceilingFamilies are the families collect reads with perScaleSet aggregation:
@@ -454,12 +454,12 @@ func TestCollisionWarningTruncatesOversizedLabelValues(t *testing.T) {
 
 	_, index, err := parse(strings.NewReader(body))
 	require.NoError(t, err, "parse")
-	cols := index.collisions()
-	require.Len(t, cols, 1, "one name in two namespaces is one collision, got %d", len(cols))
+	count, named := index.collisions()
+	require.Equal(t, 1, count, "one name in two namespaces is one collision, got %d", count)
 
 	var buf strings.Builder
 	var c collisionTracker
-	c.observe(zerolog.New(&buf).Level(zerolog.InfoLevel), cols)
+	c.observe(zerolog.New(&buf).Level(zerolog.InfoLevel), count, named)
 
 	assert.Less(t, buf.Len(), 1024, "one collision carrying 1 MiB label values logged %d bytes on one line", buf.Len())
 	assert.Contains(t, buf.String(), "…", "an oversized label value must be marked as cut short")
@@ -469,10 +469,15 @@ func TestCollisionWarningTruncatesOversizedLabelValues(t *testing.T) {
 // collision — a series that carried no namespace label — and rendering it as an
 // empty element gives "shared in , team-a", a bare leading comma an operator
 // cannot decode.
-func TestDescribeCollisionsNamesTheUnlabelledSeries(t *testing.T) {
+func TestCollisionsNameTheUnlabelledSeries(t *testing.T) {
 	t.Parallel()
 
-	got := describeCollisions([]collision{{set: "shared", namespaces: []string{"", "team-a"}}})
+	index := namespaceIndex{}
+	index.add("shared", "")
+	index.add("shared", "team-a")
+
+	count, got := index.collisions()
+	require.Equal(t, 1, count, "one collision is one entry, got %q", got)
 	require.Len(t, got, 1, "one collision is one entry, got %q", got)
 	assert.Contains(t, got[0], "no namespace label", "the unlabelled member is not named: %q", got[0])
 	assert.Contains(t, got[0], "team-a", "entry: %q", got[0])
@@ -516,7 +521,7 @@ func TestParsePrefersLabelledNamespace(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			m, err := Parse(strings.NewReader(tc.body))
+			m, _, err := parse(strings.NewReader(tc.body))
 			require.NoError(t, err, "Parse")
 			assert.Equal(t, float64(30), m.MaxRunners["shared"], "MaxRunners = %v, want team-a's 30", m.MaxRunners)
 		})
@@ -554,7 +559,7 @@ func TestParseCeilingWinnerIsOrderIndependent(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			m, err := Parse(strings.NewReader(tc.body))
+			m, _, err := parse(strings.NewReader(tc.body))
 			require.NoError(t, err, "Parse")
 			for _, got := range []map[string]float64{m.MaxRunners, m.MinRunners, m.DesiredRunners} {
 				assert.Equal(t, tc.want, got["shared"], "want team-a's value regardless of emission order, got %v", got)
@@ -576,7 +581,8 @@ gha_max_runners{name="shared"} 50
 `
 	m, index, err := parse(strings.NewReader(body))
 	require.NoError(t, err, "parse")
-	assert.Empty(t, index.collisions(),
+	unlabelled, _ := index.collisions()
+	assert.Zero(t, unlabelled,
 		"an unlabelled collision cannot be detected, so it must not be reported")
 	assert.Equal(t, float64(30), m.MaxRunners["shared"], "the first series wins; there is nothing else to choose on")
 }
@@ -584,7 +590,7 @@ gha_max_runners{name="shared"} 50
 func TestQueueDepthFromFixture(t *testing.T) {
 	t.Parallel()
 
-	m, err := Parse(strings.NewReader(fixture))
+	m, _, err := parse(strings.NewReader(fixture))
 	require.NoError(t, err, "Parse")
 	got := m.QueueDepth()
 	assert.Equal(t, 4, got["arc-linux-x64"], "arc-linux-x64 depth")
@@ -1060,40 +1066,25 @@ func TestCollisionTrackerLogsStateChangesOnly(t *testing.T) {
 
 	var buf strings.Builder
 	log := zerolog.New(&buf).Level(zerolog.InfoLevel)
-	shared := []collision{{set: "shared", namespaces: []string{"team-a", "team-b"}}}
+	shared := []string{"shared in team-a, team-b"}
 
 	var c collisionTracker
-	c.observe(log, nil)
+	c.observe(log, 0, nil)
 	assert.Empty(t, buf.String(), "the common case — no collisions — must say nothing at all")
 
-	c.observe(log, shared)
-	c.observe(log, shared)
+	c.observe(log, 1, shared)
+	c.observe(log, 1, shared)
 	assert.Equal(t, 1, strings.Count(buf.String(), "more than one namespace"),
 		"an unchanged collision must be announced once, got:\n%s", buf.String())
 
-	c.observe(log, []collision{{set: "shared", namespaces: []string{"team-a", "team-c"}}})
+	c.observe(log, 1, []string{"shared in team-a, team-c"})
 	assert.Equal(t, 2, strings.Count(buf.String(), "more than one namespace"),
 		"a third namespace joining is news, got:\n%s", buf.String())
 
-	c.observe(log, nil)
-	c.observe(log, nil)
+	c.observe(log, 0, nil)
+	c.observe(log, 0, nil)
 	assert.Equal(t, 1, strings.Count(buf.String(), "collisions resolved"),
 		"a fixed deployment must report once, got:\n%s", buf.String())
-}
-
-func TestHealthTrackerLogsTransitionsOnly(t *testing.T) {
-	t.Parallel()
-
-	var buf strings.Builder
-	log := zerolog.New(&buf).Level(zerolog.InfoLevel)
-
-	var h healthTracker
-	h.fail(log, "boom")
-	h.fail(log, "boom")
-	assert.Equal(t, 1, strings.Count(buf.String(), "source unavailable"), "identical failures must log once above debug")
-	h.ok(log)
-	h.ok(log)
-	assert.Equal(t, 1, strings.Count(buf.String(), "source recovered"), "recovery must log once")
 }
 
 // oneSetBody is what a single listener actually serves: its own scale set and

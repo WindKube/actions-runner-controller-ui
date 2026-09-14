@@ -389,7 +389,6 @@ func (previewHistory) Stats(context.Context) (StoreStats, error) {
 		Samples:     3_214_887,
 		Jobs:        18_402,
 		JobSamples:  742_118,
-		Phases:      91_755,
 		ChurnEvents: 36_804,
 		Failures:    1_142,
 		Rows:        3_362_990,

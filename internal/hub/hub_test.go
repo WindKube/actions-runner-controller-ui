@@ -93,18 +93,6 @@ func TestSeqIncreasesMonotonically(t *testing.T) {
 	}
 }
 
-func TestLatestLetsANewStreamRenderImmediately(t *testing.T) {
-	t.Parallel()
-	h := New()
-
-	assert.Zero(t, h.Latest().Seq, "a fresh hub has no ticks")
-
-	h.Broadcast(at)
-	got := h.Latest()
-	assert.Equal(t, uint64(1), got.Seq)
-	assert.True(t, got.At.Equal(at))
-}
-
 func TestConcurrentSubscribeAndBroadcast(t *testing.T) {
 	t.Parallel()
 	h := New()

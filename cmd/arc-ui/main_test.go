@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -107,10 +106,8 @@ func startRecorder(t *testing.T, p *recorderProbe, onResult func(error)) *snapsh
 			}
 		}
 	}
-	rec := newSnapshotRecorder(p.recordFn, p.broadcastFn, onResult)
-
 	ctx, cancel := context.WithCancel(context.Background())
-	rec.start(ctx)
+	rec := startSnapshotRecorder(ctx, p.recordFn, p.broadcastFn, onResult)
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -206,13 +203,22 @@ func TestSnapshotRecorderEnqueueNeverBlocksTheCollector(t *testing.T) {
 	t.Parallel()
 
 	// enqueue runs on the collector's notifier goroutine, where a slow
-	// subscriber delays every other one. It must return even with no worker
-	// draining it — that is the whole reason the original code detached a
-	// goroutine. The undrained recorder reports itself once through onError,
-	// which is swallowed here; TestSnapshotRecorderReportsSnapshotsEnqueuedWithNoWorker
-	// is where that report is asserted on.
-	p := &recorderProbe{}
-	rec := newSnapshotRecorder(p.recordFn, p.broadcastFn, func(error) {})
+	// subscriber delays every other one. It must return while a write is in
+	// flight, which is the whole reason the work is handed to a worker at all —
+	// so this recorder's write never finishes.
+	wedged := make(chan struct{})
+	t.Cleanup(func() { close(wedged) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rec := startSnapshotRecorder(ctx,
+		func(context.Context, fleet.Snapshot) error {
+			<-wedged
+			return nil
+		},
+		func(time.Time) {},
+		func(error) {},
+	)
 
 	base := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	done := make(chan struct{})
@@ -226,7 +232,7 @@ func TestSnapshotRecorderEnqueueNeverBlocksTheCollector(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("enqueue blocked with no worker draining it")
+		t.Fatal("enqueue blocked while a write was in flight")
 	}
 }
 
@@ -238,10 +244,16 @@ func TestSnapshotRecorderKeepsTheNewerOfTwoPendingSnapshots(t *testing.T) {
 	// lets the older snapshot reach the store after the newer one — the exact
 	// out-of-order application the worker exists to prevent.
 	//
-	// No worker here on purpose: this asserts on what enqueue parks, so nothing
-	// may drain it mid-test.
+	// Built without a worker on purpose: this asserts on what enqueue parks, so
+	// nothing may drain it mid-test.
 	p := &recorderProbe{}
-	rec := newSnapshotRecorder(p.recordFn, p.broadcastFn, func(error) {})
+	rec := &snapshotRecorder{
+		record:    p.recordFn,
+		broadcast: p.broadcastFn,
+		onResult:  func(error) {},
+		stopped:   make(chan struct{}),
+		wake:      make(chan struct{}, 1),
+	}
 
 	base := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	newest, stale := snapAt(base, time.Second), snapAt(base, 0)
@@ -255,71 +267,22 @@ func TestSnapshotRecorderKeepsTheNewerOfTwoPendingSnapshots(t *testing.T) {
 	assert.Empty(t, p.snapshot(), "no worker was started, so nothing can have been recorded")
 }
 
-func TestSnapshotRecorderReportsSnapshotsEnqueuedWithNoWorker(t *testing.T) {
+// TestStoreSourceReportsWriteOutcomes: the health strip renders
+// "store: <reason>", and the row has to go green again when writes recover —
+// nothing else in the process revisits that verdict.
+func TestStoreSourceReportsWriteOutcomes(t *testing.T) {
 	t.Parallel()
 
-	// enqueue neither blocks nor fails, so a recorder whose worker was never
-	// started swallows every snapshot: no history rows, no live updates, no log
-	// line. Reporting it is what turns that wiring mistake into something
-	// somebody notices — onError flips the store source to unavailable, which
-	// surfaces in the health strip.
-	p := &recorderProbe{}
-
-	var (
-		mu       sync.Mutex
-		reported []error
-	)
-	rec := newSnapshotRecorder(p.recordFn, p.broadcastFn, func(err error) {
-		mu.Lock()
-		defer mu.Unlock()
-		reported = append(reported, err)
-	})
-
-	base := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
-	rec.enqueue(snapAt(base, 0))
-	rec.enqueue(snapAt(base, time.Second))
-
-	mu.Lock()
-	defer mu.Unlock()
-	require.Len(t, reported, 1, "an undrained recorder must report itself, exactly once")
-	assert.ErrorIs(t, reported[0], errRecorderNotStarted)
-}
-
-func TestSnapshotRecorderStaysQuietWhenItsWorkerIsRunning(t *testing.T) {
-	t.Parallel()
-
-	// The counterpart to the test above: the orphan report must not fire just
-	// because the worker goroutine has not been scheduled yet, which is why
-	// start latches the flag synchronously instead of run latching it.
-	p := &recorderProbe{}
-	rec := startRecorder(t, p, nil)
-
-	base := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
-	rec.enqueue(snapAt(base, 0))
-
-	p.waitForSteps(t, 2)
-}
-
-func TestStoreSourceNamesTheConditionThatOccurred(t *testing.T) {
-	t.Parallel()
-
-	// The health strip renders "store: <reason>", so the reason has to be the
-	// condition that actually happened. An orphaned recorder never attempted a
-	// write, and reporting failing writes for it names a cause that did not
-	// occur.
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 
-	write := storeSource(errors.New("disk full"), now)
 	assert.Equal(t, fleet.Source{
 		Name: fleet.SourceStore, Available: false,
 		Reason: "writes failing", CheckedAt: now,
-	}, write)
+	}, storeSource(errors.New("disk full"), now))
 
-	orphan := storeSource(fmt.Errorf("recording: %w", errRecorderNotStarted), now)
 	assert.Equal(t, fleet.Source{
-		Name: fleet.SourceStore, Available: false,
-		Reason: "snapshots are not being recorded", CheckedAt: now,
-	}, orphan, "an orphaned recorder must not be reported as a failing write")
+		Name: fleet.SourceStore, Available: true, CheckedAt: now,
+	}, storeSource(nil, now), "a write that worked must clear the row")
 }
 
 func TestSnapshotRecorderBroadcastsEvenWhenTheWriteFails(t *testing.T) {
@@ -362,7 +325,9 @@ func TestRecorderReportsRecoveryAfterAFailedWrite(t *testing.T) {
 	failing.Store(true)
 
 	results := make(chan error, 8)
-	r := newSnapshotRecorder(
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := startSnapshotRecorder(ctx,
 		func(context.Context, fleet.Snapshot) error {
 			if failing.Load() {
 				return errors.New("disk full")
@@ -372,10 +337,6 @@ func TestRecorderReportsRecoveryAfterAFailedWrite(t *testing.T) {
 		func(time.Time) {},
 		func(err error) { results <- err },
 	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	r.start(ctx)
 
 	r.enqueue(fleet.Snapshot{At: time.Now()})
 	select {

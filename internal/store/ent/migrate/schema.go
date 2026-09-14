@@ -108,38 +108,6 @@ var (
 			},
 		},
 	}
-	// PhaseTransitionsColumns holds the columns for the "phase_transitions" table.
-	PhaseTransitionsColumns = []*schema.Column{
-		{Name: "id", Type: field.TypeInt, Increment: true},
-		{Name: "runner_name", Type: field.TypeString},
-		{Name: "set_name", Type: field.TypeString, Default: ""},
-		{Name: "phase", Type: field.TypeString},
-		{Name: "started_at", Type: field.TypeInt64},
-		{Name: "ended_at", Type: field.TypeInt64, Default: 0},
-	}
-	// PhaseTransitionsTable holds the schema information for the "phase_transitions" table.
-	PhaseTransitionsTable = &schema.Table{
-		Name:       "phase_transitions",
-		Columns:    PhaseTransitionsColumns,
-		PrimaryKey: []*schema.Column{PhaseTransitionsColumns[0]},
-		Indexes: []*schema.Index{
-			{
-				Name:    "phasetransition_runner_name_phase_started_at",
-				Unique:  true,
-				Columns: []*schema.Column{PhaseTransitionsColumns[1], PhaseTransitionsColumns[3], PhaseTransitionsColumns[4]},
-			},
-			{
-				Name:    "phasetransition_runner_name_started_at",
-				Unique:  false,
-				Columns: []*schema.Column{PhaseTransitionsColumns[1], PhaseTransitionsColumns[4]},
-			},
-			{
-				Name:    "phasetransition_started_at",
-				Unique:  false,
-				Columns: []*schema.Column{PhaseTransitionsColumns[4]},
-			},
-		},
-	}
 	// RunnerFailuresColumns holds the columns for the "runner_failures" table.
 	RunnerFailuresColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -205,7 +173,6 @@ var (
 		ChurnEventsTable,
 		JobObservationsTable,
 		JobSamplesTable,
-		PhaseTransitionsTable,
 		RunnerFailuresTable,
 		SamplesTable,
 	}

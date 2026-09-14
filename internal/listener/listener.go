@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"arc-ui/internal/fleet"
+	"arc-ui/internal/health"
 
 	"github.com/rs/zerolog"
 )
@@ -109,7 +110,7 @@ type Scraper struct {
 	sink     Sink
 	client   *http.Client
 
-	health     healthTracker
+	health     health.Tracker
 	collisions collisionTracker
 	now        func() time.Time
 }
@@ -159,6 +160,7 @@ func NewDiscoveringScraper(d Discoverer, interval time.Duration, log zerolog.Log
 	}
 	return &Scraper{
 		targets:  d,
+		health:   health.New("scrape"),
 		interval: interval,
 		log:      log.With().Str("component", "listener-scraper").Logger(),
 		sink:     sink,
@@ -204,7 +206,7 @@ func (s *Scraper) tick(ctx context.Context) {
 		// Discovery found nothing, which on a stock install is the truth rather
 		// than a fault: no listener exposes a metrics port because ARC ships
 		// them disabled. The reason says how to change that.
-		s.health.fail(s.log, disabledReason)
+		s.health.Fail(s.log, disabledReason)
 		s.reportDisabled()
 		return
 	}
@@ -220,7 +222,7 @@ func (s *Scraper) tick(ctx context.Context) {
 		// it as "collisions gone" would make a flapping endpoint re-announce
 		// the same ones on every recovery.
 		reason := allFailedReason(failures)
-		s.health.fail(s.log, reason)
+		s.health.Fail(s.log, reason)
 		// Unlike pod usage, a stale queue depth is actively misleading: the
 		// backlog it describes may have drained minutes ago and there is no
 		// timestamp on screen to hint otherwise. Drop back to "unknown".
@@ -237,7 +239,8 @@ func (s *Scraper) tick(ctx context.Context) {
 	// Collisions are computed once over every body, because with one listener
 	// per scale set a name claimed by two namespaces is now spread across two
 	// responses and invisible inside either.
-	s.collisions.observe(s.log, index.collisions())
+	count, named := index.collisions()
+	s.collisions.observe(s.log, count, named)
 
 	// A partial answer is published, not discarded. The sets that answered have
 	// real queue depth and the ones that did not are simply absent from the map,
@@ -245,9 +248,9 @@ func (s *Scraper) tick(ctx context.Context) {
 	reason := ""
 	if len(failures) > 0 {
 		reason = partialReason(len(list)-len(failures), len(list), failures)
-		s.health.degrade(s.log, reason)
+		s.health.Degrade(s.log, reason)
 	} else {
-		s.health.ok(s.log)
+		s.health.OK(s.log)
 	}
 
 	s.sink.SetQueueDepth(merged.QueueDepth(), true)

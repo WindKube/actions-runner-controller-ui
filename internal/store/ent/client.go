@@ -14,7 +14,6 @@ import (
 	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
 	"arc-ui/internal/store/ent/jobsample"
-	"arc-ui/internal/store/ent/phasetransition"
 	"arc-ui/internal/store/ent/runnerfailure"
 	"arc-ui/internal/store/ent/sample"
 
@@ -34,8 +33,6 @@ type Client struct {
 	JobObservation *JobObservationClient
 	// JobSample is the client for interacting with the JobSample builders.
 	JobSample *JobSampleClient
-	// PhaseTransition is the client for interacting with the PhaseTransition builders.
-	PhaseTransition *PhaseTransitionClient
 	// RunnerFailure is the client for interacting with the RunnerFailure builders.
 	RunnerFailure *RunnerFailureClient
 	// Sample is the client for interacting with the Sample builders.
@@ -54,7 +51,6 @@ func (c *Client) init() {
 	c.ChurnEvent = NewChurnEventClient(c.config)
 	c.JobObservation = NewJobObservationClient(c.config)
 	c.JobSample = NewJobSampleClient(c.config)
-	c.PhaseTransition = NewPhaseTransitionClient(c.config)
 	c.RunnerFailure = NewRunnerFailureClient(c.config)
 	c.Sample = NewSampleClient(c.config)
 }
@@ -147,14 +143,13 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:             ctx,
-		config:          cfg,
-		ChurnEvent:      NewChurnEventClient(cfg),
-		JobObservation:  NewJobObservationClient(cfg),
-		JobSample:       NewJobSampleClient(cfg),
-		PhaseTransition: NewPhaseTransitionClient(cfg),
-		RunnerFailure:   NewRunnerFailureClient(cfg),
-		Sample:          NewSampleClient(cfg),
+		ctx:            ctx,
+		config:         cfg,
+		ChurnEvent:     NewChurnEventClient(cfg),
+		JobObservation: NewJobObservationClient(cfg),
+		JobSample:      NewJobSampleClient(cfg),
+		RunnerFailure:  NewRunnerFailureClient(cfg),
+		Sample:         NewSampleClient(cfg),
 	}, nil
 }
 
@@ -172,14 +167,13 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:             ctx,
-		config:          cfg,
-		ChurnEvent:      NewChurnEventClient(cfg),
-		JobObservation:  NewJobObservationClient(cfg),
-		JobSample:       NewJobSampleClient(cfg),
-		PhaseTransition: NewPhaseTransitionClient(cfg),
-		RunnerFailure:   NewRunnerFailureClient(cfg),
-		Sample:          NewSampleClient(cfg),
+		ctx:            ctx,
+		config:         cfg,
+		ChurnEvent:     NewChurnEventClient(cfg),
+		JobObservation: NewJobObservationClient(cfg),
+		JobSample:      NewJobSampleClient(cfg),
+		RunnerFailure:  NewRunnerFailureClient(cfg),
+		Sample:         NewSampleClient(cfg),
 	}, nil
 }
 
@@ -208,23 +202,21 @@ func (c *Client) Close() error {
 // Use adds the mutation hooks to all the entity clients.
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
-	for _, n := range []interface{ Use(...Hook) }{
-		c.ChurnEvent, c.JobObservation, c.JobSample, c.PhaseTransition, c.RunnerFailure,
-		c.Sample,
-	} {
-		n.Use(hooks...)
-	}
+	c.ChurnEvent.Use(hooks...)
+	c.JobObservation.Use(hooks...)
+	c.JobSample.Use(hooks...)
+	c.RunnerFailure.Use(hooks...)
+	c.Sample.Use(hooks...)
 }
 
 // Intercept adds the query interceptors to all the entity clients.
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
-	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.ChurnEvent, c.JobObservation, c.JobSample, c.PhaseTransition, c.RunnerFailure,
-		c.Sample,
-	} {
-		n.Intercept(interceptors...)
-	}
+	c.ChurnEvent.Intercept(interceptors...)
+	c.JobObservation.Intercept(interceptors...)
+	c.JobSample.Intercept(interceptors...)
+	c.RunnerFailure.Intercept(interceptors...)
+	c.Sample.Intercept(interceptors...)
 }
 
 // Mutate implements the ent.Mutator interface.
@@ -236,8 +228,6 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.JobObservation.mutate(ctx, m)
 	case *JobSampleMutation:
 		return c.JobSample.mutate(ctx, m)
-	case *PhaseTransitionMutation:
-		return c.PhaseTransition.mutate(ctx, m)
 	case *RunnerFailureMutation:
 		return c.RunnerFailure.mutate(ctx, m)
 	case *SampleMutation:
@@ -646,139 +636,6 @@ func (c *JobSampleClient) mutate(ctx context.Context, m *JobSampleMutation) (Val
 	}
 }
 
-// PhaseTransitionClient is a client for the PhaseTransition schema.
-type PhaseTransitionClient struct {
-	config
-}
-
-// NewPhaseTransitionClient returns a client for the PhaseTransition from the given config.
-func NewPhaseTransitionClient(c config) *PhaseTransitionClient {
-	return &PhaseTransitionClient{config: c}
-}
-
-// Use adds a list of mutation hooks to the hooks stack.
-// A call to `Use(f, g, h)` equals to `phasetransition.Hooks(f(g(h())))`.
-func (c *PhaseTransitionClient) Use(hooks ...Hook) {
-	c.hooks.PhaseTransition = append(c.hooks.PhaseTransition, hooks...)
-}
-
-// Intercept adds a list of query interceptors to the interceptors stack.
-// A call to `Intercept(f, g, h)` equals to `phasetransition.Intercept(f(g(h())))`.
-func (c *PhaseTransitionClient) Intercept(interceptors ...Interceptor) {
-	c.inters.PhaseTransition = append(c.inters.PhaseTransition, interceptors...)
-}
-
-// Create returns a builder for creating a PhaseTransition entity.
-func (c *PhaseTransitionClient) Create() *PhaseTransitionCreate {
-	mutation := newPhaseTransitionMutation(c.config, OpCreate)
-	return &PhaseTransitionCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// CreateBulk returns a builder for creating a bulk of PhaseTransition entities.
-func (c *PhaseTransitionClient) CreateBulk(builders ...*PhaseTransitionCreate) *PhaseTransitionCreateBulk {
-	return &PhaseTransitionCreateBulk{config: c.config, builders: builders}
-}
-
-// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
-// a builder and applies setFunc on it.
-func (c *PhaseTransitionClient) MapCreateBulk(slice any, setFunc func(*PhaseTransitionCreate, int)) *PhaseTransitionCreateBulk {
-	rv := reflect.ValueOf(slice)
-	if rv.Kind() != reflect.Slice {
-		return &PhaseTransitionCreateBulk{err: fmt.Errorf("calling to PhaseTransitionClient.MapCreateBulk with wrong type %T, need slice", slice)}
-	}
-	builders := make([]*PhaseTransitionCreate, rv.Len())
-	for i := 0; i < rv.Len(); i++ {
-		builders[i] = c.Create()
-		setFunc(builders[i], i)
-	}
-	return &PhaseTransitionCreateBulk{config: c.config, builders: builders}
-}
-
-// Update returns an update builder for PhaseTransition.
-func (c *PhaseTransitionClient) Update() *PhaseTransitionUpdate {
-	mutation := newPhaseTransitionMutation(c.config, OpUpdate)
-	return &PhaseTransitionUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// UpdateOne returns an update builder for the given entity.
-func (c *PhaseTransitionClient) UpdateOne(_m *PhaseTransition) *PhaseTransitionUpdateOne {
-	mutation := newPhaseTransitionMutation(c.config, OpUpdateOne, withPhaseTransition(_m))
-	return &PhaseTransitionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// UpdateOneID returns an update builder for the given id.
-func (c *PhaseTransitionClient) UpdateOneID(id int) *PhaseTransitionUpdateOne {
-	mutation := newPhaseTransitionMutation(c.config, OpUpdateOne, withPhaseTransitionID(id))
-	return &PhaseTransitionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// Delete returns a delete builder for PhaseTransition.
-func (c *PhaseTransitionClient) Delete() *PhaseTransitionDelete {
-	mutation := newPhaseTransitionMutation(c.config, OpDelete)
-	return &PhaseTransitionDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// DeleteOne returns a builder for deleting the given entity.
-func (c *PhaseTransitionClient) DeleteOne(_m *PhaseTransition) *PhaseTransitionDeleteOne {
-	return c.DeleteOneID(_m.ID)
-}
-
-// DeleteOneID returns a builder for deleting the given entity by its id.
-func (c *PhaseTransitionClient) DeleteOneID(id int) *PhaseTransitionDeleteOne {
-	builder := c.Delete().Where(phasetransition.ID(id))
-	builder.mutation.id = &id
-	builder.mutation.op = OpDeleteOne
-	return &PhaseTransitionDeleteOne{builder}
-}
-
-// Query returns a query builder for PhaseTransition.
-func (c *PhaseTransitionClient) Query() *PhaseTransitionQuery {
-	return &PhaseTransitionQuery{
-		config: c.config,
-		ctx:    &QueryContext{Type: TypePhaseTransition},
-		inters: c.Interceptors(),
-	}
-}
-
-// Get returns a PhaseTransition entity by its id.
-func (c *PhaseTransitionClient) Get(ctx context.Context, id int) (*PhaseTransition, error) {
-	return c.Query().Where(phasetransition.ID(id)).Only(ctx)
-}
-
-// GetX is like Get, but panics if an error occurs.
-func (c *PhaseTransitionClient) GetX(ctx context.Context, id int) *PhaseTransition {
-	obj, err := c.Get(ctx, id)
-	if err != nil {
-		panic(err)
-	}
-	return obj
-}
-
-// Hooks returns the client hooks.
-func (c *PhaseTransitionClient) Hooks() []Hook {
-	return c.hooks.PhaseTransition
-}
-
-// Interceptors returns the client interceptors.
-func (c *PhaseTransitionClient) Interceptors() []Interceptor {
-	return c.inters.PhaseTransition
-}
-
-func (c *PhaseTransitionClient) mutate(ctx context.Context, m *PhaseTransitionMutation) (Value, error) {
-	switch m.Op() {
-	case OpCreate:
-		return (&PhaseTransitionCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpUpdate:
-		return (&PhaseTransitionUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpUpdateOne:
-		return (&PhaseTransitionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpDelete, OpDeleteOne:
-		return (&PhaseTransitionDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
-	default:
-		return nil, fmt.Errorf("ent: unknown PhaseTransition mutation op: %q", m.Op())
-	}
-}
-
 // RunnerFailureClient is a client for the RunnerFailure schema.
 type RunnerFailureClient struct {
 	config
@@ -1048,11 +905,9 @@ func (c *SampleClient) mutate(ctx context.Context, m *SampleMutation) (Value, er
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		ChurnEvent, JobObservation, JobSample, PhaseTransition, RunnerFailure,
-		Sample []ent.Hook
+		ChurnEvent, JobObservation, JobSample, RunnerFailure, Sample []ent.Hook
 	}
 	inters struct {
-		ChurnEvent, JobObservation, JobSample, PhaseTransition, RunnerFailure,
-		Sample []ent.Interceptor
+		ChurnEvent, JobObservation, JobSample, RunnerFailure, Sample []ent.Interceptor
 	}
 )
