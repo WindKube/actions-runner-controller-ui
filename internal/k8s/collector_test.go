@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -449,21 +450,35 @@ func TestConvertEventTakesTheNewestTimestamp(t *testing.T) {
 	}
 }
 
+// TestEventCacheExpiresAndIsBounded pins the two properties the events lookup
+// depends on: a reused answer goes stale on schedule, and the keyspace — one
+// entry per ephemeral runner anyone has ever opened — cannot grow forever.
 func TestEventCacheExpires(t *testing.T) {
 	t.Parallel()
 
-	c := newEventCache(10 * time.Second)
-	c.put("k", []fleet.Event{{Reason: "Started"}}, testNow)
+	c := expirable.NewLRU[string, []fleet.Event](eventCacheSize, nil, 50*time.Millisecond)
+	c.Add("k", []fleet.Event{{Reason: "Started"}})
 
-	_, ok := c.get("k", testNow.Add(5*time.Second))
+	_, ok := c.Get("k")
 	require.True(t, ok, "entry expired early")
-	_, ok = c.get("k", testNow.Add(11*time.Second))
-	require.False(t, ok, "entry outlived its ttl")
 
-	// Writing sweeps the expired keys, so the map does not grow forever across
-	// the endless stream of ephemeral runner names.
-	c.put("other", nil, testNow.Add(time.Minute))
-	require.NotContains(t, c.entries, "k", "expired entry was not swept on write")
+	require.Eventually(t, func() bool {
+		_, ok := c.Get("k")
+		return !ok
+	}, time.Second, 10*time.Millisecond, "entry outlived its ttl")
+}
+
+func TestEventCacheIsBounded(t *testing.T) {
+	t.Parallel()
+
+	c := expirable.NewLRU[string, []fleet.Event](2, nil, time.Minute)
+	for _, k := range []string{"a", "b", "c"} {
+		c.Add(k, []fleet.Event{{Reason: k}})
+	}
+
+	assert.Equal(t, 2, c.Len(), "the cache grew past its bound")
+	_, ok := c.Get("a")
+	assert.False(t, ok, "the oldest entry should have been evicted")
 }
 
 func TestSortSourcesIsStable(t *testing.T) {
@@ -699,7 +714,7 @@ func listenerPod(name, ip string, withMetricsPort bool) *corev1.Pod {
 			},
 		},
 		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{Name: arcapi.ListenerContainerName}},
+			Containers: []corev1.Container{{Name: "listener"}},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: ip},
 	}

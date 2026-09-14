@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/rs/zerolog"
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
@@ -100,7 +101,7 @@ type Collector struct {
 	dirty  bool
 
 	jobStarts *JobStartTracker
-	events    *eventCache
+	events    *expirable.LRU[string, []fleet.Event]
 
 	synced atomic.Bool
 
@@ -131,7 +132,7 @@ func NewCollector(clients *Clients, cfg config.Config, log zerolog.Logger) *Coll
 		sources:       map[string]fleet.Source{},
 		watchFailures: map[string]fleet.Source{},
 		jobStarts:     NewJobStartTracker(),
-		events:        newEventCache(eventCacheTTL),
+		events:        expirable.NewLRU[string, []fleet.Event](eventCacheSize, nil, eventCacheTTL),
 		subs:          map[uint64]func(){},
 		notify:        make(chan struct{}, 1),
 		errLogAt:      map[string]time.Time{},

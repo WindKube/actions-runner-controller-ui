@@ -1,11 +1,10 @@
 package k8s
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
-	"sort"
-	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -22,6 +21,12 @@ const (
 	// issue an uncached list against the busiest collection in the cluster
 	// several times a second.
 	eventCacheTTL = 10 * time.Second
+
+	// eventCacheSize bounds the cache independently of the TTL. Runner pods are
+	// ephemeral, so keys are never reused and an unbounded map would grow with
+	// every detail page anyone opens; the LRU caps that at the number of runners
+	// a human could plausibly have open at once.
+	eventCacheSize = 256
 
 	// maxEventsPerPod caps what the panel is handed. A pod in CrashLoopBackOff
 	// accumulates events indefinitely and the panel shows a handful.
@@ -87,8 +92,9 @@ const (
 // shares; the ~10s cache absorbs repeats.
 func (c *Collector) EventsForPod(ctx context.Context, namespace, name string, uid types.UID) ([]fleet.Event, error) {
 	key := fmt.Sprintf("%s/%s/%s", namespace, name, uid)
-	if cached, ok := c.events.get(key, time.Now()); ok {
-		return cached, nil
+	if cached, ok := c.events.Get(key); ok {
+		// Copied because the caller may sort or truncate what it gets back.
+		return slices.Clone(cached), nil
 	}
 
 	selector := fields.Set{"involvedObject.name": name}
@@ -129,11 +135,10 @@ func (c *Collector) EventsForPod(ctx context.Context, namespace, name string, ui
 		opts.Continue = list.Continue
 	}
 
-	c.events.put(key, events, time.Now())
-	// Cloned for the same reason eventCache.get clones: the caller may sort or
-	// truncate what it gets back. Returning `events` here would hand out the
-	// cache's own backing array on the miss path, so the first caller could
-	// reorder the entry every later cache hit then serves.
+	c.events.Add(key, events)
+	// Cloned for the same reason the hit path clones: returning `events` here
+	// would hand out the cache's own backing array, so the first caller could
+	// reorder the entry every later hit then serves.
 	return slices.Clone(events), nil
 }
 
@@ -143,11 +148,13 @@ func (c *Collector) EventsForPod(ctx context.Context, namespace, name string, ui
 // to the top of the panel. The sort is stable so events sharing a timestamp keep
 // the order the API server listed them in.
 func newestEvents(events []fleet.Event) []fleet.Event {
-	sort.SliceStable(events, func(i, j int) bool {
-		if events[i].At.IsZero() != events[j].At.IsZero() {
-			return !events[i].At.IsZero()
-		}
-		return events[i].At.After(events[j].At)
+	slices.SortStableFunc(events, func(a, b fleet.Event) int {
+		return cmp.Or(
+			// Undated events sort last rather than to the top of a panel that
+			// is ordered newest first.
+			cmp.Compare(boolRank(a.At.IsZero()), boolRank(b.At.IsZero())),
+			b.At.Compare(a.At),
+		)
 	})
 	if len(events) > maxEventsPerPod {
 		events = events[:maxEventsPerPod]
@@ -190,45 +197,10 @@ func newestTime(times ...time.Time) time.Time {
 	return out
 }
 
-// eventCache is a tiny TTL cache keyed by namespace/name/uid.
-type eventCache struct {
-	ttl time.Duration
-
-	mu      sync.Mutex
-	entries map[string]eventCacheEntry
-}
-
-type eventCacheEntry struct {
-	at     time.Time
-	events []fleet.Event
-}
-
-func newEventCache(ttl time.Duration) *eventCache {
-	return &eventCache{ttl: ttl, entries: map[string]eventCacheEntry{}}
-}
-
-func (c *eventCache) get(key string, now time.Time) ([]fleet.Event, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry, ok := c.entries[key]
-	if !ok || now.Sub(entry.at) > c.ttl {
-		return nil, false
+// boolRank orders false before true, so a two-way flag can be a cmp.Or term.
+func boolRank(b bool) int {
+	if b {
+		return 1
 	}
-	// Copied because the caller may sort or truncate it.
-	return slices.Clone(entry.events), true
-}
-
-func (c *eventCache) put(key string, events []fleet.Event, now time.Time) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Runner pods are ephemeral, so keys are never reused and the map would
-	// grow forever. Expired entries are swept on write, which is bounded by how
-	// often anyone actually opens a runner detail page.
-	for k, entry := range c.entries {
-		if now.Sub(entry.at) > c.ttl {
-			delete(c.entries, k)
-		}
-	}
-	c.entries[key] = eventCacheEntry{at: now, events: events}
+	return 0
 }

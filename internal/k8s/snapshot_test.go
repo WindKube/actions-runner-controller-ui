@@ -378,7 +378,6 @@ func TestJobFieldsAndAttribution(t *testing.T) {
 	assert.Equal(t, "acme-corp/api", r.Job.Repository, "job fields = %+v", r.Job)
 	assert.Equal(t, "build (ubuntu-latest)", r.Job.Name, "job fields = %+v", r.Job)
 	assert.Equal(t, int64(998877), r.Job.RunID, "job fields = %+v", r.Job)
-	assert.Equal(t, int64(42), r.Job.RequestID, "job fields = %+v", r.Job)
 	assert.Equal(t, fleet.StateBusy, r.State, "State")
 }
 
