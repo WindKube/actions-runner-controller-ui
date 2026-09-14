@@ -73,7 +73,7 @@ func (h *healthTracker) down(log zerolog.Logger, msg, reason string) {
 }
 
 // maxNamedCollisions caps how many colliding scale set names one warning lists.
-// The scrape body is operator-supplied and bounded only by maxBodyBytes, which
+// The scrape body is operator-supplied and bounded only by maxKeptBytes, which
 // leaves room for tens of thousands of distinct colliding names, and a warning
 // nobody can read through is the same failure as a warning nobody sees. The
 // colliding_names field always carries the exact count; only naming is cut short.
@@ -87,7 +87,7 @@ const maxNamedNamespaces = 4
 // maxLabelBytes caps each label value a warning interpolates. Capping how many
 // names and namespaces are listed bounds their count but not their length: the
 // values come from the scrape body, which is operator-supplied and bounded only
-// by maxBodyBytes, so one colliding name carrying megabyte label values is
+// by maxKeptBytes, so one colliding name carrying megabyte label values is
 // otherwise one megabyte-long warn line.
 //
 // 64 bytes clears a Kubernetes namespace name, which is a DNS label and so at
