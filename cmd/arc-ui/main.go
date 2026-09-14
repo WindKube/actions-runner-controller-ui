@@ -132,9 +132,9 @@ func newServeCmd() *cobra.Command {
 	}
 }
 
-// run wires every component together and serves until interrupted. The wiring
-// is linear; splitting it into helpers that each take half the object graph
-// reads worse than one ordered sequence.
+// run wires every component together and serves until interrupted. The wiring is
+// linear; splitting it into helpers that each take half the object graph reads
+// worse than one ordered sequence.
 //
 //nolint:gocyclo // linear composition root; see above
 func run(parent context.Context) error {
@@ -170,8 +170,6 @@ func run(parent context.Context) error {
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// --- history store -----------------------------------------------------
-
 	db, err := store.Open(ctx, cfg.DBPath, log,
 		store.WithJobSampleResolution(cfg.JobSampleResolution))
 	if err != nil {
@@ -183,8 +181,6 @@ func run(parent context.Context) error {
 		}
 	}()
 
-	// --- cluster -----------------------------------------------------------
-
 	clients, err := k8s.NewClients(cfg, log, "arc-ui/"+version)
 	if err != nil {
 		return err
@@ -195,51 +191,36 @@ func run(parent context.Context) error {
 		return err
 	}
 
-	// --- pollers -----------------------------------------------------------
-
 	events := hub.New()
 
 	poller := metrics.NewPoller(clients.Metrics, cfg.Namespaces, cfg.ScrapeInterval, log, collector)
 	go supervise(ctx, log, "metrics poller", poller.Run)
 
-	// A configured URL wins: it names one endpoint, which is what an operator
-	// pointing the dashboard at an aggregator in front of the listeners — a
-	// Prometheus /federate URL, a proxy — has asked for. With nothing configured
-	// the listener pods are discovered from the controller namespace, because ARC
-	// runs one listener per scale set and each serves only its own series.
+	// A configured URL wins: it names one endpoint, which is what an operator pointing
+	// the dashboard at an aggregator has asked for. With nothing configured the
+	// listener pods are discovered from the controller namespace, because ARC runs one
+	// listener per scale set and each serves only its own series.
 	scraper := listener.NewDiscoveringScraper(collector, cfg.ScrapeInterval, log, collector)
 	if cfg.ListenerMetricsURL != "" {
 		scraper = listener.NewScraper(cfg.ListenerMetricsURL, cfg.ScrapeInterval, log, collector)
 	}
 	go supervise(ctx, log, "listener scraper", scraper.Run)
 
-	// Fleet changes are handed to the recorder, which persists each snapshot for
-	// the history charts and then ticks the hub so connected browsers re-render.
-	// What is guaranteed is ordering, not that every change gets both: the
-	// worker applies snapshots one at a time in the order this callback observed
-	// them, so the store never diffs a snapshot against a newer one, but a change
-	// superseded while a write is in flight is dropped whole — neither persisted
-	// nor broadcast — because the snapshot that replaced it is about to be
-	// recorded and ticked in its place. See snapshotRecorder for why that trade
-	// is the right one.
+	// Fleet changes are handed to the recorder, which persists each snapshot for the
+	// history charts and then ticks the hub so connected browsers re-render. What is
+	// guaranteed is ordering, not that every change gets both: the worker applies
+	// snapshots one at a time in the order this callback observed them, but a change
+	// superseded while a write is in flight is dropped whole, because the snapshot
+	// that replaced it is about to be recorded and ticked in its place.
 	//
-	// The tick is sent after the write returns. That ordering is all it is: it
-	// announces that a newer snapshot exists, not that any particular chart now
-	// shows it. The tick carries no fleet data — each stream re-renders from
-	// the collector's current snapshot, which may already be newer than
-	// anything written — and it goes out even when the write failed,
-	// deliberately, so a broken store does not freeze the dashboard. Whether a
-	// history chart contains the sample depends on the tier its range resolves
-	// to: every tier coarser than raw only gains it after compaction has rolled
-	// the completed buckets up into it.
+	// The tick is sent after the write returns, and announces only that a newer
+	// snapshot exists. It carries no fleet data, and it goes out even when the write
+	// failed, deliberately, so a broken store does not freeze the dashboard.
 	//
-	// The snapshot is taken here rather than in the worker: this runs the
-	// instant the debounce fires, so its timestamp is when the change was
-	// observed rather than whenever the write queue got to it, which is what
-	// both the store's integration interval and the hub's liveness indicator
-	// mean by "at". Everything after the hand-off is the worker's problem,
-	// which is what keeps the slow half — the write — off the collector's
-	// notifier goroutine this callback runs on.
+	// The snapshot is taken here rather than in the worker: this runs the instant the
+	// debounce fires, so its timestamp is when the change was observed rather than
+	// whenever the write queue got to it. That also keeps the slow half — the write —
+	// off the collector's notifier goroutine this callback runs on.
 	recorder := startSnapshotRecorder(ctx,
 		db.RecordSnapshot,
 		events.Broadcast,
@@ -255,8 +236,6 @@ func run(parent context.Context) error {
 	defer cancelWatch()
 
 	go runCompactor(ctx, db, retentionFrom(cfg), log)
-
-	// --- web ---------------------------------------------------------------
 
 	assets, err := web.NewAssets()
 	if err != nil {
@@ -315,11 +294,9 @@ func run(parent context.Context) error {
 
 	shutdownErr := server.Shutdown(shutdownCtx)
 
-	// Join the recorder before returning. Its worker holds the store, and
-	// db.Close is deferred further up this function — deferred calls run after
-	// this return, so without the join a RecordSnapshot still in flight can
-	// write to a closed store. ctx is already cancelled, so the worker is
-	// on its way out; this waits only for the write it was in the middle of.
+	// Join the recorder before returning. Its worker holds the store, and db.Close is
+	// deferred further up this function — deferred calls run after this return, so
+	// without the join a RecordSnapshot still in flight can write to a closed store.
 	select {
 	case <-recorder.stopped:
 	case <-shutdownCtx.Done():
@@ -329,8 +306,8 @@ func run(parent context.Context) error {
 	return shutdownErr
 }
 
-// storeSource turns a write outcome into the health-strip verdict. A nil error
-// is a write that worked, and is what lets the row go green again.
+// storeSource turns a write outcome into the health-strip verdict. A nil error is a
+// write that worked, and is what lets the row go green again.
 func storeSource(err error, now time.Time) fleet.Source {
 	if err == nil {
 		return fleet.Source{Name: fleet.SourceStore, Available: true, CheckedAt: now}
@@ -344,30 +321,24 @@ func storeSource(err error, now time.Time) fleet.Source {
 // snapshotRecorder persists fleet snapshots and wakes connected browsers, one
 // snapshot at a time and always in the order the changes were observed.
 //
-// Both halves of that are load-bearing. enqueue runs on the collector's
-// notifier goroutine, where a slow subscriber delays every other one, so it
-// must not block. But the obvious way to achieve that — detach a goroutine per
-// change — is wrong: Store.RecordSnapshot diffs every snapshot against the
-// previous one it saw, so with two writes in flight "previous" becomes
-// whichever goroutine won the store's mutex rather than whichever snapshot is
-// chronologically older. The CPU/memory integration interval then comes out
-// zero or negative, and churn and phase transitions are diffed against a
-// future fleet, inventing runners that were never created or terminated. A
-// write only has to outlast the collector's debounce window for that to
-// happen, and the churn bursts that make writes slow are exactly the ones that
-// fire changes fastest.
+// Both halves are load-bearing. enqueue runs on the collector's notifier
+// goroutine, where a slow subscriber delays every other one, so it must not block.
+// But detaching a goroutine per change is wrong: Store.RecordSnapshot diffs every
+// snapshot against the previous one it saw, so with two writes in flight
+// "previous" becomes whichever goroutine won the store's mutex rather than
+// whichever snapshot is older. The integration interval then comes out zero or
+// negative, and churn is diffed against a future fleet, inventing runners that
+// were never created. A write only has to outlast the debounce window for that to
+// happen, and the churn bursts that make writes slow fire changes fastest.
 //
-// So enqueue parks the snapshot and returns; a single worker records them in
-// turn. Only the newest pending snapshot survives — one superseded before it
-// was ever written describes a fleet the store is about to be told about
-// anyway, and replaying it would only diff against state already moved past.
+// So enqueue parks the snapshot and returns; a single worker records them in turn.
+// Only the newest pending snapshot survives.
 type snapshotRecorder struct {
 	record    func(context.Context, fleet.Snapshot) error
 	broadcast func(time.Time)
-	// onResult reports the outcome of every write attempt, nil included. A
-	// store that recovers has to be able to say so: nothing else in the process
-	// revisits that verdict, so reporting only failures would leave the health
-	// strip blaming the store until restart.
+	// onResult reports the outcome of every write attempt, nil included. A store that
+	// recovers has to be able to say so: nothing else revisits that verdict, so
+	// reporting only failures would leave the health strip blaming it until restart.
 	onResult func(error)
 
 	// stopped closes when the worker returns, so a caller can tell a cancelled
@@ -383,11 +354,8 @@ type snapshotRecorder struct {
 
 // startSnapshotRecorder builds a recorder and launches its worker.
 //
-// Construction and start are one call because enqueue neither blocks nor
-// fails: a recorder whose worker was never started would drop every snapshot
-// in silence — no history rows, no live updates, no error. Leaving no way to
-// build one without a worker is cheaper than detecting that someone did.
-//
+// Construction and start are one call because enqueue neither blocks nor fails: a
+// recorder whose worker was never started would drop every snapshot in silence.
 // It must be called at most once per recorder; run closes stopped on its way out.
 func startSnapshotRecorder(
 	ctx context.Context,
@@ -409,19 +377,14 @@ func startSnapshotRecorder(
 // enqueue makes snap the pending snapshot and returns without blocking.
 func (r *snapshotRecorder) enqueue(snap fleet.Snapshot) {
 	r.mu.Lock()
-	// Keep whichever snapshot is newer, not whichever call arrived last.
-	// Nothing the recorder owns serialises its callers, so two of them can
-	// hand over out of order, and letting the older one win here would put it
-	// in front of the newer one on the way to the store — reintroducing the
-	// out-of-order application the worker exists to prevent.
+	// Keep whichever snapshot is newer, not whichever call arrived last. Nothing the
+	// recorder owns serialises its callers, so two of them can hand over out of order,
+	// and letting the older one win here would put it in front of the newer one on the
+	// way to the store.
 	//
-	// It covers exactly one interleaving: both snapshots pending at the same
-	// time, the older arriving second. It is not general ordering between
-	// callers — an older snapshot handed over after the worker has already
-	// claimed the newer one finds pending empty, and is recorded behind it.
-	// Today there is a single caller (the collector's notifier goroutine, which
-	// never hands over a snapshot older than the one before it), so the
-	// comparison never rejects anything.
+	// It covers exactly one interleaving: both snapshots pending at the same time, the
+	// older arriving second. Today there is a single caller, so the comparison never
+	// rejects anything.
 	if r.pending == nil || !snap.At.Before(r.pending.At) {
 		r.pending = &snap
 	}
@@ -448,11 +411,9 @@ func (r *snapshotRecorder) take() (fleet.Snapshot, bool) {
 
 // run records pending snapshots until ctx ends, then closes stopped.
 //
-// Each broadcast follows its own write, and goes out whether that write
-// succeeded or failed — the fleet changed either way, and a failing store must
-// not freeze the dashboard. The ordering is the whole of it: a tick says a
-// newer snapshot exists, not that a chart fetched after it shows that
-// snapshot's sample.
+// Each broadcast follows its own write, and goes out whether that write succeeded
+// or failed — the fleet changed either way, and a failing store must not freeze
+// the dashboard.
 func (r *snapshotRecorder) run(ctx context.Context) {
 	defer close(r.stopped)
 
@@ -488,11 +449,10 @@ func supervise(ctx context.Context, log zerolog.Logger, name string, run func(co
 
 // compactInterval is how often roll-ups and retention run.
 //
-// It is a minute rather than something leisurely because the store answers a
-// range query from exactly one tier — the coarsest that resolves the requested
-// bucket width — and the default one-hour view resolves to the one-minute
-// tier. Compacting every ten minutes would leave that chart visibly missing its
-// last ten minutes. Each pass is incremental, so running it often is cheap.
+// It is a minute because the store answers a range query from exactly one tier,
+// and the default one-hour view resolves to the one-minute tier. Compacting every
+// ten minutes would leave that chart visibly missing its last ten minutes. Each
+// pass is incremental, so running it often is cheap.
 const compactInterval = time.Minute
 
 // runCompactor rolls samples up and applies retention until ctx ends.
@@ -526,8 +486,7 @@ func retentionFrom(cfg config.Config) store.Retention {
 // eventSource adapts the collector's pod-event lookup to what the views need.
 //
 // The pod UID is the point: it pins the field selector to this exact pod, so a
-// recycled runner name cannot surface a dead pod's events as if they were this
-// runner's.
+// recycled runner name cannot surface a dead pod's events as this runner's.
 type eventSource struct{ c *k8s.Collector }
 
 func (e eventSource) Events(ctx context.Context, r fleet.Runner) ([]fleet.Event, error) {
