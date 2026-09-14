@@ -1,21 +1,18 @@
 // Package web renders the dashboard and keeps it live.
 //
-// Three things distinguish it from a conventional Go web layer.
-//
-// Every chart is server-computed SVG. internal/chart turns numbers into
-// polygon and polyline point strings, and the templates interpolate them
-// directly, so there is no client-side charting library and no JSON API behind
-// the charts.
+// Every chart is server-computed SVG. internal/chart turns numbers into polygon
+// and polyline point strings and the templates interpolate them directly, so
+// there is no client-side charting library and no JSON API behind the charts.
 //
 // Updates are pushed, not polled. One SSE stream per page carries that page's
 // filter state; when the fleet changes, the server re-renders the affected
 // regions and patches them by DOM id. Only the regions whose markup actually
 // changed are sent, so a quiet tick costs a few dozen bytes.
 //
-// The only client-side dependency is Datastar, which is why the interaction
-// model is expressed as data-* attributes on server-rendered HTML rather than
-// as a component tree. Pages render complete on the server: deep links, back
-// and forward, and a no-JavaScript reader all work before any script runs.
+// The only client-side dependency is Datastar, which is why the interaction model
+// is expressed as data-* attributes on server-rendered HTML. Pages render
+// complete on the server: deep links, back and forward, and a no-JavaScript
+// reader all work before any script runs.
 package web
 
 import (
@@ -36,11 +33,10 @@ import (
 // Signals are the Datastar signals the browser holds and sends back with every
 // request. The json tags are the signal names.
 //
-// Names are single lowercase words on purpose. HTML lowercases attribute
-// names, and Datastar's default "camel" case conversion turns a kebab-cased
-// attribute key into a camelCase signal — so a signal called "fRepo" would
-// have to be written `data-bind:f-repo`. Flat lowercase sidesteps the whole
-// mapping.
+// Names are single lowercase words on purpose. HTML lowercases attribute names,
+// and Datastar's default "camel" conversion turns a kebab-cased attribute key into
+// a camelCase signal — so "fRepo" would have to be written `data-bind:f-repo`.
+// Flat lowercase sidesteps the mapping entirely.
 type Signals struct {
 	Repo     string `json:"repo"`
 	Workflow string `json:"workflow"`
@@ -233,11 +229,10 @@ func (s Signals) JSON() string {
 
 // StreamCall is the Datastar action every control invokes.
 //
-// The retry options are not decoration. Datastar defaults to giving up after
-// ten reconnection attempts — roughly three minutes — after which the page
-// silently stops updating while still displaying plausible numbers. A wall
-// dashboard must reconnect for as long as it is open, so the count is
-// effectively unlimited and the backoff is capped at ten seconds.
+// The retry options are not decoration. Datastar defaults to giving up after ten
+// reconnection attempts — roughly three minutes — after which the page silently
+// stops updating while still displaying plausible numbers. A wall dashboard must
+// reconnect for as long as it is open.
 func StreamCall(streamURL string) string {
 	return fmt.Sprintf("@get('%s', {retryMaxCount: 1e9, retryMaxWait: 10000})",
 		template.JSEscapeString(streamURL))
@@ -374,15 +369,12 @@ func (r TimeRange) Window(now time.Time) Window {
 // Ticks are the x-axis labels beneath a chart.
 //
 // The Ticks component lays these out with flex justify-between, so whatever is
-// returned lands at equal spacing across the full width of the chart. That
-// makes the step size a correctness property rather than a matter of taste: a
-// set whose labels are not equally spaced in TIME puts a label under a position
-// that means something else, and the axis silently lies.
+// returned lands at equal spacing across the full width of the chart. That makes
+// the step size a correctness property: a set whose labels are not equally spaced
+// in TIME puts a label under a position that means something else.
 //
-// The count therefore varies by range, chosen so the step is a round unit —
-// six labels means five gaps, and a 6h window does not divide into five whole
-// hours. Six works for 15m (3m), 1h (12m) and 30d (6d); 6h and 24h want seven,
-// and 7d wants eight.
+// The count therefore varies by range, chosen so the step is a round unit. Six
+// works for 15m (3m), 1h (12m) and 30d (6d); 6h and 24h want seven, 7d wants eight.
 func (r TimeRange) Ticks() []string {
 	switch r {
 	case Range15m:
@@ -399,14 +391,6 @@ func (r TimeRange) Ticks() []string {
 		return []string{"-60m", "-48m", "-36m", "-24m", "-12m", "now"}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Presentation vocabulary
-//
-// The mock expressed these as inline style strings built by stateVisual(),
-// pillStyle() and dotStyle(). Here they become Tailwind class sets over the
-// Primer token layer, so the palette lives in one place.
-// ---------------------------------------------------------------------------
 
 // Tone is a semantic colour role.
 type Tone string
@@ -585,11 +569,9 @@ func UsageGiB(r fleet.Resources) string {
 	return fleet.FormatGiB(r.Used)
 }
 
-// Thousands groups a count with comma separators, e.g. "1,234,567".
-//
-// The store footer reports row counts that reach eight digits. Unseparated,
-// 1234567 and 12345678 are the same shape at a glance, and telling those two
-// apart is the entire job of a capacity readout.
+// Thousands groups a count with comma separators, e.g. "1,234,567". The store
+// footer reports row counts that reach eight digits, where 1234567 and 12345678
+// are the same shape at a glance.
 func Thousands(n int64) string { return humanize.Comma(n) }
 
 // Pct renders a fraction as a whole percentage.

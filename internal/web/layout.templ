@@ -9,8 +9,8 @@ import (
 // Document is the full page shell.
 //
 // The page is rendered complete on the server: every panel is present in the
-// initial HTML, so a deep link works, back and forward work, and the dashboard
-// is readable before any script runs. Datastar's job is only to keep it fresh.
+// initial HTML, so deep links and back/forward work before any script runs.
+// Datastar's job is only to keep it fresh.
 templ Document(p Page, body templ.Component) {
 	<!DOCTYPE html>
 	<html lang="en" class="bg-canvas">
@@ -145,11 +145,10 @@ templ LiveToggle(p Page) {
 
 // LiveIndicator shows how long ago the last update arrived.
 //
-// The elapsed time is counted in the browser, not rendered by the server, and
-// that is the whole point. If it were server-rendered it would freeze at
-// whatever it last said when the stream died — displaying "1.2s" forever on a
-// page that had stopped updating entirely. Counting locally means a dead
-// stream is visible as a number that climbs.
+// The elapsed time is counted in the browser, not rendered by the server. If it
+// were server-rendered it would freeze at whatever it last said when the stream
+// died, displaying "1.2s" forever on a page that had stopped updating. Counting
+// locally means a dead stream is visible as a number that climbs.
 //
 // That climb is an alarm, so it must not fire at a page that is deliberately
 // not following the fleet: with autorefresh off this reads "paused" instead.
@@ -225,11 +224,10 @@ templ FilterSelect(s fleet.Select, streamURL string) {
 	</label>
 }
 
-// HealthStrip names every data source and why any of them is unavailable.
-//
-// This is the panel that stops the dashboard from lying. When metrics-server
-// is down the resource charts are empty; without this strip that is
-// indistinguishable from a fleet that is doing nothing.
+// HealthStrip names every data source and why any of them is unavailable. This is
+// the panel that stops the dashboard from lying: when metrics-server is down the
+// resource charts are empty, which without this strip is indistinguishable from a
+// fleet that is doing nothing.
 templ HealthStrip(p Page) {
 	<footer id="health" class="border-t border-default bg-inset">
 		<div class="mx-auto max-w-[1600px] px-4 py-3">

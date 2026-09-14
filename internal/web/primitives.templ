@@ -50,26 +50,20 @@ templ MicroBar(t Tone, used, total float64) {
 	</div>
 }
 
-// CapacityBar is the segmented bar in the runnersets table: busy, idle and
-// pending stacked left to right against the set's ceiling, with any queued
-// work on the end.
+// CapacityBar is the segmented bar in the runnersets table: busy, idle and pending
+// stacked left to right against the set's ceiling, with any queued work on the end.
 //
 // shrink-0 on every segment is load-bearing. Each width is one count over the
-// shared denominator, clamped to 0..100 but never normalised against the other
-// three, so the four sum past 100% whenever busy + idle + pending + queued
-// exceeds that denominator and no single count covers it on its own — a set
-// whose runners fill its ceiling with work still queued behind them does it.
-// These are flex children, and a flex child is shrinkable by default: faced
-// with an overfull line the browser scales *all four* down proportionally, and
-// every segment then shows something other than its true fraction of the
-// ceiling — a lie told exactly when an operator is watching a fleet under
-// pressure. Pinned at shrink-0 each segment keeps the width it was given, and
-// whatever extends past the right edge of the track is clipped by the
-// container's overflow-hidden.
+// shared denominator, clamped but never normalised against the other three, so the
+// four sum past 100% whenever busy + idle + pending + queued exceeds that
+// denominator. These are flex children, and a flex child is shrinkable by default:
+// faced with an overfull line the browser scales all four down proportionally, and
+// every segment then shows something other than its true fraction of the ceiling —
+// a lie told exactly when an operator is watching a fleet under pressure. Pinned,
+// each segment keeps its width and the overflow is clipped by the container.
 //
-// Known limitation: that clipping is silent. Nothing marks the bar as
-// truncated, so a saturated set with a small queue and one with an enormous
-// queue look identical. The counts are in the title attribute.
+// Known limitation: that clipping is silent. A saturated set with a small queue and
+// one with an enormous queue look identical. The counts are in the title attribute.
 templ CapacityBar(r SetRow) {
 	<div class="h-[6px] rounded-sm bg-inset overflow-hidden flex" title={ capacityTitle(r) }>
 		<div class="h-full shrink-0 bg-success" style={ "width:" + r.Busy + "%" }></div>
@@ -112,9 +106,9 @@ func kvTone(kv KV) string {
 	return kv.Tone.Text()
 }
 
-// Empty is the placeholder a panel shows instead of a chart it has no data
-// for. It always says *why*, because "no data" and "not collected yet" send an
-// operator down very different paths.
+// Empty is the placeholder a panel shows instead of a chart it has no data for. It
+// always says *why*, because "no data" and "not collected yet" send an operator
+// down very different paths.
 templ Empty(reason string) {
 	<div class="flex items-center justify-center h-[120px] rounded-sm border border-dashed border-default text-[11.5px] text-fg-subtle">
 		{ reason }
@@ -147,9 +141,9 @@ templ Ticks(labels []string) {
 	</div>
 }
 
-// GridLabels positions the y-axis values alongside a chart. They live in the
-// HTML layer rather than inside the SVG so they stay crisp at any scale, which
-// is why each carries a pixel offset computed against the rendered height.
+// GridLabels positions the y-axis values alongside a chart. They live in the HTML
+// layer rather than inside the SVG so they stay crisp at any scale, which is why
+// each carries a pixel offset computed against the rendered height.
 templ GridLabels(lines []chart.GridLine) {
 	<div class="absolute inset-y-0 right-0 w-14 pointer-events-none">
 		for _, l := range lines {

@@ -9,10 +9,9 @@ import (
 
 // Window is one bucketed query over the history store.
 //
-// Points is a request, not a promise. The store buckets [From, To) into at
-// most Points buckets and returns however many it has data for; the charts
-// scale to len(series), so a store that has only been running ten minutes
-// renders a short line rather than a line padded with fake zeros.
+// Points is a request, not a promise. The store buckets [From, To) into at most
+// Points buckets and returns however many it has data for; the charts scale to
+// len(series), so a young store renders a short line rather than fake zeros.
 type Window struct {
 	From   time.Time
 	To     time.Time
@@ -29,13 +28,12 @@ const FleetScope Scope = ""
 // Set returns the scope for one runner set.
 func Set(name string) Scope { return Scope(name) }
 
-// ScopeSeries is the bucketed history behind the overview and set-detail
-// charts. Every slice is the same length as At, or empty when the store has
-// nothing for that dimension.
+// ScopeSeries is the bucketed history behind the overview and set-detail charts.
+// Every slice is the same length as At, or empty when the store has nothing for
+// that dimension.
 //
-// Capacity is a series rather than a scalar because maxRunners is edited
-// through the day; the design draws it as a dashed line across the chart, and
-// a scalar would silently redraw history whenever someone rescaled a set.
+// Capacity is a series rather than a scalar because maxRunners is edited through
+// the day, and a scalar would silently redraw history whenever someone rescaled.
 type ScopeSeries struct {
 	At []time.Time
 
@@ -54,7 +52,6 @@ type ScopeSeries struct {
 // Len is the number of buckets, and the length every populated slice has.
 func (s ScopeSeries) Len() int { return len(s.At) }
 
-// Empty reports whether there is nothing to draw.
 func (s ScopeSeries) Empty() bool { return len(s.At) == 0 }
 
 // Utilization is busy runners as a fraction of total, per bucket. It is
@@ -138,7 +135,6 @@ type RunnerSeries struct {
 	}
 }
 
-// Len is the number of samples.
 func (s RunnerSeries) Len() int { return len(s.At) }
 
 // Counts is a pair of per-bucket event counts, used by the throughput and
@@ -149,7 +145,6 @@ type Counts struct {
 	Down []float64
 }
 
-// Len is the number of buckets.
 func (c Counts) Len() int { return len(c.At) }
 
 // Peak is the largest single-bucket value in either direction, floored at one.
@@ -168,10 +163,9 @@ func (c Counts) Sum() (up, down float64) {
 
 // RepoHistory is one repository's consumption over the selected window.
 //
-// Distinct from fleet.RepoUsage, which is the same panel's live fallback:
-// this one is integrated over time (core-seconds), that one is a snapshot of
-// what is running right now. The panel prefers this and falls back, because
-// for the first few minutes after a restart the store has nothing to show.
+// Distinct from fleet.RepoUsage, which is the same panel's live fallback: this one
+// is integrated over time (core-seconds), that one is a snapshot of what is
+// running right now.
 type RepoHistory struct {
 	Repository string
 	Jobs       int
@@ -318,14 +312,12 @@ type JobFacets struct {
 
 // History is everything the views need from the time-series store.
 //
-// It is declared here, at the consumer, rather than exported from the store:
-// the views define what a chart needs, and the store's job is to satisfy that.
-// It also means the whole web layer can be tested against a hand-written
-// series without an ent client or a temp database anywhere in sight.
+// It is declared here, at the consumer, rather than exported from the store: the
+// views define what a chart needs, and the store's job is to satisfy that. It also
+// means the whole web layer can be tested against a hand-written series.
 //
-// Every method may return an error, and every view renders an empty-state
-// panel rather than failing the page when one does. A dashboard that 500s
-// because its history is unavailable is worse than one that says so.
+// Every method may return an error, and every view renders an empty-state panel
+// rather than failing the page when one does.
 type History interface {
 	// Scope returns bucketed counts and resource series for the fleet or one
 	// runner set.
@@ -369,11 +361,9 @@ type History interface {
 	Stats(ctx context.Context) (StoreStats, error)
 }
 
-// FailureWindow is the failure lane's contents.
-//
-// Failures is a page and Total counts the window, which are different numbers
-// on any fleet worth looking at: "six shown of forty-one" is the whole reason
-// the lane has a footer.
+// FailureWindow is the failure lane's contents. Failures is a page and Total
+// counts the window, which are different numbers on any fleet worth looking at:
+// "six shown of forty-one" is the whole reason the lane has a footer.
 type FailureWindow struct {
 	Failures []fleet.Failure
 	Total    int
@@ -382,8 +372,8 @@ type FailureWindow struct {
 // StoreStats is what the SQLite footer reports.
 //
 // The file it describes is the one moving part of this dashboard nobody else
-// monitors: it grows on a volume that was sized once at install time, and the
-// first symptom of that volume filling is the history quietly stopping.
+// monitors: it grows on a volume sized once at install time, and the first symptom
+// of that volume filling is the history quietly stopping.
 type StoreStats struct {
 	// Enabled is false when the dashboard is running without a history store.
 	// That is a supported configuration, so the panel has to distinguish it
@@ -410,50 +400,38 @@ type StoreStats struct {
 // runs on before the store has been wired up, and what the tests use.
 type NoHistory struct{}
 
-// Scope returns nothing.
 func (NoHistory) Scope(context.Context, Scope, Window) (ScopeSeries, error) {
 	return ScopeSeries{}, nil
 }
 
-// Runner returns nothing.
 func (NoHistory) Runner(context.Context, string, Window) (RunnerSeries, error) {
 	return RunnerSeries{}, nil
 }
 
-// Throughput returns nothing.
 func (NoHistory) Throughput(context.Context, Scope, Window) (Counts, error) { return Counts{}, nil }
 
-// Churn returns nothing.
 func (NoHistory) Churn(context.Context, Scope, Window) (Counts, error) { return Counts{}, nil }
 
-// Repos returns nothing.
 func (NoHistory) Repos(context.Context, Window, int) ([]RepoHistory, error) { return nil, nil }
 
-// Failures returns nothing.
 func (NoHistory) Failures(context.Context, Scope, Window, int) (FailureWindow, error) {
 	return FailureWindow{}, nil
 }
 
-// Jobs returns nothing.
 func (NoHistory) Jobs(context.Context, JobFilter, Window) (JobList, error) { return JobList{}, nil }
 
-// Workflows returns nothing.
 func (NoHistory) Workflows(context.Context, JobFilter, Window) (WorkflowList, error) {
 	return WorkflowList{}, nil
 }
 
-// Job finds nothing.
 func (NoHistory) Job(context.Context, int) (Job, bool, error) { return Job{}, false, nil }
 
-// JobSeries returns nothing.
 func (NoHistory) JobSeries(context.Context, int, Window) (JobSeries, error) {
 	return JobSeries{}, nil
 }
 
-// Facets returns nothing.
 func (NoHistory) Facets(context.Context, Window) (JobFacets, error) { return JobFacets{}, nil }
 
-// Stats reports a store that is not there.
 func (NoHistory) Stats(context.Context) (StoreStats, error) { return StoreStats{}, nil }
 
 // at reads a series defensively: a store that returns a short or absent slice
