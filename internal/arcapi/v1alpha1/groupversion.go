@@ -14,8 +14,6 @@ import (
 const (
 	Group   = "actions.github.com"
 	Version = "v1alpha1"
-
-	LegacyGroup = "actions.summerwind.dev"
 )
 
 // GroupVersion of every resource in this package.
@@ -49,31 +47,9 @@ const (
 	LabelScaleSetName      = "actions.github.com/scale-set-name"
 	LabelScaleSetNamespace = "actions.github.com/scale-set-namespace"
 
-	// LabelRunnerSpecHash identifies which generation an EphemeralRunnerSet
-	// belongs to, which is how you pick the current one during a rollout.
-	LabelRunnerSpecHash = "actions.github.com/runner-spec-hash"
-
-	LabelRunnerScaleSetName = "actions.github.com/runner-scale-set-name"
-	LabelRunnerGroupName    = "actions.github.com/runner-group-name"
-
-	// LabelEnterprise, LabelOrganization and LabelRepository are trimmed to 63
-	// characters with a "-trim" suffix, so they are not reliable identifiers.
-	// Parse spec.githubConfigUrl instead.
-	LabelEnterprise   = "actions.github.com/enterprise"
-	LabelOrganization = "actions.github.com/organization"
-	LabelRepository   = "actions.github.com/repository"
-
 	// LabelEphemeralRunner is set to "True" on every runner pod, cluster-wide.
 	// One selector, every runner.
 	LabelEphemeralRunner = "actions-ephemeral-runner"
-
-	// LabelPartOf differs by kind: "gha-rs" on the AutoscalingRunnerSet (set
-	// by the Helm chart) but "gha-runner-scale-set" on the EphemeralRunnerSet,
-	// EphemeralRunner and Pod (overwritten by the controller). A single
-	// part-of selector will not find everything.
-	LabelPartOf              = "app.kubernetes.io/part-of"
-	PartOfScaleSetChart      = "gha-rs"
-	PartOfScaleSetController = "gha-runner-scale-set"
 
 	// AnnotationRunnerScaleSetID is GitHub's numeric id for the scale set.
 	// Note the missing group prefix — this key does not follow the
@@ -84,17 +60,7 @@ const (
 	// RunnerContainerName is the container inside a runner pod that carries
 	// the image and resource requests worth showing.
 	RunnerContainerName = "runner"
-	// ListenerContainerName is the container inside a listener pod.
-	ListenerContainerName = "listener"
 )
-
-// ScaleSetSelector matches every object belonging to one scale set.
-func ScaleSetSelector(name, namespace string) map[string]string {
-	return map[string]string{
-		LabelScaleSetName:      name,
-		LabelScaleSetNamespace: namespace,
-	}
-}
 
 // OrgFromConfigURL extracts the GitHub owner from a githubConfigUrl.
 //

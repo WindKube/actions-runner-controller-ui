@@ -27,6 +27,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dustin/go-humanize"
+
 	"arc-ui/internal/chart"
 	"arc-ui/internal/fleet"
 )
@@ -588,25 +590,7 @@ func UsageGiB(r fleet.Resources) string {
 // The store footer reports row counts that reach eight digits. Unseparated,
 // 1234567 and 12345678 are the same shape at a glance, and telling those two
 // apart is the entire job of a capacity readout.
-func Thousands(n int64) string {
-	digits := strconv.FormatInt(n, 10)
-
-	sign := ""
-	if strings.HasPrefix(digits, "-") {
-		sign, digits = "-", digits[1:]
-	}
-
-	var sb strings.Builder
-	for i, d := range digits {
-		// A separator goes before every digit whose distance from the end is a
-		// multiple of three, except at the very start.
-		if i > 0 && (len(digits)-i)%3 == 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteRune(d)
-	}
-	return sign + sb.String()
-}
+func Thousands(n int64) string { return humanize.Comma(n) }
 
 // Pct renders a fraction as a whole percentage.
 func Pct(f float64) string { return fmt.Sprintf("%.0f%%", f*100) }

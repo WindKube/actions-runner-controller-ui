@@ -1,7 +1,8 @@
 package fleet
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"time"
 
 	"github.com/samber/lo"
@@ -177,12 +178,14 @@ func Failures(runners []Runner, limit int) []Failure {
 // order as rows derived from one runner list, or the newest failure is not the
 // one at the top.
 func SortFailures(f []Failure) {
-	sort.SliceStable(f, func(i, j int) bool {
-		a, b := f[i], f[j]
-		if a.At.IsZero() != b.At.IsZero() {
-			return !a.At.IsZero()
-		}
-		return a.At.After(b.At)
+	slices.SortStableFunc(f, func(a, b Failure) int {
+		return cmp.Or(
+			// A dated failure outranks an undated one, whichever way round they
+			// arrived; comparing the timestamps alone would sort the zero time
+			// to the top of a lane that is ordered newest first.
+			cmp.Compare(boolRank(a.At.IsZero()), boolRank(b.At.IsZero())),
+			b.At.Compare(a.At),
+		)
 	})
 }
 
@@ -210,12 +213,19 @@ func ByRepository(runners []Runner) []RepoUsage {
 			CPUCores:   lo.SumBy(rs, func(r Runner) float64 { return r.CPU.Used }),
 		})
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		if a.Runners != b.Runners {
-			return a.Runners > b.Runners
-		}
-		return a.Repository < b.Repository
+	slices.SortStableFunc(out, func(a, b RepoUsage) int {
+		return cmp.Or(
+			cmp.Compare(b.Runners, a.Runners),
+			cmp.Compare(a.Repository, b.Repository),
+		)
 	})
 	return out
+}
+
+// boolRank orders false before true, so a two-way flag can be a cmp.Or term.
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

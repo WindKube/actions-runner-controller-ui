@@ -24,10 +24,9 @@ type Tick struct {
 
 // Hub broadcasts ticks to every active subscriber.
 type Hub struct {
-	mu     sync.RWMutex
-	subs   map[chan Tick]struct{}
-	seq    uint64
-	latest Tick
+	mu   sync.RWMutex
+	subs map[chan Tick]struct{}
+	seq  uint64
 }
 
 // New returns an empty hub.
@@ -75,7 +74,6 @@ func (h *Hub) Broadcast(at time.Time) {
 
 	h.seq++
 	tick := Tick{Seq: h.seq, At: at}
-	h.latest = tick
 
 	for ch := range h.subs {
 		select {
@@ -85,16 +83,9 @@ func (h *Hub) Broadcast(at time.Time) {
 	}
 }
 
-// Latest returns the most recent tick, so a stream that has just opened can
-// render the live indicator without waiting for the next change.
-func (h *Hub) Latest() Tick {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.latest
-}
-
-// Subscribers reports the current subscriber count, exposed for the health
-// strip and for tests.
+// Subscribers reports the current subscriber count. Nothing on the dashboard
+// renders it; it is here because the leak it would show — a cancelled stream
+// whose channel is still in the map — is otherwise invisible to a test.
 func (h *Hub) Subscribers() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
