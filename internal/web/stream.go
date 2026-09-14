@@ -206,6 +206,11 @@ func (h *Handler) StreamRunner(w http.ResponseWriter, r *http.Request, name stri
 // It re-renders on each fleet change and on a heartbeat, patches only the
 // regions whose markup actually differs from what this client last received,
 // and bumps a sequence signal so the browser can time its own staleness.
+//
+// The loop is what the live signal buys. Without it the same code still runs
+// once — every control on the page refreshes by reopening this endpoint, so a
+// paused dashboard has to serve that render — it simply does not stay for the
+// next tick.
 func (h *Handler) stream(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -269,6 +274,14 @@ func (h *Handler) stream(
 		seq++
 		if err := sse.PatchSignals([]byte(`{"_seq":` + strconv.FormatUint(seq, 10) + `}`)); err != nil {
 			h.logStreamEnd(streamURL, err)
+			return
+		}
+
+		// Autorefresh is opt-in. With it off this is a one-shot: the view the
+		// click asked for is now on screen, so close rather than subscribe.
+		// Datastar retries on error, not on a clean end, so the browser leaves
+		// it closed.
+		if !sig.Live {
 			return
 		}
 

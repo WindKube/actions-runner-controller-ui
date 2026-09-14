@@ -47,6 +47,11 @@ type Signals struct {
 	State    string `json:"state"`
 	Range    string `json:"range"`
 	Sort     string `json:"sort"`
+
+	// Live is whether this view keeps its stream open. It is off by default:
+	// the server renders every page complete, so a dashboard nobody asked to
+	// follow should not hold a connection open pushing patches at it.
+	Live bool `json:"live"`
 }
 
 // Filter converts signals into a domain filter.
@@ -83,6 +88,10 @@ func (s Signals) Normalize() Signals {
 // how a plain page load (or a shared deep link) carries filter state before
 // any JavaScript has run.
 func SignalsFromQuery(q url.Values) Signals {
+	// ParseBool rather than == "1" so a hand-typed ?live=true works too; an
+	// unparseable value is simply not a request for live updates.
+	live, _ := strconv.ParseBool(q.Get("live"))
+
 	return Signals{
 		Repo:     q.Get("repo"),
 		Workflow: q.Get("workflow"),
@@ -91,6 +100,7 @@ func SignalsFromQuery(q url.Values) Signals {
 		State:    q.Get("state"),
 		Range:    q.Get("range"),
 		Sort:     q.Get("sort"),
+		Live:     live,
 	}.Normalize()
 }
 
@@ -113,6 +123,9 @@ func (s Signals) Query() url.Values {
 	}
 	if s.Sort != string(fleet.SortPressure) {
 		add("sort", s.Sort)
+	}
+	if s.Live {
+		q.Set("live", "1")
 	}
 	return q
 }
@@ -146,6 +159,24 @@ func StreamCall(streamURL string) string {
 // rather than accumulating connections.
 func SetAndStream(streamURL, signal, value string) string {
 	return fmt.Sprintf("$%s = '%s'; %s", signal, template.JSEscapeString(value), StreamCall(streamURL))
+}
+
+// ToggleLive flips autorefresh and reopens the stream.
+//
+// Reopening in both directions is the point. Datastar aborts the in-flight
+// request for the same method and URL, so turning autorefresh *off* is what
+// ends the stream that is currently open — and the request that replaces it
+// paints the current fleet once before the server closes it, so pausing leaves
+// the freshest view on screen rather than whatever arrived last.
+func ToggleLive(streamURL string) string {
+	return "$live = !$live; " + StreamCall(streamURL)
+}
+
+// InitStream is the body's load-time action. A page with autorefresh off opens
+// no stream at all: the server rendered it complete, so there is nothing to
+// catch up on and nothing to keep open.
+func InitStream(streamURL string) string {
+	return "$live && " + StreamCall(streamURL)
 }
 
 // ClearFilters resets every filter signal and reloads.

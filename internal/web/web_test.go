@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -330,7 +332,7 @@ func TestFilterNarrowsTheRenderedFleet(t *testing.T) {
 func TestSignalsSurviveAQueryRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	in := Signals{Repo: "WindKube/web-api", State: "busy", Range: "6h", Sort: "name"}.Normalize()
+	in := Signals{Repo: "WindKube/web-api", State: "busy", Range: "6h", Sort: "name", Live: true}.Normalize()
 	out := SignalsFromQuery(in.Query())
 
 	assert.Equal(t, in, out, "round trip changed the signals")
@@ -400,6 +402,14 @@ func testHandler(h *hub.Hub) *Handler {
 	}
 }
 
+// streamAt builds the URL Datastar itself requests. Signals travel as one JSON
+// query parameter on a GET, so a stream opened with ordinary parameters is not
+// the request the browser makes and would not exercise the same parsing.
+func streamAt(t *testing.T, base string, sig Signals) string {
+	t.Helper()
+	return base + "?datastar=" + url.QueryEscape(sig.Normalize().JSON())
+}
+
 // readUntilSignal consumes SSE lines until the sequence-signal frame arrives,
 // reporting how many element patches preceded it. Counting frames rather than
 // waiting for a fixed number is deliberate: the initial paint also carries the
@@ -459,7 +469,8 @@ func TestStreamSkipsUnchangedRegions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	// Only a stream someone asked to keep live reaches a second tick.
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, streamAt(t, srv.URL, Signals{Live: true}), nil)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -486,6 +497,77 @@ func TestStreamSkipsUnchangedRegions(t *testing.T) {
 	t.Fatal("no second tick arrived")
 }
 
+func TestPausedStreamPaintsOnceAndCloses(t *testing.T) {
+	t.Parallel()
+
+	handler := testHandler(hub.New())
+	srv := httptest.NewServer(http.HandlerFunc(handler.StreamOverview))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// No live signal: this is the stream a range pill or a filter opens on a
+	// dashboard nobody asked to keep live.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, streamAt(t, srv.URL, Signals{}), nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	reader := bufio.NewReader(resp.Body)
+	assert.NotZero(t, readUntilSignal(t, reader), "the paused stream sent no element patches")
+
+	// The view the click asked for is on screen, so the connection must end.
+	// Leaving it open would make "autorefresh off" mean nothing but a label.
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, reader)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		assert.NoError(t, err, "reading to the end of the paused stream")
+	case <-time.After(5 * time.Second):
+		t.Fatal("a paused stream stayed open after its first paint")
+	}
+}
+
+func TestAutorefreshIsOffUntilItIsAskedFor(t *testing.T) {
+	t.Parallel()
+
+	// templ escapes every dynamic attribute, so the Datastar expressions reach
+	// the wire as `$live &amp;&amp; @get(&#39;/stream&#39;)`. Assert on what the
+	// browser parses back out rather than on the escaping.
+	doc := html.UnescapeString(renderOverview(t))
+
+	assert.Contains(t, doc, `"live":false`, "the page seeds autorefresh as on")
+
+	// The guard on data-init is the whole feature: without it the body opens a
+	// stream on load whatever the signal says, and nothing is ever paused.
+	assert.Contains(t, doc, `data-init="$live && @get('/stream'`, "the load-time stream is not guarded by the live signal")
+	assert.Contains(t, doc, `aria-label="auto-refresh"`, "the topbar has no autorefresh toggle")
+	assert.Contains(t, doc, ">paused<", "a paused page should say so rather than count towards stalled")
+}
+
+func TestLivePageOpensItsStreamOnLoad(t *testing.T) {
+	t.Parallel()
+
+	b := testBuilder()
+	o := b.Overview(context.Background(), Signals{Live: true}, now)
+	o.Stream = "/stream"
+
+	var sb strings.Builder
+	require.NoError(t, Document(o.Page, OverviewPage(o)).Render(context.Background(), &sb), "render")
+	doc := html.UnescapeString(sb.String())
+
+	// A shared link carrying live=1 has to come back live, or the preference
+	// survives in the URL and nowhere else.
+	assert.Contains(t, doc, `"live":true`, "the live preference did not reach the page")
+	assert.Contains(t, doc, ">last event —<", "a live page should show the staleness readout, not the paused one")
+}
+
 func TestStreamRegistryClosesOpenStreams(t *testing.T) {
 	t.Parallel()
 
@@ -493,7 +575,7 @@ func TestStreamRegistryClosesOpenStreams(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(handler.StreamOverview))
 	defer srv.Close()
 
-	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	req, _ := http.NewRequest(http.MethodGet, streamAt(t, srv.URL, Signals{Live: true}), nil)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
