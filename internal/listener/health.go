@@ -9,8 +9,7 @@ import (
 
 // maxNamedCollisions caps how many colliding scale set names one warning lists.
 // The scrape body is operator-supplied and bounded only by maxKeptBytes, which
-// leaves room for tens of thousands of distinct colliding names, and a warning
-// nobody can read through is the same failure as a warning nobody sees. The
+// leaves room for tens of thousands of distinct colliding names. The
 // colliding_names field always carries the exact count; only naming is cut short.
 const maxNamedCollisions = 8
 
@@ -20,15 +19,13 @@ const maxNamedCollisions = 8
 const maxNamedNamespaces = 4
 
 // maxLabelBytes caps each label value a warning interpolates. Capping how many
-// names and namespaces are listed bounds their count but not their length: the
-// values come from the scrape body, which is operator-supplied and bounded only
-// by maxKeptBytes, so one colliding name carrying megabyte label values is
-// otherwise one megabyte-long warn line.
+// names and namespaces are listed bounds their count but not their length, so one
+// colliding name carrying megabyte label values is otherwise a megabyte-long warn
+// line.
 //
-// 64 bytes clears a Kubernetes namespace name, which is a DNS label and so at
-// most 63 characters; a scale set name may legitimately be longer and is then
-// logged cut short. The cut backs up to a rune boundary so it never leaves
-// half a character behind.
+// 64 bytes clears a Kubernetes namespace name, which is a DNS label and so at most
+// 63 characters; a scale set name may legitimately be longer and is then cut short.
+// The cut backs up to a rune boundary so it never leaves half a character behind.
 const maxLabelBytes = 64
 
 // unlabelledNamespace names the member of a collision that stands for a series
@@ -36,13 +33,12 @@ const maxLabelBytes = 64
 // produces "shared in , team-a", a bare leading comma nothing on screen explains.
 const unlabelledNamespace = "(no namespace label)"
 
-// collisionTracker reports scale set name collisions on health.Tracker's terms:
-// a state is announced once, and repeats of it are debug-only.
+// collisionTracker reports scale set name collisions on health.Tracker's terms: a
+// state is announced once, and repeats of it are debug-only.
 //
-// A collision is a property of how the exposition is labelled, not of this
-// scrape — the same labels next tick say it again, and every tick after that
-// until someone changes them. The zero value means "nothing reported yet", so
-// the clean scrape — the overwhelmingly common case — says nothing at all.
+// A collision is a property of how the exposition is labelled, not of this scrape,
+// so it recurs every tick until someone changes the labels. The zero value means
+// "nothing reported yet", so a clean scrape says nothing at all.
 type collisionTracker struct {
 	// reported is the last rendered report; empty means "no collisions".
 	reported string
