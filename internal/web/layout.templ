@@ -65,8 +65,13 @@ templ Topbar(p Page) {
 
 // RangePicker is the window selector. Each pill sets the range signal and
 // reopens the stream, which re-renders every chart against the new window.
+//
+// The picker is itself a patched region, and has to be: the topbar is painted
+// once by Document, so without a push of its own the pills would keep
+// highlighting the range the page happened to load with while every chart
+// below them had already moved to the new one.
 templ RangePicker(p Page) {
-	<div class="hidden sm:flex items-center rounded-md border border-default overflow-hidden" role="group" aria-label="time range">
+	<div id="rangepicker" class="hidden sm:flex items-center rounded-md border border-default overflow-hidden" role="group" aria-label="time range">
 		for _, r := range AllRanges() {
 			<button
 				type="button"
@@ -83,7 +88,7 @@ templ RangePicker(p Page) {
 // LiveToggle turns autorefresh on and off.
 //
 // Its appearance is driven by the signal rather than by p.Signals, unlike every
-// other control in this file. The topbar is not one of the regions the stream
+// other control in this file. The toggle is not one of the regions the stream
 // patches, so a server-rendered pressed state would still say "off" after the
 // click that turned it on, and stay wrong until the next full page load.
 //
