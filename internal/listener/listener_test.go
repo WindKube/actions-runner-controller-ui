@@ -705,16 +705,6 @@ func TestScraperLogsScaleSetNameCollision(t *testing.T) {
 	}
 }
 
-// TestScraperUsesPrivateTransport pins the scraper to its own connection pool.
-//
-// A nil Transport means http.DefaultTransport, and that global is shared with
-// every other HTTP client in the process — including httptest, whose
-// Server.Close() calls CloseIdleConnections() on http.DefaultTransport directly
-// (net/http/httptest/server.go). Sharing it means one parallel test closing its
-// server can tear down a connection another test's scrape is still using, and
-// that scrape then fails with "http: CloseIdleConnections called" instead of
-// reporting the status it was asserting on. TestScraperFailureModes below
-// flaked on exactly that, roughly once in twenty runs of the suite.
 // TestScraperRedactsCredentialsFromFailures proves that neither the userinfo
 // nor a token query parameter in ARC_UI_LISTENER_METRICS_URL reaches
 // fleet.Source.Reason, which the dashboard renders and the log records.
@@ -888,6 +878,13 @@ func TestScraperBodyLimit(t *testing.T) {
 	})
 }
 
+// TestScraperUsesPrivateTransport pins the scraper to its own connection pool.
+//
+// A nil Transport means http.DefaultTransport, which httptest.Server.Close()
+// calls CloseIdleConnections() on directly. Sharing it lets one parallel test
+// closing its server tear down a connection another test's scrape is still
+// using; TestScraperFailureModes flaked on exactly that, about once in twenty
+// runs.
 func TestScraperUsesPrivateTransport(t *testing.T) {
 	t.Parallel()
 

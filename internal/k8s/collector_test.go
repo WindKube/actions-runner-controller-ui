@@ -246,10 +246,8 @@ func TestEventsForPodFiltersOnUIDAndCaches(t *testing.T) {
 
 // pagedEventServer serves all in pages of the requested Limit, honouring the
 // continue token exactly as the API server does: page one is the oldest events,
-// because event names embed the emission time and etcd hands back key order.
-//
-// It reports the largest page it served and how many requests it answered,
-// which is what pins the bound the page size actually buys.
+// because event names embed the emission time and etcd hands back key order. It
+// reports the largest page it served and how many requests it answered.
 type pagedEventServer struct {
 	all []corev1.Event
 
@@ -310,9 +308,8 @@ func eventCollector(t *testing.T, handler http.HandlerFunc) *Collector {
 }
 
 // TestEventsForPodShowsTheNewestEvents covers the difference between paging and
-// picking: ListOptions.Limit returns the FIRST page in the API server's key
-// order, which for a pod with more history than one page is the OLDEST events.
-// Following the continue token is the only thing that makes the newest win.
+// picking: ListOptions.Limit returns the FIRST page in the API server's key order,
+// which for a pod with more history than one page is the OLDEST events.
 //
 // The fake clientset ignores Limit and Continue entirely, so paging has to be
 // reproduced against a real REST client talking to a handler that implements it.
@@ -362,9 +359,8 @@ func TestEventsForPodShowsTheNewestEvents(t *testing.T) {
 }
 
 // TestEventsForPodStopsPagingAtTheBudget pins the other half of the bound. Now
-// that the continue token is followed, a server that keeps handing out tokens —
-// a pathological emitter, or a pod whose history simply never ends — must not
-// turn one panel render into an unbounded walk over the busiest collection in
+// that the continue token is followed, a server that keeps handing out tokens must
+// not turn one panel render into an unbounded walk over the busiest collection in
 // the cluster.
 func TestEventsForPodStopsPagingAtTheBudget(t *testing.T) {
 	t.Parallel()
@@ -646,12 +642,11 @@ func TestTrimCustomResource(t *testing.T) {
 	assert.Nil(t, kept.GetManagedFields(), "managedFields survived on the scale set")
 }
 
-// TestRepeatingAnUnchangedSourceStaysQuiet guards against a feedback loop that
-// a broken history store would otherwise sustain on its own. main.go reports a
-// failed write by calling SetSource, so if the collector treated every repeat
-// as news it would hand the failure straight back to the recorder that caused
-// it: SetSource -> dirty -> touch -> notify -> record -> fail -> SetSource,
-// one lap per debounce window, for as long as the store stayed broken.
+// TestRepeatingAnUnchangedSourceStaysQuiet guards against a feedback loop a broken
+// history store would otherwise sustain on its own. main.go reports a failed write
+// by calling SetSource, so if the collector treated every repeat as news it would
+// hand the failure back to the recorder that caused it: SetSource -> dirty ->
+// touch -> notify -> record -> fail -> SetSource, one lap per debounce window.
 func TestRepeatingAnUnchangedSourceStaysQuiet(t *testing.T) {
 	t.Parallel()
 
@@ -727,10 +722,8 @@ func listenerPod(name, ip string, withMetricsPort bool) *corev1.Pod {
 }
 
 // One URL cannot cover a fleet: ARC runs one listener pod per scale set and each
-// serves only its own scale set's series, so a twenty-set install needs twenty
-// scrapes. The pod cache already carries what that takes — the controller
-// namespace is watched unfiltered for listener health, and trimPod keeps
-// status.podIP and the container ports.
+// serves only its own series, so a twenty-set install needs twenty scrapes. The
+// pod cache already carries what that takes.
 func TestListenerTargetsAreDiscoveredFromTheListenerPods(t *testing.T) {
 	t.Parallel()
 
