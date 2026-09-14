@@ -21,6 +21,7 @@ ago.**
 
 - [Why](#why)
 - [Screenshots](#screenshots)
+- [Workflows and Jobs](#workflows-and-jobs)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
@@ -61,13 +62,17 @@ off it simply does not leave a connection behind.
 
 ## Screenshots
 
-Three views, each answering a different question.
+Six views, each answering a different question. Three are about the fleet right
+now; three are about what it already did.
 
 | View | Answers |
 | --- | --- |
 | **Fleet overview** | how many runners are busy / idle / pending / failed, per scale set, against each set's ceiling — and how much work is still queued |
 | **RunnerSet detail** | one scale set over time: capacity, churn, job starts, the listener's queue |
 | **Runner detail** | one ephemeral runner: phase history, CPU and memory against requests and limits, the events that explain a stuck pod |
+| **Workflows** | which workflow runs went through the fleet, what they cost, and which of them failed |
+| **Jobs** | every job the dashboard watched, filterable by repository, searchable by name |
+| **Job detail** | one job's own CPU and memory over its lifetime against what its runner reserved, and what it cost |
 
 The fleet overview is the screenshot at the top of this page.
 
@@ -87,6 +92,63 @@ The fleet overview is the screenshot at the top of this page.
 
 These are generated from fixture data, not a live cluster, so they are
 reproducible — see [Regenerating the screenshots](#regenerating-the-screenshots).
+
+## Workflows and Jobs
+
+The **Workflows** and **Jobs** tabs are the history half of the dashboard. Both
+read only the SQLite store, both are scoped by the range picker, and both filter
+by repository, workflow and runner set — with a search box over workflow, job
+and repository names.
+
+A **Workflows** row is one workflow run — `(repository, workflow file, run id)`
+— aggregated from the jobs observed for it. A run with any failed job is a
+failed run. Clicking one opens **Jobs** narrowed to that run.
+
+A **Jobs** row is one job. Clicking one opens its detail view: what it cost in
+core-seconds and GiB-seconds, the averages those imply over its duration, and
+its CPU and memory as a chart, drawn against the requests and limits its runner
+pod held.
+
+### What the job chart is, and what it is not
+
+Everything here is inferred from the runner that carried the job. The dashboard
+never talks to the GitHub API, so a job is only as visible as the pod that ran
+it.
+
+Per-job usage is sampled into its own table while a runner holds a job, at
+`ARC_UI_JOB_SAMPLE_RESOLUTION` (default one minute) and kept for
+`ARC_UI_RETENTION_JOB_SAMPLES` (default 30 days, matching the job rows). That
+has three consequences worth knowing before reading a chart:
+
+- **A job shorter than one bucket is a single reading.** It is drawn as one
+  point, and the panel says how many samples it has.
+- **Peak usage is not recoverable.** Each row is already an average over its
+  bucket. The tiles report averages derived from integrated cost, which is the
+  figure that survives.
+- **Jobs recorded before this was switched on have no chart**, and say so.
+  "No resource samples recorded for this job" is a different statement from a
+  job that used nothing, and the panel never renders the second when it means
+  the first.
+
+The dashed request and limit lines are what the runner pod held, copied onto the
+job row while it ran — the pod is long gone by the time you open the chart, so
+they are stored rather than looked up. A reservation the dashboard never managed
+to read is not drawn at all: no line is honest where a line at zero would not be,
+and no CPU limit is the usual ARC configuration.
+
+### What it costs on disk
+
+This is the one table whose size follows how *busy* the fleet is rather than how
+big it is — roughly `(busy runners × job minutes) ÷ resolution`, at about 70
+bytes a row:
+
+| concurrently busy runners | rows over 30 days | on disk |
+| --- | --- | --- |
+| 100 | ~4.3M | ~300 MB |
+| 500 | ~21M | ~1.5 GB |
+
+Both knobs turn it down, and the store footer at the foot of the overview
+reports the real number for your fleet rather than this estimate.
 
 ## Requirements
 
@@ -142,6 +204,8 @@ authority; this table is it in prose.
 | `ARC_UI_RETENTION_SCOPE_1M` | `168h` | 1-minute rollups (7 days) |
 | `ARC_UI_RETENTION_SCOPE_5M` | `720h` | 5-minute rollups (30 days) |
 | `ARC_UI_RETENTION_SCOPE_1H` | `9600h` | 1-hour rollups (~13 months) |
+| `ARC_UI_RETENTION_JOB_SAMPLES` | `720h` | per-job CPU and memory, behind the [Jobs tab](#workflows-and-jobs)'s usage chart. Defaults to the job rows' own window so a listed job always has a chart |
+| `ARC_UI_JOB_SAMPLE_RESOLUTION` | `1m` | bucket width per-job usage is averaged into. This is the knob that decides what per-job history costs on disk — see [Workflows and Jobs](#workflows-and-jobs) |
 | `ARC_UI_GITHUB_ORG` | — | breadcrumb label. Empty derives it from the AutoscalingRunnerSet's `githubConfigUrl` |
 | `ARC_UI_KUBECONFIG` | — | kubeconfig path. Unset means in-cluster if possible, else the default lookup |
 | `ARC_UI_KUBE_CONTEXT` | — | context to select from that kubeconfig |
@@ -342,9 +406,10 @@ task check                    # vet + lint + tests
 
 ### Regenerating the screenshots
 
-The three views render from fixture data — a fleet under real load, with a
-saturated set, an unbounded set, partial metrics coverage and a couple of failed
-runners — so the output is reproducible and needs no cluster.
+The six views render from fixture data — a fleet under real load, with a
+saturated set, an unbounded set, partial metrics coverage, a couple of failed
+runners, and a window of job history — so the output is reproducible and needs
+no cluster.
 
 ```bash
 task preview        # docs/screenshots/*.html — self-contained, opens from disk

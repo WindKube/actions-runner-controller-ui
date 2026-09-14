@@ -159,6 +159,62 @@ func (_c *JobObservationCreate) SetNillableMemByteSeconds(v *float64) *JobObserv
 	return _c
 }
 
+// SetCPURequest sets the "cpu_request" field.
+func (_c *JobObservationCreate) SetCPURequest(v float64) *JobObservationCreate {
+	_c.mutation.SetCPURequest(v)
+	return _c
+}
+
+// SetNillableCPURequest sets the "cpu_request" field if the given value is not nil.
+func (_c *JobObservationCreate) SetNillableCPURequest(v *float64) *JobObservationCreate {
+	if v != nil {
+		_c.SetCPURequest(*v)
+	}
+	return _c
+}
+
+// SetCPULimit sets the "cpu_limit" field.
+func (_c *JobObservationCreate) SetCPULimit(v float64) *JobObservationCreate {
+	_c.mutation.SetCPULimit(v)
+	return _c
+}
+
+// SetNillableCPULimit sets the "cpu_limit" field if the given value is not nil.
+func (_c *JobObservationCreate) SetNillableCPULimit(v *float64) *JobObservationCreate {
+	if v != nil {
+		_c.SetCPULimit(*v)
+	}
+	return _c
+}
+
+// SetMemRequest sets the "mem_request" field.
+func (_c *JobObservationCreate) SetMemRequest(v float64) *JobObservationCreate {
+	_c.mutation.SetMemRequest(v)
+	return _c
+}
+
+// SetNillableMemRequest sets the "mem_request" field if the given value is not nil.
+func (_c *JobObservationCreate) SetNillableMemRequest(v *float64) *JobObservationCreate {
+	if v != nil {
+		_c.SetMemRequest(*v)
+	}
+	return _c
+}
+
+// SetMemLimit sets the "mem_limit" field.
+func (_c *JobObservationCreate) SetMemLimit(v float64) *JobObservationCreate {
+	_c.mutation.SetMemLimit(v)
+	return _c
+}
+
+// SetNillableMemLimit sets the "mem_limit" field if the given value is not nil.
+func (_c *JobObservationCreate) SetNillableMemLimit(v *float64) *JobObservationCreate {
+	if v != nil {
+		_c.SetMemLimit(*v)
+	}
+	return _c
+}
+
 // Mutation returns the JobObservationMutation object of the builder.
 func (_c *JobObservationCreate) Mutation() *JobObservationMutation {
 	return _c.mutation
@@ -230,6 +286,22 @@ func (_c *JobObservationCreate) defaults() {
 		v := jobobservation.DefaultMemByteSeconds
 		_c.mutation.SetMemByteSeconds(v)
 	}
+	if _, ok := _c.mutation.CPURequest(); !ok {
+		v := jobobservation.DefaultCPURequest
+		_c.mutation.SetCPURequest(v)
+	}
+	if _, ok := _c.mutation.CPULimit(); !ok {
+		v := jobobservation.DefaultCPULimit
+		_c.mutation.SetCPULimit(v)
+	}
+	if _, ok := _c.mutation.MemRequest(); !ok {
+		v := jobobservation.DefaultMemRequest
+		_c.mutation.SetMemRequest(v)
+	}
+	if _, ok := _c.mutation.MemLimit(); !ok {
+		v := jobobservation.DefaultMemLimit
+		_c.mutation.SetMemLimit(v)
+	}
 }
 
 // check runs all checks and user-defined validators on the builder.
@@ -266,6 +338,18 @@ func (_c *JobObservationCreate) check() error {
 	}
 	if _, ok := _c.mutation.MemByteSeconds(); !ok {
 		return &ValidationError{Name: "mem_byte_seconds", err: errors.New(`ent: missing required field "JobObservation.mem_byte_seconds"`)}
+	}
+	if _, ok := _c.mutation.CPURequest(); !ok {
+		return &ValidationError{Name: "cpu_request", err: errors.New(`ent: missing required field "JobObservation.cpu_request"`)}
+	}
+	if _, ok := _c.mutation.CPULimit(); !ok {
+		return &ValidationError{Name: "cpu_limit", err: errors.New(`ent: missing required field "JobObservation.cpu_limit"`)}
+	}
+	if _, ok := _c.mutation.MemRequest(); !ok {
+		return &ValidationError{Name: "mem_request", err: errors.New(`ent: missing required field "JobObservation.mem_request"`)}
+	}
+	if _, ok := _c.mutation.MemLimit(); !ok {
+		return &ValidationError{Name: "mem_limit", err: errors.New(`ent: missing required field "JobObservation.mem_limit"`)}
 	}
 	return nil
 }
@@ -337,6 +421,22 @@ func (_c *JobObservationCreate) createSpec() (*JobObservation, *sqlgraph.CreateS
 	if value, ok := _c.mutation.MemByteSeconds(); ok {
 		_spec.SetField(jobobservation.FieldMemByteSeconds, field.TypeFloat64, value)
 		_node.MemByteSeconds = value
+	}
+	if value, ok := _c.mutation.CPURequest(); ok {
+		_spec.SetField(jobobservation.FieldCPURequest, field.TypeFloat64, value)
+		_node.CPURequest = value
+	}
+	if value, ok := _c.mutation.CPULimit(); ok {
+		_spec.SetField(jobobservation.FieldCPULimit, field.TypeFloat64, value)
+		_node.CPULimit = value
+	}
+	if value, ok := _c.mutation.MemRequest(); ok {
+		_spec.SetField(jobobservation.FieldMemRequest, field.TypeFloat64, value)
+		_node.MemRequest = value
+	}
+	if value, ok := _c.mutation.MemLimit(); ok {
+		_spec.SetField(jobobservation.FieldMemLimit, field.TypeFloat64, value)
+		_node.MemLimit = value
 	}
 	return _node, _spec
 }
@@ -549,6 +649,78 @@ func (u *JobObservationUpsert) UpdateMemByteSeconds() *JobObservationUpsert {
 // AddMemByteSeconds adds v to the "mem_byte_seconds" field.
 func (u *JobObservationUpsert) AddMemByteSeconds(v float64) *JobObservationUpsert {
 	u.Add(jobobservation.FieldMemByteSeconds, v)
+	return u
+}
+
+// SetCPURequest sets the "cpu_request" field.
+func (u *JobObservationUpsert) SetCPURequest(v float64) *JobObservationUpsert {
+	u.Set(jobobservation.FieldCPURequest, v)
+	return u
+}
+
+// UpdateCPURequest sets the "cpu_request" field to the value that was provided on create.
+func (u *JobObservationUpsert) UpdateCPURequest() *JobObservationUpsert {
+	u.SetExcluded(jobobservation.FieldCPURequest)
+	return u
+}
+
+// AddCPURequest adds v to the "cpu_request" field.
+func (u *JobObservationUpsert) AddCPURequest(v float64) *JobObservationUpsert {
+	u.Add(jobobservation.FieldCPURequest, v)
+	return u
+}
+
+// SetCPULimit sets the "cpu_limit" field.
+func (u *JobObservationUpsert) SetCPULimit(v float64) *JobObservationUpsert {
+	u.Set(jobobservation.FieldCPULimit, v)
+	return u
+}
+
+// UpdateCPULimit sets the "cpu_limit" field to the value that was provided on create.
+func (u *JobObservationUpsert) UpdateCPULimit() *JobObservationUpsert {
+	u.SetExcluded(jobobservation.FieldCPULimit)
+	return u
+}
+
+// AddCPULimit adds v to the "cpu_limit" field.
+func (u *JobObservationUpsert) AddCPULimit(v float64) *JobObservationUpsert {
+	u.Add(jobobservation.FieldCPULimit, v)
+	return u
+}
+
+// SetMemRequest sets the "mem_request" field.
+func (u *JobObservationUpsert) SetMemRequest(v float64) *JobObservationUpsert {
+	u.Set(jobobservation.FieldMemRequest, v)
+	return u
+}
+
+// UpdateMemRequest sets the "mem_request" field to the value that was provided on create.
+func (u *JobObservationUpsert) UpdateMemRequest() *JobObservationUpsert {
+	u.SetExcluded(jobobservation.FieldMemRequest)
+	return u
+}
+
+// AddMemRequest adds v to the "mem_request" field.
+func (u *JobObservationUpsert) AddMemRequest(v float64) *JobObservationUpsert {
+	u.Add(jobobservation.FieldMemRequest, v)
+	return u
+}
+
+// SetMemLimit sets the "mem_limit" field.
+func (u *JobObservationUpsert) SetMemLimit(v float64) *JobObservationUpsert {
+	u.Set(jobobservation.FieldMemLimit, v)
+	return u
+}
+
+// UpdateMemLimit sets the "mem_limit" field to the value that was provided on create.
+func (u *JobObservationUpsert) UpdateMemLimit() *JobObservationUpsert {
+	u.SetExcluded(jobobservation.FieldMemLimit)
+	return u
+}
+
+// AddMemLimit adds v to the "mem_limit" field.
+func (u *JobObservationUpsert) AddMemLimit(v float64) *JobObservationUpsert {
+	u.Add(jobobservation.FieldMemLimit, v)
 	return u
 }
 
@@ -778,6 +950,90 @@ func (u *JobObservationUpsertOne) AddMemByteSeconds(v float64) *JobObservationUp
 func (u *JobObservationUpsertOne) UpdateMemByteSeconds() *JobObservationUpsertOne {
 	return u.Update(func(s *JobObservationUpsert) {
 		s.UpdateMemByteSeconds()
+	})
+}
+
+// SetCPURequest sets the "cpu_request" field.
+func (u *JobObservationUpsertOne) SetCPURequest(v float64) *JobObservationUpsertOne {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.SetCPURequest(v)
+	})
+}
+
+// AddCPURequest adds v to the "cpu_request" field.
+func (u *JobObservationUpsertOne) AddCPURequest(v float64) *JobObservationUpsertOne {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.AddCPURequest(v)
+	})
+}
+
+// UpdateCPURequest sets the "cpu_request" field to the value that was provided on create.
+func (u *JobObservationUpsertOne) UpdateCPURequest() *JobObservationUpsertOne {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.UpdateCPURequest()
+	})
+}
+
+// SetCPULimit sets the "cpu_limit" field.
+func (u *JobObservationUpsertOne) SetCPULimit(v float64) *JobObservationUpsertOne {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.SetCPULimit(v)
+	})
+}
+
+// AddCPULimit adds v to the "cpu_limit" field.
+func (u *JobObservationUpsertOne) AddCPULimit(v float64) *JobObservationUpsertOne {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.AddCPULimit(v)
+	})
+}
+
+// UpdateCPULimit sets the "cpu_limit" field to the value that was provided on create.
+func (u *JobObservationUpsertOne) UpdateCPULimit() *JobObservationUpsertOne {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.UpdateCPULimit()
+	})
+}
+
+// SetMemRequest sets the "mem_request" field.
+func (u *JobObservationUpsertOne) SetMemRequest(v float64) *JobObservationUpsertOne {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.SetMemRequest(v)
+	})
+}
+
+// AddMemRequest adds v to the "mem_request" field.
+func (u *JobObservationUpsertOne) AddMemRequest(v float64) *JobObservationUpsertOne {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.AddMemRequest(v)
+	})
+}
+
+// UpdateMemRequest sets the "mem_request" field to the value that was provided on create.
+func (u *JobObservationUpsertOne) UpdateMemRequest() *JobObservationUpsertOne {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.UpdateMemRequest()
+	})
+}
+
+// SetMemLimit sets the "mem_limit" field.
+func (u *JobObservationUpsertOne) SetMemLimit(v float64) *JobObservationUpsertOne {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.SetMemLimit(v)
+	})
+}
+
+// AddMemLimit adds v to the "mem_limit" field.
+func (u *JobObservationUpsertOne) AddMemLimit(v float64) *JobObservationUpsertOne {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.AddMemLimit(v)
+	})
+}
+
+// UpdateMemLimit sets the "mem_limit" field to the value that was provided on create.
+func (u *JobObservationUpsertOne) UpdateMemLimit() *JobObservationUpsertOne {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.UpdateMemLimit()
 	})
 }
 
@@ -1171,6 +1427,90 @@ func (u *JobObservationUpsertBulk) AddMemByteSeconds(v float64) *JobObservationU
 func (u *JobObservationUpsertBulk) UpdateMemByteSeconds() *JobObservationUpsertBulk {
 	return u.Update(func(s *JobObservationUpsert) {
 		s.UpdateMemByteSeconds()
+	})
+}
+
+// SetCPURequest sets the "cpu_request" field.
+func (u *JobObservationUpsertBulk) SetCPURequest(v float64) *JobObservationUpsertBulk {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.SetCPURequest(v)
+	})
+}
+
+// AddCPURequest adds v to the "cpu_request" field.
+func (u *JobObservationUpsertBulk) AddCPURequest(v float64) *JobObservationUpsertBulk {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.AddCPURequest(v)
+	})
+}
+
+// UpdateCPURequest sets the "cpu_request" field to the value that was provided on create.
+func (u *JobObservationUpsertBulk) UpdateCPURequest() *JobObservationUpsertBulk {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.UpdateCPURequest()
+	})
+}
+
+// SetCPULimit sets the "cpu_limit" field.
+func (u *JobObservationUpsertBulk) SetCPULimit(v float64) *JobObservationUpsertBulk {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.SetCPULimit(v)
+	})
+}
+
+// AddCPULimit adds v to the "cpu_limit" field.
+func (u *JobObservationUpsertBulk) AddCPULimit(v float64) *JobObservationUpsertBulk {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.AddCPULimit(v)
+	})
+}
+
+// UpdateCPULimit sets the "cpu_limit" field to the value that was provided on create.
+func (u *JobObservationUpsertBulk) UpdateCPULimit() *JobObservationUpsertBulk {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.UpdateCPULimit()
+	})
+}
+
+// SetMemRequest sets the "mem_request" field.
+func (u *JobObservationUpsertBulk) SetMemRequest(v float64) *JobObservationUpsertBulk {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.SetMemRequest(v)
+	})
+}
+
+// AddMemRequest adds v to the "mem_request" field.
+func (u *JobObservationUpsertBulk) AddMemRequest(v float64) *JobObservationUpsertBulk {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.AddMemRequest(v)
+	})
+}
+
+// UpdateMemRequest sets the "mem_request" field to the value that was provided on create.
+func (u *JobObservationUpsertBulk) UpdateMemRequest() *JobObservationUpsertBulk {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.UpdateMemRequest()
+	})
+}
+
+// SetMemLimit sets the "mem_limit" field.
+func (u *JobObservationUpsertBulk) SetMemLimit(v float64) *JobObservationUpsertBulk {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.SetMemLimit(v)
+	})
+}
+
+// AddMemLimit adds v to the "mem_limit" field.
+func (u *JobObservationUpsertBulk) AddMemLimit(v float64) *JobObservationUpsertBulk {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.AddMemLimit(v)
+	})
+}
+
+// UpdateMemLimit sets the "mem_limit" field to the value that was provided on create.
+func (u *JobObservationUpsertBulk) UpdateMemLimit() *JobObservationUpsertBulk {
+	return u.Update(func(s *JobObservationUpsert) {
+		s.UpdateMemLimit()
 	})
 }
 

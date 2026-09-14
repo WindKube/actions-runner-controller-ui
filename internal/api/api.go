@@ -113,10 +113,16 @@ func (s *Server) engine(opts Options) *gin.Engine {
 	engine.GET("/", gin.WrapF(h.Index))
 	engine.GET("/runnersets/:name", param(h.SetDetail))
 	engine.GET("/runners/:name", param(h.RunnerDetail))
+	engine.GET("/workflows", gin.WrapF(h.Workflows))
+	engine.GET("/jobs", gin.WrapF(h.Jobs))
+	engine.GET("/jobs/:name", param(h.JobDetail))
 
 	engine.GET("/stream", gin.WrapF(h.StreamOverview))
 	engine.GET("/stream/runnersets/:name", param(h.StreamSet))
 	engine.GET("/stream/runners/:name", param(h.StreamRunner))
+	engine.GET("/stream/workflows", gin.WrapF(h.StreamWorkflows))
+	engine.GET("/stream/jobs", gin.WrapF(h.StreamJobs))
+	engine.GET("/stream/jobs/:name", param(h.StreamJob))
 
 	engine.Any(web.AssetPrefix+"*filepath", gin.WrapH(
 		http.StripPrefix(web.AssetPrefix, opts.Assets)))

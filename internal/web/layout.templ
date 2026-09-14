@@ -60,7 +60,39 @@ templ Topbar(p Page) {
 			@LiveToggle(p)
 			@LiveIndicator(p)
 		</div>
+		@TabStrip(p)
 	</header>
+}
+
+// TabStrip is the top-level navigation between the live fleet and the two
+// history views.
+//
+// These are ordinary links, not stream calls. Each tab is a different page
+// with a different SSE endpoint, so switching one has to be a navigation —
+// reopening the stream in place would leave the browser holding the previous
+// page's markup and a URL that no longer describes it.
+templ TabStrip(p Page) {
+	<nav class="mx-auto max-w-[1600px] px-4 flex items-center gap-1 -mb-px" aria-label="views">
+		for _, t := range AllTabs() {
+			<a
+				href={ templ.SafeURL(t.Href) }
+				class={ "px-3 h-8 inline-flex items-center text-[12px] border-b-2 -mb-px",
+					templ.KV("border-accent text-fg font-semibold", t.Tab == p.Tab),
+					templ.KV("border-transparent text-fg-subtle hover:text-fg", t.Tab != p.Tab) }
+				aria-current={ ariaCurrent(t.Tab == p.Tab) }
+			>{ t.Label }</a>
+		}
+	</nav>
+}
+
+// ariaCurrent renders the attribute value screen readers use to announce the
+// active tab. An empty string omits nothing — templ still writes the attribute
+// — so the inactive case has to say "false" rather than "".
+func ariaCurrent(active bool) string {
+	if active {
+		return "page"
+	}
+	return "false"
 }
 
 // RangePicker is the window selector. Each pill sets the range signal and

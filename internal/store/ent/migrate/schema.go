@@ -53,6 +53,10 @@ var (
 		{Name: "succeeded", Type: field.TypeBool, Default: false},
 		{Name: "cpu_seconds", Type: field.TypeFloat64, Default: 0},
 		{Name: "mem_byte_seconds", Type: field.TypeFloat64, Default: 0},
+		{Name: "cpu_request", Type: field.TypeFloat64, Default: 0},
+		{Name: "cpu_limit", Type: field.TypeFloat64, Default: 0},
+		{Name: "mem_request", Type: field.TypeFloat64, Default: 0},
+		{Name: "mem_limit", Type: field.TypeFloat64, Default: 0},
 	}
 	// JobObservationsTable holds the schema information for the "job_observations" table.
 	JobObservationsTable = &schema.Table{
@@ -79,6 +83,28 @@ var (
 				Name:    "jobobservation_finished_at",
 				Unique:  false,
 				Columns: []*schema.Column{JobObservationsColumns[8]},
+			},
+		},
+	}
+	// JobSamplesColumns holds the columns for the "job_samples" table.
+	JobSamplesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "job_id", Type: field.TypeInt},
+		{Name: "ts", Type: field.TypeInt64},
+		{Name: "cpu_cores", Type: field.TypeFloat64, Default: 0},
+		{Name: "mem_bytes", Type: field.TypeFloat64, Default: 0},
+		{Name: "samples", Type: field.TypeInt, Default: 0},
+	}
+	// JobSamplesTable holds the schema information for the "job_samples" table.
+	JobSamplesTable = &schema.Table{
+		Name:       "job_samples",
+		Columns:    JobSamplesColumns,
+		PrimaryKey: []*schema.Column{JobSamplesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "jobsample_job_id_ts",
+				Unique:  true,
+				Columns: []*schema.Column{JobSamplesColumns[1], JobSamplesColumns[2]},
 			},
 		},
 	}
@@ -178,6 +204,7 @@ var (
 	Tables = []*schema.Table{
 		ChurnEventsTable,
 		JobObservationsTable,
+		JobSamplesTable,
 		PhaseTransitionsTable,
 		RunnerFailuresTable,
 		SamplesTable,

@@ -73,6 +73,22 @@ type Config struct {
 	RetentionScope5m   time.Duration `env:"ARC_UI_RETENTION_SCOPE_5M" envDefault:"720h"`
 	RetentionScope1h   time.Duration `env:"ARC_UI_RETENTION_SCOPE_1H" envDefault:"9600h"`
 
+	// RetentionJobSamples is how long per-job resource usage is kept. It
+	// defaults to the job observations' own window, because a job row whose
+	// usage chart is empty is the one thing the job detail view cannot explain
+	// away.
+	RetentionJobSamples time.Duration `env:"ARC_UI_RETENTION_JOB_SAMPLES" envDefault:"720h"`
+
+	// JobSampleResolution is the bucket width per-job usage is averaged into.
+	//
+	// This is the knob that decides what the feature costs on disk: the row
+	// count is (busy runners × job minutes) ÷ this. At the 15s default scrape
+	// a one-minute bucket folds four readings into one row, and storing at
+	// scrape resolution instead would be four times the volume for detail no
+	// chart of a multi-minute job can render. The price is that a job shorter
+	// than one bucket is a single reading.
+	JobSampleResolution time.Duration `env:"ARC_UI_JOB_SAMPLE_RESOLUTION" envDefault:"1m"`
+
 	// GitHubOrg labels the breadcrumb. Empty means "derive it from the
 	// AutoscalingRunnerSet's githubConfigUrl".
 	GitHubOrg string `env:"ARC_UI_GITHUB_ORG"`
@@ -118,6 +134,19 @@ func Load() (Config, []Warning, error) {
 	}
 	if cfg.DBPath == "" {
 		return Config{}, warns, fmt.Errorf("ARC_UI_DB_PATH must not be empty")
+	}
+	// A non-positive bucket width would be divided by when flooring a
+	// timestamp. Unlike the retention windows, zero here is not a meaningful
+	// "keep forever" escape hatch — it is a panic.
+	if cfg.JobSampleResolution < time.Second {
+		return Config{}, warns, fmt.Errorf(
+			"ARC_UI_JOB_SAMPLE_RESOLUTION=%s must be at least 1s", cfg.JobSampleResolution)
+	}
+	if cfg.JobSampleResolution < cfg.ScrapeInterval {
+		warns = append(warns, Warning(fmt.Sprintf(
+			"ARC_UI_JOB_SAMPLE_RESOLUTION=%s is finer than ARC_UI_SCRAPE_INTERVAL=%s; "+
+				"most buckets will hold a single reading and the rest none",
+			cfg.JobSampleResolution, cfg.ScrapeInterval)))
 	}
 	if cfg.KubeQPS <= 0 || cfg.KubeBurst <= 0 {
 		return Config{}, warns, fmt.Errorf("ARC_UI_KUBE_QPS and ARC_UI_KUBE_BURST must be positive")

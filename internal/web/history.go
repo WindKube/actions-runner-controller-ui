@@ -179,6 +179,143 @@ type RepoHistory struct {
 	MemGiBSecs float64
 }
 
+// JobOutcome is how a job ended, as the Jobs tab filters and colours it.
+type JobOutcome string
+
+// The outcomes a job listing can be narrowed to. JobAnyOutcome is the zero
+// value, so an unset filter matches everything.
+const (
+	JobAnyOutcome JobOutcome = ""
+	JobOK         JobOutcome = "ok"
+	JobFailed     JobOutcome = "failed"
+	JobRunning    JobOutcome = "running"
+)
+
+// JobFilter narrows a job or workflow listing. Every field is optional.
+type JobFilter struct {
+	Repository string
+	Workflow   string
+	Set        string
+	RunID      int64
+	Outcome    JobOutcome
+	// Search is matched as a case-insensitive substring over the workflow,
+	// job name and repository.
+	Search string
+	Limit  int
+}
+
+// Job is one row of the Jobs tab, and the subject of the job detail view.
+type Job struct {
+	ID         int
+	Runner     string
+	Set        string
+	Repository string
+	Workflow   string
+	Name       string
+	RunID      int64
+	StartedAt  time.Time
+	// FinishedAt is zero while the job is still running.
+	FinishedAt time.Time
+	Succeeded  bool
+
+	// CPUSeconds and MemGiBSecs are integrated over the job's life. They are
+	// lower bounds: a job that died between two scrapes contributes nothing.
+	CPUSeconds float64
+	MemGiBSecs float64
+
+	// What the runner pod reserved, in cores and bytes, which is what the
+	// detail chart draws its reference lines from. Unlike the totals above
+	// these stay in bytes: they are plotted against the usage series, not
+	// summarised. Zero means there is no line to draw.
+	CPURequest float64
+	CPULimit   float64
+	MemRequest float64
+	MemLimit   float64
+}
+
+// Running reports whether the job had not finished when it was last observed.
+func (j Job) Running() bool { return j.FinishedAt.IsZero() }
+
+// Duration is how long the job ran, measured to now while it is still going.
+func (j Job) Duration(now time.Time) time.Duration {
+	if j.StartedAt.IsZero() {
+		return 0
+	}
+	end := j.FinishedAt
+	if end.IsZero() {
+		end = now
+	}
+	return max(0, end.Sub(j.StartedAt))
+}
+
+// WorkflowRun is one row of the Workflows tab: a workflow run aggregated from
+// the jobs observed for it.
+type WorkflowRun struct {
+	Repository string
+	Workflow   string
+	RunID      int64
+
+	Jobs    int
+	Running int
+	Failed  int
+
+	StartedAt time.Time
+	// FinishedAt is zero while any of the run's jobs is still going.
+	FinishedAt time.Time
+
+	CPUSeconds float64
+	MemGiBSecs float64
+}
+
+// Duration is how long the run has taken, measured to now while it is going.
+func (w WorkflowRun) Duration(now time.Time) time.Duration {
+	if w.StartedAt.IsZero() {
+		return 0
+	}
+	end := w.FinishedAt
+	if end.IsZero() {
+		end = now
+	}
+	return max(0, end.Sub(w.StartedAt))
+}
+
+// JobList is a page of jobs plus how many the window holds.
+//
+// Total is the window's count, not the page's. "100 of 4,312" is what tells an
+// operator the table is a sample rather than the whole story.
+type JobList struct {
+	Jobs  []Job
+	Total int64
+}
+
+// WorkflowList is a page of workflow runs plus the window's total.
+type WorkflowList struct {
+	Runs  []WorkflowRun
+	Total int64
+}
+
+// JobSeries is one job's resource usage over its own lifetime.
+//
+// Empty is the normal state for a job that ran before per-job sampling was
+// switched on, or while metrics-server was unavailable. The view says so
+// rather than drawing a flat zero.
+type JobSeries struct {
+	At  []time.Time
+	CPU []float64 // cores
+	Mem []float64 // bytes
+}
+
+// Len is the number of buckets.
+func (s JobSeries) Len() int { return len(s.At) }
+
+// JobFacets are the distinct values the window contains, for the filter
+// dropdowns above the two tabs.
+type JobFacets struct {
+	Repositories []string
+	Workflows    []string
+	Sets         []string
+}
+
 // History is everything the views need from the time-series store.
 //
 // It is declared here, at the consumer, rather than exported from the store:
@@ -208,6 +345,24 @@ type History interface {
 
 	// Failures returns the newest failures in the window, capped at limit.
 	Failures(ctx context.Context, scope Scope, w Window, limit int) (FailureWindow, error)
+
+	// Jobs returns the jobs overlapping the window, newest first.
+	Jobs(ctx context.Context, f JobFilter, w Window) (JobList, error)
+
+	// Workflows returns the workflow runs overlapping the window, newest
+	// first.
+	Workflows(ctx context.Context, f JobFilter, w Window) (WorkflowList, error)
+
+	// Job returns one job by id. The bool is false when there is no such row,
+	// which the handler turns into a 404.
+	Job(ctx context.Context, id int) (Job, bool, error)
+
+	// JobSeries returns one job's resource usage over the window.
+	JobSeries(ctx context.Context, id int, w Window) (JobSeries, error)
+
+	// Facets returns the distinct values the window contains, for the filter
+	// dropdowns.
+	Facets(ctx context.Context, w Window) (JobFacets, error)
 
 	// Stats reports what the history is costing on disk. It is the only
 	// question here that is not about a time window.
@@ -241,6 +396,7 @@ type StoreStats struct {
 
 	Samples     int64
 	Jobs        int64
+	JobSamples  int64
 	Phases      int64
 	ChurnEvents int64
 	Failures    int64
@@ -278,6 +434,25 @@ func (NoHistory) Repos(context.Context, Window, int) ([]RepoHistory, error) { re
 func (NoHistory) Failures(context.Context, Scope, Window, int) (FailureWindow, error) {
 	return FailureWindow{}, nil
 }
+
+// Jobs returns nothing.
+func (NoHistory) Jobs(context.Context, JobFilter, Window) (JobList, error) { return JobList{}, nil }
+
+// Workflows returns nothing.
+func (NoHistory) Workflows(context.Context, JobFilter, Window) (WorkflowList, error) {
+	return WorkflowList{}, nil
+}
+
+// Job finds nothing.
+func (NoHistory) Job(context.Context, int) (Job, bool, error) { return Job{}, false, nil }
+
+// JobSeries returns nothing.
+func (NoHistory) JobSeries(context.Context, int, Window) (JobSeries, error) {
+	return JobSeries{}, nil
+}
+
+// Facets returns nothing.
+func (NoHistory) Facets(context.Context, Window) (JobFacets, error) { return JobFacets{}, nil }
 
 // Stats reports a store that is not there.
 func (NoHistory) Stats(context.Context) (StoreStats, error) { return StoreStats{}, nil }

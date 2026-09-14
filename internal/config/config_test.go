@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -85,6 +86,11 @@ func TestLoadDefaultsAreSelfConsistent(t *testing.T) {
 	assert.NotEmpty(t, cfg.DBPath, "default ARC_UI_DB_PATH")
 	assert.Positive(t, cfg.KubeQPS, "default ARC_UI_KUBE_QPS")
 	assert.Positive(t, cfg.KubeBurst, "default ARC_UI_KUBE_BURST")
+	assert.Positive(t, cfg.JobSampleResolution, "default ARC_UI_JOB_SAMPLE_RESOLUTION")
+	// Per-job usage defaults to the same window as the job rows it belongs to,
+	// so a job listed in the table always has a chart that can be drawn.
+	assert.Equal(t, cfg.RetentionScope5m, cfg.RetentionJobSamples,
+		"job samples should default to the job observations' own window")
 }
 
 // TestAllNamespaces documents the empty-slice sentinel, which normalizeNamespaces
@@ -111,4 +117,36 @@ func TestLoadRejectsRelativeListenerMetricsPath(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ARC_UI_LISTENER_METRICS_PATH")
 	assert.Contains(t, err.Error(), "must begin with /")
+}
+
+// The bucket width is divided by to floor a timestamp. Unlike the retention
+// windows, zero is not a "keep forever" escape hatch here — it is a panic.
+func TestLoadRejectsAnUnusableJobSampleResolution(t *testing.T) {
+	for _, v := range []string{"0s", "-1m", "500ms"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("ARC_UI_JOB_SAMPLE_RESOLUTION", v)
+
+			_, _, err := Load()
+			require.Error(t, err, "ARC_UI_JOB_SAMPLE_RESOLUTION=%s should be rejected", v)
+			assert.Contains(t, err.Error(), "ARC_UI_JOB_SAMPLE_RESOLUTION")
+		})
+	}
+}
+
+// A bucket finer than the scrape interval buys nothing and costs rows, so it
+// is worth a word rather than a silent acceptance.
+func TestLoadWarnsWhenJobSamplesAreFinerThanTheScrape(t *testing.T) {
+	t.Setenv("ARC_UI_SCRAPE_INTERVAL", "30s")
+	t.Setenv("ARC_UI_JOB_SAMPLE_RESOLUTION", "5s")
+
+	_, warns, err := Load()
+	require.NoError(t, err, "a fine bucket is legal, just wasteful")
+
+	var found bool
+	for _, w := range warns {
+		if strings.Contains(string(w), "ARC_UI_JOB_SAMPLE_RESOLUTION") {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected a warning, got %v", warns)
 }

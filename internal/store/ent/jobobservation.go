@@ -38,7 +38,15 @@ type JobObservation struct {
 	CPUSeconds float64 `json:"cpu_seconds,omitempty"`
 	// MemByteSeconds holds the value of the "mem_byte_seconds" field.
 	MemByteSeconds float64 `json:"mem_byte_seconds,omitempty"`
-	selectValues   sql.SelectValues
+	// CPURequest holds the value of the "cpu_request" field.
+	CPURequest float64 `json:"cpu_request,omitempty"`
+	// CPULimit holds the value of the "cpu_limit" field.
+	CPULimit float64 `json:"cpu_limit,omitempty"`
+	// MemRequest holds the value of the "mem_request" field.
+	MemRequest float64 `json:"mem_request,omitempty"`
+	// MemLimit holds the value of the "mem_limit" field.
+	MemLimit     float64 `json:"mem_limit,omitempty"`
+	selectValues sql.SelectValues
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -48,7 +56,7 @@ func (*JobObservation) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case jobobservation.FieldSucceeded:
 			values[i] = new(sql.NullBool)
-		case jobobservation.FieldCPUSeconds, jobobservation.FieldMemByteSeconds:
+		case jobobservation.FieldCPUSeconds, jobobservation.FieldMemByteSeconds, jobobservation.FieldCPURequest, jobobservation.FieldCPULimit, jobobservation.FieldMemRequest, jobobservation.FieldMemLimit:
 			values[i] = new(sql.NullFloat64)
 		case jobobservation.FieldID, jobobservation.FieldRunID, jobobservation.FieldStartedAt, jobobservation.FieldFinishedAt:
 			values[i] = new(sql.NullInt64)
@@ -141,6 +149,30 @@ func (_m *JobObservation) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.MemByteSeconds = value.Float64
 			}
+		case jobobservation.FieldCPURequest:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field cpu_request", values[i])
+			} else if value.Valid {
+				_m.CPURequest = value.Float64
+			}
+		case jobobservation.FieldCPULimit:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field cpu_limit", values[i])
+			} else if value.Valid {
+				_m.CPULimit = value.Float64
+			}
+		case jobobservation.FieldMemRequest:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field mem_request", values[i])
+			} else if value.Valid {
+				_m.MemRequest = value.Float64
+			}
+		case jobobservation.FieldMemLimit:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field mem_limit", values[i])
+			} else if value.Valid {
+				_m.MemLimit = value.Float64
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -209,6 +241,18 @@ func (_m *JobObservation) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("mem_byte_seconds=")
 	builder.WriteString(fmt.Sprintf("%v", _m.MemByteSeconds))
+	builder.WriteString(", ")
+	builder.WriteString("cpu_request=")
+	builder.WriteString(fmt.Sprintf("%v", _m.CPURequest))
+	builder.WriteString(", ")
+	builder.WriteString("cpu_limit=")
+	builder.WriteString(fmt.Sprintf("%v", _m.CPULimit))
+	builder.WriteString(", ")
+	builder.WriteString("mem_request=")
+	builder.WriteString(fmt.Sprintf("%v", _m.MemRequest))
+	builder.WriteString(", ")
+	builder.WriteString("mem_limit=")
+	builder.WriteString(fmt.Sprintf("%v", _m.MemLimit))
 	builder.WriteByte(')')
 	return builder.String()
 }

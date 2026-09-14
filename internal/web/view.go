@@ -52,6 +52,18 @@ type Signals struct {
 	// the server renders every page complete, so a dashboard nobody asked to
 	// follow should not hold a connection open pushing patches at it.
 	Live bool `json:"live"`
+
+	// Outcome and Run narrow the Jobs and Workflows tabs. Run is a string
+	// rather than an int64 because every signal crosses the wire as JSON from
+	// a form control, and a blank one has to survive the round trip.
+	Outcome string `json:"outcome"`
+	Run     string `json:"run"`
+
+	// Q is the search box above those two tables. Unlike every other filter
+	// here it is free text, so its "no filter" value is the empty string
+	// rather than the AnyValue sentinel — there is no dropdown for it to
+	// select, and "all" is a perfectly good thing to search for.
+	Q string `json:"q"`
 }
 
 // Filter converts signals into a domain filter.
@@ -79,9 +91,75 @@ func (s Signals) Normalize() Signals {
 	s.Job = blankToAny(s.Job)
 	s.Set = blankToAny(s.Set)
 	s.State = blankToAny(s.State)
+	s.Outcome = blankToAny(s.Outcome)
 	s.Range = string(ParseRange(s.Range))
 	s.Sort = string(fleet.ParseSetSort(s.Sort))
+	s.Run = normalizeRun(s.Run)
+	s.Q = strings.TrimSpace(s.Q)
 	return s
+}
+
+// normalizeRun keeps a run filter only when it is a positive integer.
+//
+// Zero is not merely useless as a filter, it is the value ARC reports for a
+// job whose run it does not know, so treating a literal "0" as a filter would
+// silently narrow the table to exactly those rows.
+func normalizeRun(v string) string {
+	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil || n <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(n, 10)
+}
+
+// RunID is the run filter as a number, or zero when unset.
+func (s Signals) RunID() int64 {
+	n, err := strconv.ParseInt(s.Run, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// JobFilter converts signals into the filter the Jobs and Workflows tabs use.
+//
+// It is deliberately not Filter(): that one narrows the live fleet by runner
+// state, and this one narrows recorded history by how a job ended. The two
+// share their repository and workflow dimensions and nothing else.
+func (s Signals) JobFilter() JobFilter {
+	drop := func(v string) string {
+		if v == fleet.AnyValue {
+			return ""
+		}
+		return v
+	}
+	return JobFilter{
+		Repository: drop(s.Repo),
+		Workflow:   drop(s.Workflow),
+		Set:        drop(s.Set),
+		RunID:      s.RunID(),
+		Outcome:    ParseOutcome(s.Outcome),
+		Search:     s.Q,
+	}
+}
+
+// ParseOutcome maps a signal value onto an outcome, defaulting to "any" so an
+// unrecognised one widens the table rather than emptying it.
+func ParseOutcome(v string) JobOutcome {
+	switch JobOutcome(v) {
+	case JobOK:
+		return JobOK
+	case JobFailed:
+		return JobFailed
+	case JobRunning:
+		return JobRunning
+	}
+	return JobAnyOutcome
+}
+
+// AllOutcomes lists the outcome filter's options in dropdown order.
+func AllOutcomes() []JobOutcome {
+	return []JobOutcome{JobOK, JobFailed, JobRunning}
 }
 
 // SignalsFromQuery builds signals from ordinary URL query parameters, which is
@@ -101,6 +179,9 @@ func SignalsFromQuery(q url.Values) Signals {
 		Range:    q.Get("range"),
 		Sort:     q.Get("sort"),
 		Live:     live,
+		Outcome:  q.Get("outcome"),
+		Run:      q.Get("run"),
+		Q:        q.Get("q"),
 	}.Normalize()
 }
 
@@ -118,6 +199,13 @@ func (s Signals) Query() url.Values {
 	add("job", s.Job)
 	add("set", s.Set)
 	add("state", s.State)
+	add("outcome", s.Outcome)
+	if s.Run != "" {
+		q.Set("run", s.Run)
+	}
+	if s.Q != "" {
+		q.Set("q", s.Q)
+	}
 	if s.Range != string(DefaultRange) {
 		add("range", s.Range)
 	}
@@ -182,9 +270,12 @@ func InitStream(streamURL string) string {
 // ClearFilters resets every filter signal and reloads.
 func ClearFilters(streamURL string) string {
 	var b strings.Builder
-	for _, s := range []string{"repo", "workflow", "job", "set", "state"} {
+	for _, s := range []string{"repo", "workflow", "job", "set", "state", "outcome"} {
 		fmt.Fprintf(&b, "$%s = '%s'; ", s, fleet.AnyValue)
 	}
+	// The free-text dimensions clear to empty, not to the sentinel: "all" is a
+	// search term and a run number, not an absence.
+	b.WriteString("$q = ''; $run = ''; ")
 	b.WriteString(StreamCall(streamURL))
 	return b.String()
 }

@@ -3,6 +3,8 @@ package web
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/samber/lo"
@@ -122,6 +124,11 @@ type Page struct {
 	Warnings []string
 	Crumbs   []Crumb
 
+	// Tab is which of the top-level views is showing, so the tab strip can
+	// mark it. The zero value is the fleet overview, which is what a page
+	// built before the strip existed should light up.
+	Tab Tab
+
 	// Stream is the SSE endpoint this page's controls reopen. Each view has
 	// its own, so a filter change on a detail page refreshes that page rather
 	// than the fleet overview.
@@ -129,6 +136,39 @@ type Page struct {
 
 	CSS string
 	JS  string
+}
+
+// Tab names one of the dashboard's top-level views.
+type Tab string
+
+// The three tabs. TabFleet is the zero value so a page that sets none is the
+// overview.
+const (
+	TabFleet     Tab = ""
+	TabWorkflows Tab = "workflows"
+	TabJobs      Tab = "jobs"
+)
+
+// TabLink is one entry in the top-level tab strip.
+type TabLink struct {
+	Tab   Tab
+	Label string
+	Href  string
+}
+
+// AllTabs lists the tabs in strip order.
+//
+// The hrefs carry no filter state on purpose. Switching tab is a change of
+// subject — from what the fleet is doing now to what it did — and the fleet
+// tab's filters are over runner state, which the history tabs have no column
+// for. Carrying them across would silently empty the table someone just
+// clicked into.
+func AllTabs() []TabLink {
+	return []TabLink{
+		{Tab: TabFleet, Label: "fleet", Href: "/"},
+		{Tab: TabWorkflows, Label: "workflows", Href: "/workflows"},
+		{Tab: TabJobs, Label: "jobs", Href: "/jobs"},
+	}
 }
 
 // Crumb is one breadcrumb segment. A crumb with no Href is the current page.
@@ -773,7 +813,6 @@ func runnerLine(title string, at []time.Time, vals []float64, request, limit flo
 		c.Refs = append(c.Refs, RefLine{
 			Points: chart.FlatLine(request, chartW, lineH, peak),
 			Stroke: strokeMuted,
-			Label:  "request " + format(request),
 		})
 	}
 	if limit > 0 {
@@ -1102,4 +1141,515 @@ func warnings(s fleet.Snapshot, t fleet.Totals) []string {
 		}
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// Workflows and Jobs
+// ---------------------------------------------------------------------------
+
+// historyRows is how many rows the two history tables render. The window's
+// true total is reported beside them, so the cap bounds rendering cost without
+// hiding how much work the fleet actually did.
+const historyRows = 100
+
+// JobsView is the Jobs tab.
+type JobsView struct {
+	Page
+
+	Selects []fleet.Select
+	Search  string
+	Rows    []JobListRow
+	Total   int64
+	Summary string
+
+	// Enabled is false when there is no history store. These two tabs are
+	// entirely store-backed, so that is the difference between "nothing ran"
+	// and "nothing is being recorded" — and rendering an empty table for the
+	// second would be the dashboard lying about an idle fleet.
+	Enabled bool
+}
+
+// WorkflowsView is the Workflows tab.
+type WorkflowsView struct {
+	Page
+
+	Selects []fleet.Select
+	Search  string
+	Rows    []WorkflowListRow
+	Total   int64
+	Summary string
+	Enabled bool
+}
+
+// JobView is the per-job detail page.
+type JobView struct {
+	Page
+
+	Job   Job
+	Tiles []Tile
+	Facts []KV
+	CPU   LineChart
+	Mem   LineChart
+
+	// Buckets is how many usage samples the chart was drawn from. Zero means
+	// none were recorded, which the panel explains rather than drawing a flat
+	// line at zero.
+	Buckets int
+}
+
+// JobListRow is one line of the Jobs table, with its display values resolved.
+type JobListRow struct {
+	Job      Job
+	Tone     Tone
+	Badge    string
+	Duration string
+	Started  string
+	CPU      string
+	Mem      string
+	Href     string
+}
+
+// WorkflowListRow is one line of the Workflows table.
+type WorkflowListRow struct {
+	Run      WorkflowRun
+	Tone     Tone
+	Badge    string
+	Duration string
+	Started  string
+	CPU      string
+	Mem      string
+	// Href opens the Jobs tab narrowed to this run.
+	Href string
+}
+
+// Jobs builds the Jobs tab.
+func (b *Builder) Jobs(ctx context.Context, sig Signals, now time.Time) JobsView {
+	sig = sig.Normalize()
+	snap := b.Fleet.Snapshot()
+	rng := ParseRange(sig.Range)
+	win := rng.Window(now)
+
+	filter := sig.JobFilter()
+	filter.Limit = historyRows
+
+	page := b.page("Jobs", snap, sig, now, []Crumb{{Label: snap.Org}, {Label: "jobs"}})
+	page.Tab = TabJobs
+
+	stats, _ := b.History.Stats(ctx)
+	view := JobsView{
+		Page:    page,
+		Search:  sig.Q,
+		Enabled: stats.Enabled,
+		Selects: jobSelects(ctx, b.History, sig, win, true),
+	}
+	if !view.Enabled {
+		return view
+	}
+
+	jobs, err := b.History.Jobs(ctx, filter, win)
+	if err != nil {
+		return view
+	}
+
+	view.Total = jobs.Total
+	view.Rows = make([]JobListRow, 0, len(jobs.Jobs))
+	for _, j := range jobs.Jobs {
+		view.Rows = append(view.Rows, jobListRow(j, now))
+	}
+	view.Summary = listSummary(len(view.Rows), jobs.Total, "job", rng)
+	return view
+}
+
+// Workflows builds the Workflows tab.
+func (b *Builder) Workflows(ctx context.Context, sig Signals, now time.Time) WorkflowsView {
+	sig = sig.Normalize()
+	snap := b.Fleet.Snapshot()
+	rng := ParseRange(sig.Range)
+	win := rng.Window(now)
+
+	filter := sig.JobFilter()
+	filter.Limit = historyRows
+
+	page := b.page("Workflows", snap, sig, now, []Crumb{{Label: snap.Org}, {Label: "workflows"}})
+	page.Tab = TabWorkflows
+
+	stats, _ := b.History.Stats(ctx)
+	view := WorkflowsView{
+		Page:    page,
+		Search:  sig.Q,
+		Enabled: stats.Enabled,
+		Selects: jobSelects(ctx, b.History, sig, win, false),
+	}
+	if !view.Enabled {
+		return view
+	}
+
+	runs, err := b.History.Workflows(ctx, filter, win)
+	if err != nil {
+		return view
+	}
+
+	view.Total = runs.Total
+	view.Rows = make([]WorkflowListRow, 0, len(runs.Runs))
+	for _, r := range runs.Runs {
+		view.Rows = append(view.Rows, workflowListRow(r, now))
+	}
+	view.Summary = listSummary(len(view.Rows), runs.Total, "workflow run", rng)
+	return view
+}
+
+// Job builds the per-job detail view. It reports false when no such job is
+// recorded, which the handler turns into a 404.
+func (b *Builder) Job(ctx context.Context, id int, sig Signals, now time.Time) (JobView, bool) {
+	sig = sig.Normalize()
+	snap := b.Fleet.Snapshot()
+
+	j, ok, err := b.History.Job(ctx, id)
+	if err != nil || !ok {
+		return JobView{}, false
+	}
+
+	page := b.page(j.Name, snap, sig, now, []Crumb{
+		{Label: snap.Org},
+		{Label: "jobs", Href: "/jobs"},
+		{Label: jobCrumb(j)},
+	})
+	page.Tab = TabJobs
+
+	// The window is the job's own life, not the range picker's: a job is a
+	// bounded thing and its chart should show all of it, whatever window the
+	// operator was looking at when they clicked through. Points is capped the
+	// same way every other chart is, so a six-hour job renders as a readable
+	// line rather than three thousand coordinates.
+	end := j.FinishedAt
+	if end.IsZero() {
+		end = now
+	}
+	win := Window{From: j.StartedAt, To: end.Add(time.Second), Points: 90}
+	series, _ := b.History.JobSeries(ctx, id, win)
+
+	view := JobView{
+		Page:    page,
+		Job:     j,
+		Tiles:   jobTiles(j, now),
+		Facts:   jobFacts(j, now),
+		Buckets: series.Len(),
+	}
+
+	ticks := jobTicks(j.Duration(now))
+	view.CPU = jobLine("cpu", series.CPU, ticks,
+		j.CPURequest, j.CPULimit, strokeCPU, fillCPU, ToneCPU, fleet.FormatCores)
+	view.Mem = jobLine("memory", series.Mem, ticks,
+		j.MemRequest, j.MemLimit, strokeMem, fillMem, ToneMemory, fleet.FormatGiB)
+	return view, true
+}
+
+// jobSelects builds the filter dropdowns from what the window actually
+// contains, so a dimension never offers a value that would match nothing.
+//
+// withOutcome is false on the Workflows tab: a run is a set of jobs that can
+// have ended several different ways at once, and an "ok/failed" dropdown over
+// it would claim a precision the row does not have.
+func jobSelects(ctx context.Context, h History, sig Signals, win Window, withOutcome bool) []fleet.Select {
+	facets, _ := h.Facets(ctx, win)
+
+	out := []fleet.Select{
+		jobSelect("repo", "repo", sig.Repo, facets.Repositories, "all repositories"),
+		jobSelect("workflow", "workflow", sig.Workflow, facets.Workflows, "all workflows"),
+		jobSelect("set", "runnerset", sig.Set, facets.Sets, "all runnersets"),
+	}
+	if withOutcome {
+		outcomes := make([]string, 0, len(AllOutcomes()))
+		for _, o := range AllOutcomes() {
+			outcomes = append(outcomes, string(o))
+		}
+		out = append(out, jobSelect("outcome", "outcome", sig.Outcome, outcomes, "any outcome"))
+	}
+	return out
+}
+
+// jobSelect builds one dropdown. It mirrors fleet.Filter.Selects so the two
+// filter bars are the same control with the same semantics, including keeping
+// a selected value that the window no longer contains rather than silently
+// jumping to a different filter than the URL says.
+func jobSelect(key, label, current string, values []string, anyLabel string) fleet.Select {
+	filtering := current != "" && current != fleet.AnyValue
+
+	options := make([]fleet.Option, 0, len(values)+2)
+	options = append(options, fleet.Option{
+		Value: fleet.AnyValue, Label: anyLabel, Selected: !filtering,
+	})
+
+	found := false
+	for _, v := range values {
+		if v == current {
+			found = true
+		}
+		options = append(options, fleet.Option{Value: v, Label: v, Selected: v == current})
+	}
+	if filtering && !found {
+		options = append(options, fleet.Option{
+			Value: current, Label: current + " (no matches)", Selected: true,
+		})
+	}
+
+	return fleet.Select{
+		Key: key, Label: label, Value: current, Options: options, Filtering: filtering,
+	}
+}
+
+// listSummary is the line at the right of a history filter bar.
+func listSummary(shown int, total int64, noun string, r TimeRange) string {
+	plural := noun + "s"
+	if total == 1 {
+		plural = noun
+	}
+	if int64(shown) < total {
+		return fmt.Sprintf("%d of %s %s · %s", shown, Thousands(total), plural, r.Label())
+	}
+	return fmt.Sprintf("%s %s · %s", Thousands(total), plural, r.Label())
+}
+
+// jobListRow resolves one job's display values.
+func jobListRow(j Job, now time.Time) JobListRow {
+	return JobListRow{
+		Job:      j,
+		Tone:     JobTone(j),
+		Badge:    JobBadge(j),
+		Duration: fleet.FormatAge(j.Duration(now)),
+		Started:  fleet.FormatRelative(j.StartedAt, now),
+		CPU:      CoreSeconds(j.CPUSeconds),
+		Mem:      GiBSeconds(j.MemGiBSecs),
+		Href:     fmt.Sprintf("/jobs/%d", j.ID),
+	}
+}
+
+// workflowListRow resolves one run's display values.
+func workflowListRow(w WorkflowRun, now time.Time) WorkflowListRow {
+	row := WorkflowListRow{
+		Run:      w,
+		Tone:     RunTone(w),
+		Badge:    RunBadge(w),
+		Duration: fleet.FormatAge(w.Duration(now)),
+		Started:  fleet.FormatRelative(w.StartedAt, now),
+		CPU:      CoreSeconds(w.CPUSeconds),
+		Mem:      GiBSeconds(w.MemGiBSecs),
+	}
+
+	// A run ARC reported no id for cannot be addressed as a run, so the row
+	// links to its workflow's jobs instead of to a filter that would match
+	// every such job in the window.
+	q := url.Values{}
+	q.Set("repo", w.Repository)
+	q.Set("workflow", w.Workflow)
+	if w.RunID > 0 {
+		q.Set("run", strconv.FormatInt(w.RunID, 10))
+	}
+	row.Href = "/jobs?" + q.Encode()
+	return row
+}
+
+// JobTone colours a job by how it ended.
+func JobTone(j Job) Tone {
+	switch {
+	case j.Running():
+		return ToneAccent
+	case j.Succeeded:
+		return ToneSuccess
+	}
+	return ToneDanger
+}
+
+// JobBadge labels a job by how it ended.
+func JobBadge(j Job) string {
+	switch {
+	case j.Running():
+		return "running"
+	case j.Succeeded:
+		return "ok"
+	}
+	return "failed"
+}
+
+// RunTone colours a workflow run. A run with any failure is a failed run: the
+// green of "some of it worked" is the one thing nobody needs to know.
+func RunTone(w WorkflowRun) Tone {
+	switch {
+	case w.Failed > 0:
+		return ToneDanger
+	case w.Running > 0:
+		return ToneAccent
+	}
+	return ToneSuccess
+}
+
+// RunBadge labels a workflow run.
+func RunBadge(w WorkflowRun) string {
+	switch {
+	case w.Failed > 0:
+		return fmt.Sprintf("%d failed", w.Failed)
+	case w.Running > 0:
+		return "running"
+	}
+	return "ok"
+}
+
+// RunLabel renders a workflow run number, spelling out the case where ARC
+// reported none rather than printing "#0".
+func RunLabel(id int64) string {
+	if id <= 0 {
+		return "no run id"
+	}
+	return fmt.Sprintf("#%d", id)
+}
+
+// CoreSeconds renders integrated CPU cost, promoting to core-hours once
+// core-seconds stops being a number anyone can read at a glance.
+func CoreSeconds(v float64) string {
+	if v <= 0 {
+		return "—"
+	}
+	if v < 3600 {
+		return fmt.Sprintf("%.0f core-s", v)
+	}
+	return fmt.Sprintf("%.1f core-h", v/3600)
+}
+
+// GiBSeconds renders integrated memory cost on the same scale.
+func GiBSeconds(v float64) string {
+	if v <= 0 {
+		return "—"
+	}
+	if v < 3600 {
+		return fmt.Sprintf("%.0f GiB-s", v)
+	}
+	return fmt.Sprintf("%.1f GiB-h", v/3600)
+}
+
+// jobCrumb is the breadcrumb label for one job.
+func jobCrumb(j Job) string {
+	if j.Workflow == "" {
+		return Dash(j.Name)
+	}
+	return j.Workflow + " · " + Dash(j.Name)
+}
+
+// jobTiles is the KPI strip on the job detail page.
+//
+// The averages are derived from the integrated cost rather than from the
+// samples, because they are the only figures that survive for a job whose
+// samples have been swept: cost is a column on the job row, the series is not.
+func jobTiles(j Job, now time.Time) []Tile {
+	d := j.Duration(now)
+	secs := d.Seconds()
+
+	cpu := Tile{Label: "avg cpu", Value: "—", Sub: "no cost recorded", Tone: ToneMuted}
+	if secs > 0 && j.CPUSeconds > 0 {
+		cpu = Tile{
+			Label: "avg cpu", Value: fleet.FormatCores(j.CPUSeconds / secs),
+			Sub: "cores over " + fleet.FormatAge(d), Tone: ToneCPU,
+		}
+	}
+
+	mem := Tile{Label: "avg memory", Value: "—", Sub: "no cost recorded", Tone: ToneMuted}
+	if secs > 0 && j.MemGiBSecs > 0 {
+		mem = Tile{
+			Label: "avg memory", Value: fleet.FormatGiB(j.MemGiBSecs / secs * fleet.GiB),
+			Sub: "over " + fleet.FormatAge(d), Tone: ToneMemory,
+		}
+	}
+
+	return []Tile{
+		{Label: "outcome", Value: JobBadge(j), Sub: Dash(j.Repository), Tone: JobTone(j)},
+		{Label: "duration", Value: fleet.FormatAge(d), Sub: "since " + fleet.FormatRelative(j.StartedAt, now), Tone: ToneAccent},
+		cpu,
+		mem,
+		{Label: "cpu cost", Value: CoreSeconds(j.CPUSeconds), Sub: "integrated", Tone: ToneCPU},
+		{Label: "memory cost", Value: GiBSeconds(j.MemGiBSecs), Sub: "integrated", Tone: ToneMemory},
+	}
+}
+
+// jobFacts is the detail page's label/value panel.
+func jobFacts(j Job, now time.Time) []KV {
+	facts := []KV{
+		{Label: "repository", Value: Dash(j.Repository), Mono: true},
+		{Label: "workflow", Value: Dash(j.Workflow), Mono: true},
+		{Label: "job", Value: Dash(j.Name)},
+		{Label: "run", Value: RunLabel(j.RunID), Mono: true},
+		{Label: "runner", Value: Dash(j.Runner), Mono: true},
+		{Label: "runnerset", Value: Dash(j.Set), Mono: true},
+		{Label: "started", Value: fleet.FormatRelative(j.StartedAt, now), Mono: true},
+	}
+	if j.Running() {
+		return append(facts, KV{Label: "finished", Value: "still running", Tone: ToneAccent})
+	}
+	return append(facts,
+		KV{Label: "finished", Value: fleet.FormatRelative(j.FinishedAt, now), Mono: true},
+		KV{Label: "outcome", Value: JobBadge(j), Tone: JobTone(j)},
+	)
+}
+
+// jobTicks labels a job chart's x-axis in elapsed time rather than in clock
+// time, because a job is read as "what happened during it", not "what the
+// cluster was doing at 14:05".
+func jobTicks(d time.Duration) []string {
+	const n = 5
+	out := make([]string, 0, n)
+	for i := range n {
+		at := time.Duration(float64(d) * float64(i) / float64(n-1))
+		if i == 0 {
+			out = append(out, "start")
+			continue
+		}
+		out = append(out, fleet.FormatAge(at))
+	}
+	return out
+}
+
+// jobLine draws one of the job's two usage series against what its runner
+// reserved.
+//
+// The reference lines come off the job row rather than the live pod, which no
+// longer exists for a job that finished last week. A zero is not drawn: it
+// means the reservation was never observed, and an undrawn line is honest
+// where a line at zero would not be.
+//
+// The numbers go in the legend rather than beside the rules: LineChartView
+// draws a RefLine as a dashed polyline and nothing else, so an unlabelled one
+// is an anonymous line across the chart.
+func jobLine(
+	title string, vals []float64, ticks []string,
+	request, limit float64, stroke, fill string, tone Tone, format func(float64) string,
+) LineChart {
+	if len(vals) == 0 {
+		return LineChart{Title: title, Empty: true, Ticks: ticks}
+	}
+	peak := PeakOf(vals, []float64{request, limit})
+	c := LineChart{
+		Width: chartW,
+		Title: title,
+		Line:  chart.Plot(vals, chartW, lineH, peak, fill, stroke),
+		Grid:  chart.Grid(2, chartW, lineH, 6, peak, lineH, format),
+		Ticks: ticks,
+		Legend: []LegendItem{
+			{Label: "peak", Tone: tone, Value: format(PeakOf(vals))},
+			{Label: "last", Tone: tone, Value: format(lastOf(vals))},
+		},
+	}
+	if request > 0 {
+		c.Refs = append(c.Refs, RefLine{
+			Points: chart.FlatLine(request, chartW, lineH, peak),
+			Stroke: strokeMuted,
+			Label:  "request " + format(request),
+		})
+		c.Legend = append(c.Legend, LegendItem{Label: "request", Tone: ToneMuted, Value: format(request)})
+	}
+	if limit > 0 {
+		c.Refs = append(c.Refs, RefLine{
+			Points: chart.FlatLine(limit, chartW, lineH, peak),
+			Stroke: strokeDanger,
+		})
+		c.Legend = append(c.Legend, LegendItem{Label: "limit", Tone: ToneDanger, Value: format(limit)})
+	}
+	return c
 }

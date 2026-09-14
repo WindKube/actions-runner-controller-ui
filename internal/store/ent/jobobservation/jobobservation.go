@@ -33,6 +33,14 @@ const (
 	FieldCPUSeconds = "cpu_seconds"
 	// FieldMemByteSeconds holds the string denoting the mem_byte_seconds field in the database.
 	FieldMemByteSeconds = "mem_byte_seconds"
+	// FieldCPURequest holds the string denoting the cpu_request field in the database.
+	FieldCPURequest = "cpu_request"
+	// FieldCPULimit holds the string denoting the cpu_limit field in the database.
+	FieldCPULimit = "cpu_limit"
+	// FieldMemRequest holds the string denoting the mem_request field in the database.
+	FieldMemRequest = "mem_request"
+	// FieldMemLimit holds the string denoting the mem_limit field in the database.
+	FieldMemLimit = "mem_limit"
 	// Table holds the table name of the jobobservation in the database.
 	Table = "job_observations"
 )
@@ -51,6 +59,10 @@ var Columns = []string{
 	FieldSucceeded,
 	FieldCPUSeconds,
 	FieldMemByteSeconds,
+	FieldCPURequest,
+	FieldCPULimit,
+	FieldMemRequest,
+	FieldMemLimit,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -82,6 +94,14 @@ var (
 	DefaultCPUSeconds float64
 	// DefaultMemByteSeconds holds the default value on creation for the "mem_byte_seconds" field.
 	DefaultMemByteSeconds float64
+	// DefaultCPURequest holds the default value on creation for the "cpu_request" field.
+	DefaultCPURequest float64
+	// DefaultCPULimit holds the default value on creation for the "cpu_limit" field.
+	DefaultCPULimit float64
+	// DefaultMemRequest holds the default value on creation for the "mem_request" field.
+	DefaultMemRequest float64
+	// DefaultMemLimit holds the default value on creation for the "mem_limit" field.
+	DefaultMemLimit float64
 )
 
 // OrderOption defines the ordering options for the JobObservation queries.
@@ -145,4 +165,24 @@ func ByCPUSeconds(opts ...sql.OrderTermOption) OrderOption {
 // ByMemByteSeconds orders the results by the mem_byte_seconds field.
 func ByMemByteSeconds(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldMemByteSeconds, opts...).ToFunc()
+}
+
+// ByCPURequest orders the results by the cpu_request field.
+func ByCPURequest(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCPURequest, opts...).ToFunc()
+}
+
+// ByCPULimit orders the results by the cpu_limit field.
+func ByCPULimit(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCPULimit, opts...).ToFunc()
+}
+
+// ByMemRequest orders the results by the mem_request field.
+func ByMemRequest(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldMemRequest, opts...).ToFunc()
+}
+
+// ByMemLimit orders the results by the mem_limit field.
+func ByMemLimit(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldMemLimit, opts...).ToFunc()
 }

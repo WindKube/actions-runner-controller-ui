@@ -35,6 +35,11 @@ type Queries interface {
 	Throughput(ctx context.Context, setName string, r store.Range) (ok, failed []store.Point, err error)
 	RepoConsumption(ctx context.Context, r store.Range) ([]store.RepoTotal, error)
 	Failures(ctx context.Context, setName string, r store.Range, limit int) ([]store.FailureRecord, int64, error)
+	Jobs(ctx context.Context, f store.JobFilter, r store.Range) ([]store.JobRecord, int64, error)
+	WorkflowRuns(ctx context.Context, f store.JobFilter, r store.Range) ([]store.WorkflowRun, int64, error)
+	Job(ctx context.Context, id int) (store.JobRecord, bool, error)
+	JobSeries(ctx context.Context, id int, r store.Range) ([]store.JobPoint, error)
+	JobFacets(ctx context.Context, r store.Range) (store.JobFacets, error)
 	Stats(ctx context.Context) (store.Stats, error)
 }
 
@@ -143,6 +148,7 @@ func (a Adapter) countStats(ctx context.Context) (web.StoreStats, error) {
 		Samples:     st.Samples,
 		Jobs:        st.Jobs,
 		Phases:      st.Phases,
+		JobSamples:  st.JobSamples,
 		ChurnEvents: st.ChurnEvents,
 		Failures:    st.Failures,
 		Rows:        st.Rows,
@@ -244,6 +250,135 @@ func (a Adapter) Repos(ctx context.Context, w web.Window, limit int) ([]web.Repo
 }
 
 const gib = 1024 * 1024 * 1024
+
+// jobFilter maps the view's filter onto the store's.
+//
+// The outcome vocabularies are declared separately at both ends — the view
+// owns what a dropdown offers, the store owns what a WHERE clause accepts —
+// and an unrecognised value falls through to "any" rather than matching
+// nothing, so a hand-edited URL widens the list instead of emptying it.
+func jobFilter(f web.JobFilter) store.JobFilter {
+	out := store.JobFilter{
+		Repository: f.Repository,
+		Workflow:   f.Workflow,
+		Set:        f.Set,
+		RunID:      f.RunID,
+		Search:     f.Search,
+		Limit:      f.Limit,
+	}
+	switch f.Outcome {
+	case web.JobOK:
+		out.Outcome = store.OutcomeOK
+	case web.JobFailed:
+		out.Outcome = store.OutcomeFailed
+	case web.JobRunning:
+		out.Outcome = store.OutcomeRunning
+	case web.JobAnyOutcome:
+	}
+	return out
+}
+
+// job maps one stored job onto the view's.
+func job(j store.JobRecord) web.Job {
+	return web.Job{
+		ID:         j.ID,
+		Runner:     j.Runner,
+		Set:        j.Set,
+		Repository: j.Repository,
+		Workflow:   j.Workflow,
+		Name:       j.Job,
+		RunID:      j.RunID,
+		StartedAt:  j.StartedAt,
+		FinishedAt: j.FinishedAt,
+		Succeeded:  j.Succeeded,
+		CPUSeconds: j.CPUSeconds,
+		// The store integrates byte-seconds; the views show GiB-seconds,
+		// because byte-seconds for a real job is a fourteen-digit number.
+		MemGiBSecs: j.MemByteSeconds / gib,
+		CPURequest: j.CPURequest,
+		CPULimit:   j.CPULimit,
+		MemRequest: j.MemRequest,
+		MemLimit:   j.MemLimit,
+	}
+}
+
+// Jobs returns the jobs overlapping the window, newest first.
+func (a Adapter) Jobs(ctx context.Context, f web.JobFilter, w web.Window) (web.JobList, error) {
+	rows, total, err := a.Q.Jobs(ctx, jobFilter(f), rng(w))
+	if err != nil {
+		return web.JobList{}, err
+	}
+	out := web.JobList{Jobs: make([]web.Job, 0, len(rows)), Total: total}
+	for _, r := range rows {
+		out.Jobs = append(out.Jobs, job(r))
+	}
+	return out, nil
+}
+
+// Workflows returns the workflow runs overlapping the window, newest first.
+func (a Adapter) Workflows(ctx context.Context, f web.JobFilter, w web.Window) (web.WorkflowList, error) {
+	rows, total, err := a.Q.WorkflowRuns(ctx, jobFilter(f), rng(w))
+	if err != nil {
+		return web.WorkflowList{}, err
+	}
+	out := web.WorkflowList{Runs: make([]web.WorkflowRun, 0, len(rows)), Total: total}
+	for _, r := range rows {
+		out.Runs = append(out.Runs, web.WorkflowRun{
+			Repository: r.Repository,
+			Workflow:   r.Workflow,
+			RunID:      r.RunID,
+			Jobs:       r.Jobs,
+			Running:    r.Running,
+			Failed:     r.Failed,
+			StartedAt:  r.StartedAt,
+			FinishedAt: r.FinishedAt,
+			CPUSeconds: r.CPUSeconds,
+			MemGiBSecs: r.MemByteSeconds / gib,
+		})
+	}
+	return out, nil
+}
+
+// Job returns one job by id.
+func (a Adapter) Job(ctx context.Context, id int) (web.Job, bool, error) {
+	r, ok, err := a.Q.Job(ctx, id)
+	if err != nil || !ok {
+		return web.Job{}, false, err
+	}
+	return job(r), true, nil
+}
+
+// JobSeries returns one job's resource usage over the window.
+func (a Adapter) JobSeries(ctx context.Context, id int, w web.Window) (web.JobSeries, error) {
+	points, err := a.Q.JobSeries(ctx, id, rng(w))
+	if err != nil {
+		return web.JobSeries{}, err
+	}
+	out := web.JobSeries{
+		At:  make([]time.Time, 0, len(points)),
+		CPU: make([]float64, 0, len(points)),
+		Mem: make([]float64, 0, len(points)),
+	}
+	for _, p := range points {
+		out.At = append(out.At, p.At)
+		out.CPU = append(out.CPU, p.CPU)
+		out.Mem = append(out.Mem, p.Mem)
+	}
+	return out, nil
+}
+
+// Facets returns the distinct values the window contains.
+func (a Adapter) Facets(ctx context.Context, w web.Window) (web.JobFacets, error) {
+	f, err := a.Q.JobFacets(ctx, rng(w))
+	if err != nil {
+		return web.JobFacets{}, err
+	}
+	return web.JobFacets{
+		Repositories: f.Repositories,
+		Workflows:    f.Workflows,
+		Sets:         f.Sets,
+	}, nil
+}
 
 func rng(w web.Window) store.Range {
 	return store.Range{From: w.From, To: w.To, Points: w.Points}

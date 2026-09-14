@@ -1,0 +1,257 @@
+package web
+
+import (
+	"fmt"
+
+	"arc-ui/internal/fleet"
+)
+
+// JobsPage is the Jobs tab: every job the dashboard watched in the window.
+templ JobsPage(v JobsView) {
+	@HistoryFilterBar(v.Selects, v.Search, v.Summary, v.Stream)
+	<div class="mt-3">
+		@JobsTable(v)
+	</div>
+}
+
+// WorkflowsPage is the Workflows tab: one row per workflow run.
+templ WorkflowsPage(v WorkflowsView) {
+	@HistoryFilterBar(v.Selects, v.Search, v.Summary, v.Stream)
+	<div class="mt-3">
+		@WorkflowsTable(v)
+	</div>
+}
+
+// HistoryFilterBar is the row of controls above the two history tables.
+//
+// It is a separate component from the fleet's FilterBar rather than a
+// parameterisation of it: this one carries a search box and no state
+// dimension, and the two have drifted enough that sharing would mean a
+// component with two disjoint halves.
+templ HistoryFilterBar(selects []fleet.Select, search, summary, streamURL string) {
+	<div id="filterbar" class="flex flex-wrap items-center gap-2 py-3">
+		@SearchBox(search, streamURL)
+		for _, s := range selects {
+			@FilterSelect(s, streamURL)
+		}
+		<button
+			type="button"
+			class="h-[28px] px-2.5 rounded-md border border-default text-[11px] text-fg-muted hover:text-fg hover:bg-inset cursor-pointer"
+			data-on:click={ ClearFilters(streamURL) }
+		>clear</button>
+		<div class="flex-1"></div>
+		<span class="text-[11px] text-fg-subtle font-mono">{ summary }</span>
+	</div>
+}
+
+// SearchBox filters the table by workflow, job or repository name.
+//
+// The debounce is what makes this a server-side filter rather than a
+// keystroke-per-request storm: each input event that survives it reopens the
+// stream, and Datastar keys in-flight requests by method and URL, so a fast
+// typist replaces their own pending request instead of queueing behind it.
+//
+// It is substring matching, not subsequence — "dpl" does not find "deploy" —
+// and the placeholder says "search" rather than "fuzzy find" for that reason.
+templ SearchBox(search, streamURL string) {
+	<label class="flex items-center gap-1.5">
+		<span class="text-[10.5px] uppercase tracking-[0.4px] text-fg-subtle">search</span>
+		<input
+			type="search"
+			placeholder="workflow, job or repo"
+			value={ search }
+			class={ "h-[28px] w-[220px] rounded-md border border-default bg-inset px-2 text-[11.5px] font-mono",
+				templ.KV("text-accent border-accent/40", search != ""),
+				templ.KV("text-fg-body", search == "") }
+			data-bind="q"
+			data-on:input__debounce.300ms={ StreamCall(streamURL) }
+		/>
+	</label>
+}
+
+// JobsTable lists jobs newest first.
+templ JobsTable(v JobsView) {
+	@Card("jobs", "jobs", v.Range.Label()) {
+		if !v.Enabled {
+			@Empty("history store disabled — no jobs are being recorded")
+		} else if len(v.Rows) == 0 {
+			@Empty("no jobs recorded in this window match the current filter")
+		} else {
+			<div class="overflow-x-auto -mx-3.5 -my-3.5">
+				<table class="w-full min-w-[900px] text-[12px] border-collapse">
+					<thead>
+						<tr class="border-b border-default">
+							@ColHead("job", "left")
+							@ColHead("repository", "left")
+							@ColHead("runner", "left")
+							@ColHead("outcome", "left")
+							@ColHead("duration", "right")
+							@ColHead("cpu", "right")
+							@ColHead("memory", "right")
+							@ColHead("started", "right")
+						</tr>
+					</thead>
+					<tbody>
+						for _, r := range v.Rows {
+							<tr class="border-b border-muted last:border-0 hover:bg-inset/60">
+								<td class="px-3.5 py-2.5 max-w-[320px]">
+									<a href={ templ.SafeURL(r.Href) } class="block text-fg hover:underline truncate" title={ r.Job.Name }>
+										{ Dash(r.Job.Name) }
+									</a>
+									<div class="text-[10.5px] text-fg-subtle font-mono truncate">
+										{ Dash(r.Job.Workflow) } · { RunLabel(r.Job.RunID) }
+									</div>
+								</td>
+								<td class="px-3.5 py-2.5 font-mono text-fg-body truncate max-w-[200px]" title={ r.Job.Repository }>
+									{ Dash(r.Job.Repository) }
+								</td>
+								<td class="px-3.5 py-2.5 max-w-[200px]">
+									<a href={ templ.SafeURL("/runners/" + r.Job.Runner) } class="font-mono text-fg-body hover:underline truncate block" title={ r.Job.Runner }>
+										{ Dash(r.Job.Runner) }
+									</a>
+									<div class="text-[10.5px] text-fg-subtle font-mono truncate">{ Dash(r.Job.Set) }</div>
+								</td>
+								<td class="px-3.5 py-2.5">
+									@Pill(r.Tone, r.Badge)
+								</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono">{ r.Duration }</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono">{ r.CPU }</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono">{ r.Mem }</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono text-fg-subtle">{ r.Started }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	}
+}
+
+// WorkflowsTable lists workflow runs newest first.
+templ WorkflowsTable(v WorkflowsView) {
+	@Card("workflows", "workflow runs", v.Range.Label()) {
+		if !v.Enabled {
+			@Empty("history store disabled — no workflow runs are being recorded")
+		} else if len(v.Rows) == 0 {
+			@Empty("no workflow runs recorded in this window match the current filter")
+		} else {
+			<div class="overflow-x-auto -mx-3.5 -my-3.5">
+				<table class="w-full min-w-[900px] text-[12px] border-collapse">
+					<thead>
+						<tr class="border-b border-default">
+							@ColHead("workflow", "left")
+							@ColHead("repository", "left")
+							@ColHead("outcome", "left")
+							@ColHead("jobs", "right")
+							@ColHead("duration", "right")
+							@ColHead("cpu", "right")
+							@ColHead("memory", "right")
+							@ColHead("started", "right")
+						</tr>
+					</thead>
+					<tbody>
+						for _, r := range v.Rows {
+							<tr class="border-b border-muted last:border-0 hover:bg-inset/60">
+								<td class="px-3.5 py-2.5 max-w-[320px]">
+									<a href={ templ.SafeURL(r.Href) } class="block font-mono text-fg hover:underline truncate" title={ r.Run.Workflow }>
+										{ Dash(r.Run.Workflow) }
+									</a>
+									<div class="text-[10.5px] text-fg-subtle font-mono">{ RunLabel(r.Run.RunID) }</div>
+								</td>
+								<td class="px-3.5 py-2.5 font-mono text-fg-body truncate max-w-[220px]" title={ r.Run.Repository }>
+									{ Dash(r.Run.Repository) }
+								</td>
+								<td class="px-3.5 py-2.5">
+									@Pill(r.Tone, r.Badge)
+								</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono">{ fmt.Sprint(r.Run.Jobs) }</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono">{ r.Duration }</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono">{ r.CPU }</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono">{ r.Mem }</td>
+								<td class="px-3.5 py-2.5 text-right tabular-nums font-mono text-fg-subtle">{ r.Started }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	}
+}
+
+// ColHead is one column header in a history table.
+templ ColHead(label, align string) {
+	<th
+		class={ "font-normal px-3.5 py-2 text-[10.5px] uppercase tracking-[0.4px] text-fg-subtle",
+			templ.KV("text-left", align == "left"),
+			templ.KV("text-right", align == "right") }
+	>{ label }</th>
+}
+
+// JobPage is the per-job detail view.
+templ JobPage(v JobView) {
+	<div class="py-3 flex flex-wrap items-baseline gap-3">
+		<h1 class="text-[15px] font-semibold text-fg">{ Dash(v.Job.Name) }</h1>
+		@Pill(JobTone(v.Job), JobBadge(v.Job))
+		<span class="text-[11px] text-fg-subtle font-mono">{ Dash(v.Job.Workflow) } · { RunLabel(v.Job.RunID) }</span>
+		<div class="flex-1"></div>
+		<a
+			href={ templ.SafeURL("/jobs?repo=" + v.Job.Repository) }
+			class="h-[28px] inline-flex items-center px-2.5 rounded-md border border-default text-[11px] text-fg-muted hover:text-fg hover:bg-inset"
+		>other jobs in this repository</a>
+	</div>
+	@JobTiles(v)
+	<div class="mt-3 grid gap-3 grid-cols-1 xl:grid-cols-3">
+		<div class="xl:col-span-2">
+			@JobResources(v)
+		</div>
+		@JobFacts(v)
+	</div>
+}
+
+// JobTiles is the KPI strip on the job detail page.
+templ JobTiles(v JobView) {
+	<section id="tiles" class="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
+		for _, t := range v.Tiles {
+			@TileCard(t)
+		}
+	</section>
+}
+
+// JobResources is the job's own CPU and memory usage over its lifetime.
+//
+// The empty state is the whole reason per-job sampling exists, so it explains
+// itself rather than showing a blank chart: a job that ran before sampling was
+// switched on, or whose samples have aged out, is a different thing from one
+// that used no CPU.
+templ JobResources(v JobView) {
+	@Card("resources", "resource usage", jobChartSubtitle(v)) {
+		if v.Buckets == 0 {
+			@Empty("no resource samples recorded for this job")
+		} else {
+			@ResourcePair(v.CPU, v.Mem)
+		}
+	}
+}
+
+// jobChartSubtitle says what the chart is drawn from, since a job's window is
+// its own life rather than the range picker's.
+func jobChartSubtitle(v JobView) string {
+	if v.Buckets == 0 {
+		return ""
+	}
+	if v.Buckets == 1 {
+		return "1 sample"
+	}
+	return fmt.Sprintf("%d samples", v.Buckets)
+}
+
+// JobFacts is the job's label/value panel.
+templ JobFacts(v JobView) {
+	@Card("facts", "job", "") {
+		<div>
+			for _, kv := range v.Facts {
+				@KVRow(kv)
+			}
+		</div>
+	}
+}

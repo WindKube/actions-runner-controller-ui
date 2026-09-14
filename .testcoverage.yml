@@ -7,7 +7,7 @@ profile: coverage.out
 # regression trips them, and they are meant to be raised as real code lands.
 #
 # These apply to everything that does not have an `override:` entry below.
-# Total is 66.1% today, comfortably clear of the 50 floor.
+# Total is 72.8% today, comfortably clear of the 50 floor.
 threshold:
   file: 50
   package: 50
@@ -58,13 +58,14 @@ override:
   - path: ^internal/telemetry
     threshold: 0
 
-  # internal/history has tests now, so it is a ratchet rather than an exemption:
-  # set just under today's 29.3%. It stays listed because most of the package is
-  # the mapping between the store's rows and the view's types, and the half that
-  # is covered is the half with decisions in it — the stats cache and the
-  # failure window. The rest goes up when the series mapping gets tests.
+  # internal/history is a ratchet rather than an exemption: set just under
+  # today's 45.0%, up from 29.3% when the job and workflow-run mappings got
+  # tests. It stays listed because most of what is left is the series mapping,
+  # which is mechanical column-shuffling; the covered half is the half with
+  # decisions in it — the stats cache, the failure window, and the outcome
+  # vocabulary that has to fall back to "any" rather than matching nothing.
   - path: ^internal/history
-    threshold: 25
+    threshold: 40
 
   # --- single files inside packages that otherwise clear the floor ----------
   # clients.go builds real clientsets from a kubeconfig, so nothing short of a

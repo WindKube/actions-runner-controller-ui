@@ -118,6 +118,15 @@ env:
   ARC_UI_RETENTION_SCOPE_5M: "720h"
   ARC_UI_RETENTION_SCOPE_1H: "9600h"
 
+  # Per-job CPU and memory, behind the Jobs tab's usage chart. This is the one
+  # table whose size follows how BUSY the fleet is rather than how big it is:
+  # roughly (busy runners x job minutes) / the resolution below, at ~70 bytes a
+  # row. A fleet holding 100 runners busy around the clock writes ~4M rows, or
+  # ~300MB, over the 30 days below. Halve the retention or double the
+  # resolution if that is more than the volume has.
+  ARC_UI_RETENTION_JOB_SAMPLES: "720h"
+  ARC_UI_JOB_SAMPLE_RESOLUTION: "1m"
+
   # Breadcrumb label. Empty derives it from the AutoscalingRunnerSet's
   # githubConfigUrl, which is right in almost every case.
   # ARC_UI_GITHUB_ORG: ""

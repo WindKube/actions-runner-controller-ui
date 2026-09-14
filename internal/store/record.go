@@ -11,6 +11,7 @@ import (
 	"arc-ui/internal/store/ent"
 	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
+	"arc-ui/internal/store/ent/jobsample"
 	"arc-ui/internal/store/ent/phasetransition"
 	"arc-ui/internal/store/ent/runnerfailure"
 	"arc-ui/internal/store/ent/sample"
@@ -82,6 +83,7 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 
 	var (
 		jobs     []*ent.JobObservationCreate
+		usage    []jobUsage
 		phases   []*ent.PhaseTransitionCreate
 		churn    []*ent.ChurnEventCreate
 		failures []*ent.RunnerFailureCreate
@@ -215,7 +217,24 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 				SetRunID(r.Job.RunID).
 				SetStartedAt(started.Unix()).
 				SetCPUSeconds(cpuDelta).
-				SetMemByteSeconds(memDelta))
+				SetMemByteSeconds(memDelta).
+				SetCPURequest(r.CPU.Request).
+				SetCPULimit(r.CPU.Limit).
+				SetMemRequest(r.Mem.Request).
+				SetMemLimit(r.Mem.Limit))
+
+			// This scrape's reading, for the job's own usage chart. Unlike the
+			// cost columns above it is an instantaneous value, not an
+			// increment, so it is staged only when metrics-server actually
+			// answered for this runner: a zero here would be drawn as a job
+			// that used no CPU rather than as a gap.
+			if r.CPU.HasUsage() || r.Mem.HasUsage() {
+				usage = append(usage, jobUsage{
+					key: jobKey{runner: r.Name, runID: r.Job.RunID, job: r.Job.Name},
+					cpu: r.CPU.Used,
+					mem: r.Mem.Used,
+				})
+			}
 		}
 
 		cur[r.Name] = next
@@ -261,6 +280,8 @@ func (s *Store) RecordSnapshot(ctx context.Context, snap fleet.Snapshot) error {
 	w := snapshotWrite{
 		samples:    samples,
 		jobs:       jobs,
+		usage:      usage,
+		bucket:     s.jobBucket(),
 		phases:     phases,
 		churn:      churn,
 		failures:   failures,
@@ -298,12 +319,29 @@ type jobClose struct {
 	ok     bool
 }
 
+// jobKey is the natural identity of a job observation, and the join key
+// between a staged usage reading and the row id it has to be written under.
+type jobKey struct {
+	runner string
+	runID  int64
+	job    string
+}
+
+// jobUsage is one scrape's resource reading for one running job.
+type jobUsage struct {
+	key jobKey
+	cpu float64
+	mem float64
+}
+
 // snapshotWrite is everything one snapshot changes, staged so it can be
 // applied in a single transaction. A crash mid-tick then leaves no
 // half-recorded frame — half a frame would show up as phantom churn.
 type snapshotWrite struct {
 	samples    []*ent.SampleCreate
 	jobs       []*ent.JobObservationCreate
+	usage      []jobUsage
+	bucket     int64
 	phases     []*ent.PhaseTransitionCreate
 	churn      []*ent.ChurnEventCreate
 	failures   []*ent.RunnerFailureCreate
@@ -348,11 +386,22 @@ func (w snapshotWrite) exec(ctx context.Context, tx *ent.Tx) error {
 				u.UpdateWorkflow()
 				addExcluded(u, jobobservation.FieldCPUSeconds)
 				addExcluded(u, jobobservation.FieldMemByteSeconds)
+				keepObserved(u, jobobservation.FieldCPURequest)
+				keepObserved(u, jobobservation.FieldCPULimit)
+				keepObserved(u, jobobservation.FieldMemRequest)
+				keepObserved(u, jobobservation.FieldMemLimit)
 			}).
 			Exec(ctx)
 		if err != nil {
 			return fmt.Errorf("write job observations: %w", err)
 		}
+	}
+
+	// After the job upsert, because it resolves the ids that upsert just
+	// created, and before the completion passes below, which are what make a
+	// finished job stop matching the open-job lookup it uses.
+	if err := w.writeJobSamples(ctx, tx); err != nil {
+		return err
 	}
 
 	if len(w.phases) > 0 {
@@ -454,6 +503,116 @@ func (w snapshotWrite) exec(ctx context.Context, tx *ent.Tx) error {
 	return nil
 }
 
+// writeJobSamples records this scrape's resource readings against the jobs
+// they belong to.
+//
+// The readings are staged under a job's natural identity because that is all a
+// snapshot knows, but they are stored under its row id, which is eight bytes
+// where the triple is closer to sixty — on the largest table this package
+// writes. Resolving one into the other is the lookup here, and it is why this
+// runs inside the snapshot's transaction rather than beside it: the ids it
+// reads were created by the upsert immediately above.
+//
+// The lookup is bounded by the runners currently holding a job, not by the
+// table, and it asks for open jobs only. A persistent runner that has moved on
+// without its old row being closed yet will match twice; the exact triple
+// decides which row wins, and anything unmatched is dropped rather than
+// guessed at.
+func (w snapshotWrite) writeJobSamples(ctx context.Context, tx *ent.Tx) error {
+	if len(w.usage) == 0 {
+		return nil
+	}
+
+	runners := make([]string, 0, len(w.usage))
+	for _, u := range w.usage {
+		runners = append(runners, u.key.runner)
+	}
+
+	rows, err := tx.JobObservation.Query().
+		Where(
+			jobobservation.RunnerNameIn(runners...),
+			jobobservation.FinishedAtEQ(0),
+		).
+		Select(
+			jobobservation.FieldID,
+			jobobservation.FieldRunnerName,
+			jobobservation.FieldRunID,
+			jobobservation.FieldJobName,
+		).
+		All(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve job ids for usage samples: %w", err)
+	}
+
+	ids := make(map[jobKey]int, len(rows))
+	for _, r := range rows {
+		ids[jobKey{runner: r.RunnerName, runID: r.RunID, job: r.JobName}] = r.ID
+	}
+
+	bucket := w.bucket
+	if bucket <= 0 {
+		bucket = defaultJobSampleBucket
+	}
+	ts := floorTo(w.ts, bucket)
+
+	samples := make([]*ent.JobSampleCreate, 0, len(w.usage))
+	for _, u := range w.usage {
+		id, ok := ids[u.key]
+		if !ok {
+			continue
+		}
+		samples = append(samples, tx.JobSample.Create().
+			SetJobID(id).
+			SetTs(ts).
+			SetCPUCores(u.cpu).
+			SetMemBytes(u.mem).
+			SetSamples(1))
+	}
+	if len(samples) == 0 {
+		return nil
+	}
+
+	// Every scrape inside one bucket folds into the mean already stored, so a
+	// bucket costs one row however often the fleet is polled. Keeping a running
+	// mean — mean + (x - mean)/(n+1) — rather than a sum to divide on read
+	// costs the same two columns and leaves the stored value already in the
+	// unit the chart draws, so nothing downstream has to know how many scrapes
+	// went into a row.
+	//
+	// Every right-hand side below reads the row as it was before this
+	// statement, which is what lets `samples` be incremented in the same SET
+	// that divides by it.
+	err = tx.JobSample.CreateBulk(samples...).
+		OnConflict(entsql.ConflictColumns(jobsample.FieldJobID, jobsample.FieldTs)).
+		Update(func(u *ent.JobSampleUpsert) {
+			foldMean(u, jobsample.FieldCPUCores)
+			foldMean(u, jobsample.FieldMemBytes)
+			u.AddSamples(1)
+		}).
+		Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("write job samples: %w", err)
+	}
+	return nil
+}
+
+// foldMean rewrites a conflicting insert as one more reading folded into the
+// stored average, where ent's generated Update<Field> would replace it.
+//
+// `excluded` is the row that lost the conflict — this scrape's single reading
+// — and the bare column is the mean already there. The divisor has to be the
+// stored count plus one rather than a literal, because a bulk upsert shares
+// one conflict clause across every job in the snapshot and each of them is a
+// different number of scrapes into its own bucket.
+func foldMean(u *ent.JobSampleUpsert, column string) {
+	u.Set(column, entsql.ExprFunc(func(b *entsql.Builder) {
+		b.Ident(column).WriteString(" + (excluded.").
+			Ident(column).WriteString(" - ").
+			Ident(column).WriteString(") / (").
+			Ident(jobsample.FieldSamples).WriteString(" + 1)")
+	}))
+}
+
 // addExcluded resolves a conflicting insert by ADDING the incoming value to
 // the stored one, where ent's generated Update<Field> would replace it.
 //
@@ -466,6 +625,21 @@ func (w snapshotWrite) exec(ctx context.Context, tx *ent.Tx) error {
 func addExcluded(u *ent.JobObservationUpsert, column string) {
 	u.Set(column, entsql.ExprFunc(func(b *entsql.Builder) {
 		b.Ident(column).WriteString(" + excluded.").Ident(column)
+	}))
+}
+
+// keepObserved resolves a conflicting insert by taking the incoming value only
+// when there is one, where the generated UpdateX would overwrite regardless.
+//
+// A pod's reservations cannot change while it runs, so what varies between
+// scrapes is not the numbers but whether a scrape could read them: neither the
+// pod nor its scale set is guaranteed to be in the informer cache. Overwriting
+// regardless would let one such scrape blank out what an earlier one saw, and
+// the chart would lose its reference lines.
+func keepObserved(u *ent.JobObservationUpsert, column string) {
+	u.Set(column, entsql.ExprFunc(func(b *entsql.Builder) {
+		b.WriteString("CASE WHEN excluded.").Ident(column).WriteString(" > 0 THEN excluded.").
+			Ident(column).WriteString(" ELSE ").Ident(column).WriteString(" END")
 	}))
 }
 

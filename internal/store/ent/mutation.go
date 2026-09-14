@@ -5,6 +5,7 @@ package ent
 import (
 	"arc-ui/internal/store/ent/churnevent"
 	"arc-ui/internal/store/ent/jobobservation"
+	"arc-ui/internal/store/ent/jobsample"
 	"arc-ui/internal/store/ent/phasetransition"
 	"arc-ui/internal/store/ent/predicate"
 	"arc-ui/internal/store/ent/runnerfailure"
@@ -29,6 +30,7 @@ const (
 	// Node types.
 	TypeChurnEvent      = "ChurnEvent"
 	TypeJobObservation  = "JobObservation"
+	TypeJobSample       = "JobSample"
 	TypePhaseTransition = "PhaseTransition"
 	TypeRunnerFailure   = "RunnerFailure"
 	TypeSample          = "Sample"
@@ -580,6 +582,14 @@ type JobObservationMutation struct {
 	addcpu_seconds      *float64
 	mem_byte_seconds    *float64
 	addmem_byte_seconds *float64
+	cpu_request         *float64
+	addcpu_request      *float64
+	cpu_limit           *float64
+	addcpu_limit        *float64
+	mem_request         *float64
+	addmem_request      *float64
+	mem_limit           *float64
+	addmem_limit        *float64
 	clearedFields       map[string]struct{}
 	done                bool
 	oldValue            func(context.Context) (*JobObservation, error)
@@ -1180,6 +1190,230 @@ func (m *JobObservationMutation) ResetMemByteSeconds() {
 	m.addmem_byte_seconds = nil
 }
 
+// SetCPURequest sets the "cpu_request" field.
+func (m *JobObservationMutation) SetCPURequest(f float64) {
+	m.cpu_request = &f
+	m.addcpu_request = nil
+}
+
+// CPURequest returns the value of the "cpu_request" field in the mutation.
+func (m *JobObservationMutation) CPURequest() (r float64, exists bool) {
+	v := m.cpu_request
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCPURequest returns the old "cpu_request" field's value of the JobObservation entity.
+// If the JobObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobObservationMutation) OldCPURequest(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCPURequest is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCPURequest requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCPURequest: %w", err)
+	}
+	return oldValue.CPURequest, nil
+}
+
+// AddCPURequest adds f to the "cpu_request" field.
+func (m *JobObservationMutation) AddCPURequest(f float64) {
+	if m.addcpu_request != nil {
+		*m.addcpu_request += f
+	} else {
+		m.addcpu_request = &f
+	}
+}
+
+// AddedCPURequest returns the value that was added to the "cpu_request" field in this mutation.
+func (m *JobObservationMutation) AddedCPURequest() (r float64, exists bool) {
+	v := m.addcpu_request
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCPURequest resets all changes to the "cpu_request" field.
+func (m *JobObservationMutation) ResetCPURequest() {
+	m.cpu_request = nil
+	m.addcpu_request = nil
+}
+
+// SetCPULimit sets the "cpu_limit" field.
+func (m *JobObservationMutation) SetCPULimit(f float64) {
+	m.cpu_limit = &f
+	m.addcpu_limit = nil
+}
+
+// CPULimit returns the value of the "cpu_limit" field in the mutation.
+func (m *JobObservationMutation) CPULimit() (r float64, exists bool) {
+	v := m.cpu_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCPULimit returns the old "cpu_limit" field's value of the JobObservation entity.
+// If the JobObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobObservationMutation) OldCPULimit(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCPULimit is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCPULimit requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCPULimit: %w", err)
+	}
+	return oldValue.CPULimit, nil
+}
+
+// AddCPULimit adds f to the "cpu_limit" field.
+func (m *JobObservationMutation) AddCPULimit(f float64) {
+	if m.addcpu_limit != nil {
+		*m.addcpu_limit += f
+	} else {
+		m.addcpu_limit = &f
+	}
+}
+
+// AddedCPULimit returns the value that was added to the "cpu_limit" field in this mutation.
+func (m *JobObservationMutation) AddedCPULimit() (r float64, exists bool) {
+	v := m.addcpu_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCPULimit resets all changes to the "cpu_limit" field.
+func (m *JobObservationMutation) ResetCPULimit() {
+	m.cpu_limit = nil
+	m.addcpu_limit = nil
+}
+
+// SetMemRequest sets the "mem_request" field.
+func (m *JobObservationMutation) SetMemRequest(f float64) {
+	m.mem_request = &f
+	m.addmem_request = nil
+}
+
+// MemRequest returns the value of the "mem_request" field in the mutation.
+func (m *JobObservationMutation) MemRequest() (r float64, exists bool) {
+	v := m.mem_request
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMemRequest returns the old "mem_request" field's value of the JobObservation entity.
+// If the JobObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobObservationMutation) OldMemRequest(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMemRequest is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMemRequest requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMemRequest: %w", err)
+	}
+	return oldValue.MemRequest, nil
+}
+
+// AddMemRequest adds f to the "mem_request" field.
+func (m *JobObservationMutation) AddMemRequest(f float64) {
+	if m.addmem_request != nil {
+		*m.addmem_request += f
+	} else {
+		m.addmem_request = &f
+	}
+}
+
+// AddedMemRequest returns the value that was added to the "mem_request" field in this mutation.
+func (m *JobObservationMutation) AddedMemRequest() (r float64, exists bool) {
+	v := m.addmem_request
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMemRequest resets all changes to the "mem_request" field.
+func (m *JobObservationMutation) ResetMemRequest() {
+	m.mem_request = nil
+	m.addmem_request = nil
+}
+
+// SetMemLimit sets the "mem_limit" field.
+func (m *JobObservationMutation) SetMemLimit(f float64) {
+	m.mem_limit = &f
+	m.addmem_limit = nil
+}
+
+// MemLimit returns the value of the "mem_limit" field in the mutation.
+func (m *JobObservationMutation) MemLimit() (r float64, exists bool) {
+	v := m.mem_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMemLimit returns the old "mem_limit" field's value of the JobObservation entity.
+// If the JobObservation object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobObservationMutation) OldMemLimit(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMemLimit is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMemLimit requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMemLimit: %w", err)
+	}
+	return oldValue.MemLimit, nil
+}
+
+// AddMemLimit adds f to the "mem_limit" field.
+func (m *JobObservationMutation) AddMemLimit(f float64) {
+	if m.addmem_limit != nil {
+		*m.addmem_limit += f
+	} else {
+		m.addmem_limit = &f
+	}
+}
+
+// AddedMemLimit returns the value that was added to the "mem_limit" field in this mutation.
+func (m *JobObservationMutation) AddedMemLimit() (r float64, exists bool) {
+	v := m.addmem_limit
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMemLimit resets all changes to the "mem_limit" field.
+func (m *JobObservationMutation) ResetMemLimit() {
+	m.mem_limit = nil
+	m.addmem_limit = nil
+}
+
 // Where appends a list predicates to the JobObservationMutation builder.
 func (m *JobObservationMutation) Where(ps ...predicate.JobObservation) {
 	m.predicates = append(m.predicates, ps...)
@@ -1214,7 +1448,7 @@ func (m *JobObservationMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *JobObservationMutation) Fields() []string {
-	fields := make([]string, 0, 11)
+	fields := make([]string, 0, 15)
 	if m.runner_name != nil {
 		fields = append(fields, jobobservation.FieldRunnerName)
 	}
@@ -1248,6 +1482,18 @@ func (m *JobObservationMutation) Fields() []string {
 	if m.mem_byte_seconds != nil {
 		fields = append(fields, jobobservation.FieldMemByteSeconds)
 	}
+	if m.cpu_request != nil {
+		fields = append(fields, jobobservation.FieldCPURequest)
+	}
+	if m.cpu_limit != nil {
+		fields = append(fields, jobobservation.FieldCPULimit)
+	}
+	if m.mem_request != nil {
+		fields = append(fields, jobobservation.FieldMemRequest)
+	}
+	if m.mem_limit != nil {
+		fields = append(fields, jobobservation.FieldMemLimit)
+	}
 	return fields
 }
 
@@ -1278,6 +1524,14 @@ func (m *JobObservationMutation) Field(name string) (ent.Value, bool) {
 		return m.CPUSeconds()
 	case jobobservation.FieldMemByteSeconds:
 		return m.MemByteSeconds()
+	case jobobservation.FieldCPURequest:
+		return m.CPURequest()
+	case jobobservation.FieldCPULimit:
+		return m.CPULimit()
+	case jobobservation.FieldMemRequest:
+		return m.MemRequest()
+	case jobobservation.FieldMemLimit:
+		return m.MemLimit()
 	}
 	return nil, false
 }
@@ -1309,6 +1563,14 @@ func (m *JobObservationMutation) OldField(ctx context.Context, name string) (ent
 		return m.OldCPUSeconds(ctx)
 	case jobobservation.FieldMemByteSeconds:
 		return m.OldMemByteSeconds(ctx)
+	case jobobservation.FieldCPURequest:
+		return m.OldCPURequest(ctx)
+	case jobobservation.FieldCPULimit:
+		return m.OldCPULimit(ctx)
+	case jobobservation.FieldMemRequest:
+		return m.OldMemRequest(ctx)
+	case jobobservation.FieldMemLimit:
+		return m.OldMemLimit(ctx)
 	}
 	return nil, fmt.Errorf("unknown JobObservation field %s", name)
 }
@@ -1395,6 +1657,34 @@ func (m *JobObservationMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetMemByteSeconds(v)
 		return nil
+	case jobobservation.FieldCPURequest:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCPURequest(v)
+		return nil
+	case jobobservation.FieldCPULimit:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCPULimit(v)
+		return nil
+	case jobobservation.FieldMemRequest:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMemRequest(v)
+		return nil
+	case jobobservation.FieldMemLimit:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMemLimit(v)
+		return nil
 	}
 	return fmt.Errorf("unknown JobObservation field %s", name)
 }
@@ -1418,6 +1708,18 @@ func (m *JobObservationMutation) AddedFields() []string {
 	if m.addmem_byte_seconds != nil {
 		fields = append(fields, jobobservation.FieldMemByteSeconds)
 	}
+	if m.addcpu_request != nil {
+		fields = append(fields, jobobservation.FieldCPURequest)
+	}
+	if m.addcpu_limit != nil {
+		fields = append(fields, jobobservation.FieldCPULimit)
+	}
+	if m.addmem_request != nil {
+		fields = append(fields, jobobservation.FieldMemRequest)
+	}
+	if m.addmem_limit != nil {
+		fields = append(fields, jobobservation.FieldMemLimit)
+	}
 	return fields
 }
 
@@ -1436,6 +1738,14 @@ func (m *JobObservationMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedCPUSeconds()
 	case jobobservation.FieldMemByteSeconds:
 		return m.AddedMemByteSeconds()
+	case jobobservation.FieldCPURequest:
+		return m.AddedCPURequest()
+	case jobobservation.FieldCPULimit:
+		return m.AddedCPULimit()
+	case jobobservation.FieldMemRequest:
+		return m.AddedMemRequest()
+	case jobobservation.FieldMemLimit:
+		return m.AddedMemLimit()
 	}
 	return nil, false
 }
@@ -1479,6 +1789,34 @@ func (m *JobObservationMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddMemByteSeconds(v)
+		return nil
+	case jobobservation.FieldCPURequest:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCPURequest(v)
+		return nil
+	case jobobservation.FieldCPULimit:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCPULimit(v)
+		return nil
+	case jobobservation.FieldMemRequest:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMemRequest(v)
+		return nil
+	case jobobservation.FieldMemLimit:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMemLimit(v)
 		return nil
 	}
 	return fmt.Errorf("unknown JobObservation numeric field %s", name)
@@ -1540,6 +1878,18 @@ func (m *JobObservationMutation) ResetField(name string) error {
 	case jobobservation.FieldMemByteSeconds:
 		m.ResetMemByteSeconds()
 		return nil
+	case jobobservation.FieldCPURequest:
+		m.ResetCPURequest()
+		return nil
+	case jobobservation.FieldCPULimit:
+		m.ResetCPULimit()
+		return nil
+	case jobobservation.FieldMemRequest:
+		m.ResetMemRequest()
+		return nil
+	case jobobservation.FieldMemLimit:
+		m.ResetMemLimit()
+		return nil
 	}
 	return fmt.Errorf("unknown JobObservation field %s", name)
 }
@@ -1590,6 +1940,716 @@ func (m *JobObservationMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *JobObservationMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown JobObservation edge %s", name)
+}
+
+// JobSampleMutation represents an operation that mutates the JobSample nodes in the graph.
+type JobSampleMutation struct {
+	config
+	op            Op
+	typ           string
+	id            *int
+	job_id        *int
+	addjob_id     *int
+	ts            *int64
+	addts         *int64
+	cpu_cores     *float64
+	addcpu_cores  *float64
+	mem_bytes     *float64
+	addmem_bytes  *float64
+	samples       *int
+	addsamples    *int
+	clearedFields map[string]struct{}
+	done          bool
+	oldValue      func(context.Context) (*JobSample, error)
+	predicates    []predicate.JobSample
+}
+
+var _ ent.Mutation = (*JobSampleMutation)(nil)
+
+// jobsampleOption allows management of the mutation configuration using functional options.
+type jobsampleOption func(*JobSampleMutation)
+
+// newJobSampleMutation creates new mutation for the JobSample entity.
+func newJobSampleMutation(c config, op Op, opts ...jobsampleOption) *JobSampleMutation {
+	m := &JobSampleMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeJobSample,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withJobSampleID sets the ID field of the mutation.
+func withJobSampleID(id int) jobsampleOption {
+	return func(m *JobSampleMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *JobSample
+		)
+		m.oldValue = func(ctx context.Context) (*JobSample, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().JobSample.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withJobSample sets the old JobSample of the mutation.
+func withJobSample(node *JobSample) jobsampleOption {
+	return func(m *JobSampleMutation) {
+		m.oldValue = func(context.Context) (*JobSample, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m JobSampleMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m JobSampleMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *JobSampleMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *JobSampleMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().JobSample.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetJobID sets the "job_id" field.
+func (m *JobSampleMutation) SetJobID(i int) {
+	m.job_id = &i
+	m.addjob_id = nil
+}
+
+// JobID returns the value of the "job_id" field in the mutation.
+func (m *JobSampleMutation) JobID() (r int, exists bool) {
+	v := m.job_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldJobID returns the old "job_id" field's value of the JobSample entity.
+// If the JobSample object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobSampleMutation) OldJobID(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldJobID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldJobID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldJobID: %w", err)
+	}
+	return oldValue.JobID, nil
+}
+
+// AddJobID adds i to the "job_id" field.
+func (m *JobSampleMutation) AddJobID(i int) {
+	if m.addjob_id != nil {
+		*m.addjob_id += i
+	} else {
+		m.addjob_id = &i
+	}
+}
+
+// AddedJobID returns the value that was added to the "job_id" field in this mutation.
+func (m *JobSampleMutation) AddedJobID() (r int, exists bool) {
+	v := m.addjob_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetJobID resets all changes to the "job_id" field.
+func (m *JobSampleMutation) ResetJobID() {
+	m.job_id = nil
+	m.addjob_id = nil
+}
+
+// SetTs sets the "ts" field.
+func (m *JobSampleMutation) SetTs(i int64) {
+	m.ts = &i
+	m.addts = nil
+}
+
+// Ts returns the value of the "ts" field in the mutation.
+func (m *JobSampleMutation) Ts() (r int64, exists bool) {
+	v := m.ts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTs returns the old "ts" field's value of the JobSample entity.
+// If the JobSample object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobSampleMutation) OldTs(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTs is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTs requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTs: %w", err)
+	}
+	return oldValue.Ts, nil
+}
+
+// AddTs adds i to the "ts" field.
+func (m *JobSampleMutation) AddTs(i int64) {
+	if m.addts != nil {
+		*m.addts += i
+	} else {
+		m.addts = &i
+	}
+}
+
+// AddedTs returns the value that was added to the "ts" field in this mutation.
+func (m *JobSampleMutation) AddedTs() (r int64, exists bool) {
+	v := m.addts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetTs resets all changes to the "ts" field.
+func (m *JobSampleMutation) ResetTs() {
+	m.ts = nil
+	m.addts = nil
+}
+
+// SetCPUCores sets the "cpu_cores" field.
+func (m *JobSampleMutation) SetCPUCores(f float64) {
+	m.cpu_cores = &f
+	m.addcpu_cores = nil
+}
+
+// CPUCores returns the value of the "cpu_cores" field in the mutation.
+func (m *JobSampleMutation) CPUCores() (r float64, exists bool) {
+	v := m.cpu_cores
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCPUCores returns the old "cpu_cores" field's value of the JobSample entity.
+// If the JobSample object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobSampleMutation) OldCPUCores(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCPUCores is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCPUCores requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCPUCores: %w", err)
+	}
+	return oldValue.CPUCores, nil
+}
+
+// AddCPUCores adds f to the "cpu_cores" field.
+func (m *JobSampleMutation) AddCPUCores(f float64) {
+	if m.addcpu_cores != nil {
+		*m.addcpu_cores += f
+	} else {
+		m.addcpu_cores = &f
+	}
+}
+
+// AddedCPUCores returns the value that was added to the "cpu_cores" field in this mutation.
+func (m *JobSampleMutation) AddedCPUCores() (r float64, exists bool) {
+	v := m.addcpu_cores
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCPUCores resets all changes to the "cpu_cores" field.
+func (m *JobSampleMutation) ResetCPUCores() {
+	m.cpu_cores = nil
+	m.addcpu_cores = nil
+}
+
+// SetMemBytes sets the "mem_bytes" field.
+func (m *JobSampleMutation) SetMemBytes(f float64) {
+	m.mem_bytes = &f
+	m.addmem_bytes = nil
+}
+
+// MemBytes returns the value of the "mem_bytes" field in the mutation.
+func (m *JobSampleMutation) MemBytes() (r float64, exists bool) {
+	v := m.mem_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMemBytes returns the old "mem_bytes" field's value of the JobSample entity.
+// If the JobSample object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobSampleMutation) OldMemBytes(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMemBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMemBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMemBytes: %w", err)
+	}
+	return oldValue.MemBytes, nil
+}
+
+// AddMemBytes adds f to the "mem_bytes" field.
+func (m *JobSampleMutation) AddMemBytes(f float64) {
+	if m.addmem_bytes != nil {
+		*m.addmem_bytes += f
+	} else {
+		m.addmem_bytes = &f
+	}
+}
+
+// AddedMemBytes returns the value that was added to the "mem_bytes" field in this mutation.
+func (m *JobSampleMutation) AddedMemBytes() (r float64, exists bool) {
+	v := m.addmem_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMemBytes resets all changes to the "mem_bytes" field.
+func (m *JobSampleMutation) ResetMemBytes() {
+	m.mem_bytes = nil
+	m.addmem_bytes = nil
+}
+
+// SetSamples sets the "samples" field.
+func (m *JobSampleMutation) SetSamples(i int) {
+	m.samples = &i
+	m.addsamples = nil
+}
+
+// Samples returns the value of the "samples" field in the mutation.
+func (m *JobSampleMutation) Samples() (r int, exists bool) {
+	v := m.samples
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSamples returns the old "samples" field's value of the JobSample entity.
+// If the JobSample object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobSampleMutation) OldSamples(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSamples is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSamples requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSamples: %w", err)
+	}
+	return oldValue.Samples, nil
+}
+
+// AddSamples adds i to the "samples" field.
+func (m *JobSampleMutation) AddSamples(i int) {
+	if m.addsamples != nil {
+		*m.addsamples += i
+	} else {
+		m.addsamples = &i
+	}
+}
+
+// AddedSamples returns the value that was added to the "samples" field in this mutation.
+func (m *JobSampleMutation) AddedSamples() (r int, exists bool) {
+	v := m.addsamples
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSamples resets all changes to the "samples" field.
+func (m *JobSampleMutation) ResetSamples() {
+	m.samples = nil
+	m.addsamples = nil
+}
+
+// Where appends a list predicates to the JobSampleMutation builder.
+func (m *JobSampleMutation) Where(ps ...predicate.JobSample) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the JobSampleMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *JobSampleMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.JobSample, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *JobSampleMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *JobSampleMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (JobSample).
+func (m *JobSampleMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *JobSampleMutation) Fields() []string {
+	fields := make([]string, 0, 5)
+	if m.job_id != nil {
+		fields = append(fields, jobsample.FieldJobID)
+	}
+	if m.ts != nil {
+		fields = append(fields, jobsample.FieldTs)
+	}
+	if m.cpu_cores != nil {
+		fields = append(fields, jobsample.FieldCPUCores)
+	}
+	if m.mem_bytes != nil {
+		fields = append(fields, jobsample.FieldMemBytes)
+	}
+	if m.samples != nil {
+		fields = append(fields, jobsample.FieldSamples)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *JobSampleMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case jobsample.FieldJobID:
+		return m.JobID()
+	case jobsample.FieldTs:
+		return m.Ts()
+	case jobsample.FieldCPUCores:
+		return m.CPUCores()
+	case jobsample.FieldMemBytes:
+		return m.MemBytes()
+	case jobsample.FieldSamples:
+		return m.Samples()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *JobSampleMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case jobsample.FieldJobID:
+		return m.OldJobID(ctx)
+	case jobsample.FieldTs:
+		return m.OldTs(ctx)
+	case jobsample.FieldCPUCores:
+		return m.OldCPUCores(ctx)
+	case jobsample.FieldMemBytes:
+		return m.OldMemBytes(ctx)
+	case jobsample.FieldSamples:
+		return m.OldSamples(ctx)
+	}
+	return nil, fmt.Errorf("unknown JobSample field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *JobSampleMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case jobsample.FieldJobID:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetJobID(v)
+		return nil
+	case jobsample.FieldTs:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTs(v)
+		return nil
+	case jobsample.FieldCPUCores:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCPUCores(v)
+		return nil
+	case jobsample.FieldMemBytes:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMemBytes(v)
+		return nil
+	case jobsample.FieldSamples:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSamples(v)
+		return nil
+	}
+	return fmt.Errorf("unknown JobSample field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *JobSampleMutation) AddedFields() []string {
+	var fields []string
+	if m.addjob_id != nil {
+		fields = append(fields, jobsample.FieldJobID)
+	}
+	if m.addts != nil {
+		fields = append(fields, jobsample.FieldTs)
+	}
+	if m.addcpu_cores != nil {
+		fields = append(fields, jobsample.FieldCPUCores)
+	}
+	if m.addmem_bytes != nil {
+		fields = append(fields, jobsample.FieldMemBytes)
+	}
+	if m.addsamples != nil {
+		fields = append(fields, jobsample.FieldSamples)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *JobSampleMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case jobsample.FieldJobID:
+		return m.AddedJobID()
+	case jobsample.FieldTs:
+		return m.AddedTs()
+	case jobsample.FieldCPUCores:
+		return m.AddedCPUCores()
+	case jobsample.FieldMemBytes:
+		return m.AddedMemBytes()
+	case jobsample.FieldSamples:
+		return m.AddedSamples()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *JobSampleMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case jobsample.FieldJobID:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddJobID(v)
+		return nil
+	case jobsample.FieldTs:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddTs(v)
+		return nil
+	case jobsample.FieldCPUCores:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCPUCores(v)
+		return nil
+	case jobsample.FieldMemBytes:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMemBytes(v)
+		return nil
+	case jobsample.FieldSamples:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSamples(v)
+		return nil
+	}
+	return fmt.Errorf("unknown JobSample numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *JobSampleMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *JobSampleMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *JobSampleMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown JobSample nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *JobSampleMutation) ResetField(name string) error {
+	switch name {
+	case jobsample.FieldJobID:
+		m.ResetJobID()
+		return nil
+	case jobsample.FieldTs:
+		m.ResetTs()
+		return nil
+	case jobsample.FieldCPUCores:
+		m.ResetCPUCores()
+		return nil
+	case jobsample.FieldMemBytes:
+		m.ResetMemBytes()
+		return nil
+	case jobsample.FieldSamples:
+		m.ResetSamples()
+		return nil
+	}
+	return fmt.Errorf("unknown JobSample field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *JobSampleMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *JobSampleMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *JobSampleMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *JobSampleMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *JobSampleMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *JobSampleMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *JobSampleMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown JobSample unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *JobSampleMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown JobSample edge %s", name)
 }
 
 // PhaseTransitionMutation represents an operation that mutates the PhaseTransition nodes in the graph.

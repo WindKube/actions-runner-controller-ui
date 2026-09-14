@@ -216,6 +216,90 @@ func (_u *JobObservationUpdate) AddMemByteSeconds(v float64) *JobObservationUpda
 	return _u
 }
 
+// SetCPURequest sets the "cpu_request" field.
+func (_u *JobObservationUpdate) SetCPURequest(v float64) *JobObservationUpdate {
+	_u.mutation.ResetCPURequest()
+	_u.mutation.SetCPURequest(v)
+	return _u
+}
+
+// SetNillableCPURequest sets the "cpu_request" field if the given value is not nil.
+func (_u *JobObservationUpdate) SetNillableCPURequest(v *float64) *JobObservationUpdate {
+	if v != nil {
+		_u.SetCPURequest(*v)
+	}
+	return _u
+}
+
+// AddCPURequest adds value to the "cpu_request" field.
+func (_u *JobObservationUpdate) AddCPURequest(v float64) *JobObservationUpdate {
+	_u.mutation.AddCPURequest(v)
+	return _u
+}
+
+// SetCPULimit sets the "cpu_limit" field.
+func (_u *JobObservationUpdate) SetCPULimit(v float64) *JobObservationUpdate {
+	_u.mutation.ResetCPULimit()
+	_u.mutation.SetCPULimit(v)
+	return _u
+}
+
+// SetNillableCPULimit sets the "cpu_limit" field if the given value is not nil.
+func (_u *JobObservationUpdate) SetNillableCPULimit(v *float64) *JobObservationUpdate {
+	if v != nil {
+		_u.SetCPULimit(*v)
+	}
+	return _u
+}
+
+// AddCPULimit adds value to the "cpu_limit" field.
+func (_u *JobObservationUpdate) AddCPULimit(v float64) *JobObservationUpdate {
+	_u.mutation.AddCPULimit(v)
+	return _u
+}
+
+// SetMemRequest sets the "mem_request" field.
+func (_u *JobObservationUpdate) SetMemRequest(v float64) *JobObservationUpdate {
+	_u.mutation.ResetMemRequest()
+	_u.mutation.SetMemRequest(v)
+	return _u
+}
+
+// SetNillableMemRequest sets the "mem_request" field if the given value is not nil.
+func (_u *JobObservationUpdate) SetNillableMemRequest(v *float64) *JobObservationUpdate {
+	if v != nil {
+		_u.SetMemRequest(*v)
+	}
+	return _u
+}
+
+// AddMemRequest adds value to the "mem_request" field.
+func (_u *JobObservationUpdate) AddMemRequest(v float64) *JobObservationUpdate {
+	_u.mutation.AddMemRequest(v)
+	return _u
+}
+
+// SetMemLimit sets the "mem_limit" field.
+func (_u *JobObservationUpdate) SetMemLimit(v float64) *JobObservationUpdate {
+	_u.mutation.ResetMemLimit()
+	_u.mutation.SetMemLimit(v)
+	return _u
+}
+
+// SetNillableMemLimit sets the "mem_limit" field if the given value is not nil.
+func (_u *JobObservationUpdate) SetNillableMemLimit(v *float64) *JobObservationUpdate {
+	if v != nil {
+		_u.SetMemLimit(*v)
+	}
+	return _u
+}
+
+// AddMemLimit adds value to the "mem_limit" field.
+func (_u *JobObservationUpdate) AddMemLimit(v float64) *JobObservationUpdate {
+	_u.mutation.AddMemLimit(v)
+	return _u
+}
+
 // Mutation returns the JobObservationMutation object of the builder.
 func (_u *JobObservationUpdate) Mutation() *JobObservationMutation {
 	return _u.mutation
@@ -304,6 +388,30 @@ func (_u *JobObservationUpdate) sqlSave(ctx context.Context) (_node int, err err
 	}
 	if value, ok := _u.mutation.AddedMemByteSeconds(); ok {
 		_spec.AddField(jobobservation.FieldMemByteSeconds, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.CPURequest(); ok {
+		_spec.SetField(jobobservation.FieldCPURequest, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedCPURequest(); ok {
+		_spec.AddField(jobobservation.FieldCPURequest, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.CPULimit(); ok {
+		_spec.SetField(jobobservation.FieldCPULimit, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedCPULimit(); ok {
+		_spec.AddField(jobobservation.FieldCPULimit, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.MemRequest(); ok {
+		_spec.SetField(jobobservation.FieldMemRequest, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedMemRequest(); ok {
+		_spec.AddField(jobobservation.FieldMemRequest, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.MemLimit(); ok {
+		_spec.SetField(jobobservation.FieldMemLimit, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedMemLimit(); ok {
+		_spec.AddField(jobobservation.FieldMemLimit, field.TypeFloat64, value)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -514,6 +622,90 @@ func (_u *JobObservationUpdateOne) AddMemByteSeconds(v float64) *JobObservationU
 	return _u
 }
 
+// SetCPURequest sets the "cpu_request" field.
+func (_u *JobObservationUpdateOne) SetCPURequest(v float64) *JobObservationUpdateOne {
+	_u.mutation.ResetCPURequest()
+	_u.mutation.SetCPURequest(v)
+	return _u
+}
+
+// SetNillableCPURequest sets the "cpu_request" field if the given value is not nil.
+func (_u *JobObservationUpdateOne) SetNillableCPURequest(v *float64) *JobObservationUpdateOne {
+	if v != nil {
+		_u.SetCPURequest(*v)
+	}
+	return _u
+}
+
+// AddCPURequest adds value to the "cpu_request" field.
+func (_u *JobObservationUpdateOne) AddCPURequest(v float64) *JobObservationUpdateOne {
+	_u.mutation.AddCPURequest(v)
+	return _u
+}
+
+// SetCPULimit sets the "cpu_limit" field.
+func (_u *JobObservationUpdateOne) SetCPULimit(v float64) *JobObservationUpdateOne {
+	_u.mutation.ResetCPULimit()
+	_u.mutation.SetCPULimit(v)
+	return _u
+}
+
+// SetNillableCPULimit sets the "cpu_limit" field if the given value is not nil.
+func (_u *JobObservationUpdateOne) SetNillableCPULimit(v *float64) *JobObservationUpdateOne {
+	if v != nil {
+		_u.SetCPULimit(*v)
+	}
+	return _u
+}
+
+// AddCPULimit adds value to the "cpu_limit" field.
+func (_u *JobObservationUpdateOne) AddCPULimit(v float64) *JobObservationUpdateOne {
+	_u.mutation.AddCPULimit(v)
+	return _u
+}
+
+// SetMemRequest sets the "mem_request" field.
+func (_u *JobObservationUpdateOne) SetMemRequest(v float64) *JobObservationUpdateOne {
+	_u.mutation.ResetMemRequest()
+	_u.mutation.SetMemRequest(v)
+	return _u
+}
+
+// SetNillableMemRequest sets the "mem_request" field if the given value is not nil.
+func (_u *JobObservationUpdateOne) SetNillableMemRequest(v *float64) *JobObservationUpdateOne {
+	if v != nil {
+		_u.SetMemRequest(*v)
+	}
+	return _u
+}
+
+// AddMemRequest adds value to the "mem_request" field.
+func (_u *JobObservationUpdateOne) AddMemRequest(v float64) *JobObservationUpdateOne {
+	_u.mutation.AddMemRequest(v)
+	return _u
+}
+
+// SetMemLimit sets the "mem_limit" field.
+func (_u *JobObservationUpdateOne) SetMemLimit(v float64) *JobObservationUpdateOne {
+	_u.mutation.ResetMemLimit()
+	_u.mutation.SetMemLimit(v)
+	return _u
+}
+
+// SetNillableMemLimit sets the "mem_limit" field if the given value is not nil.
+func (_u *JobObservationUpdateOne) SetNillableMemLimit(v *float64) *JobObservationUpdateOne {
+	if v != nil {
+		_u.SetMemLimit(*v)
+	}
+	return _u
+}
+
+// AddMemLimit adds value to the "mem_limit" field.
+func (_u *JobObservationUpdateOne) AddMemLimit(v float64) *JobObservationUpdateOne {
+	_u.mutation.AddMemLimit(v)
+	return _u
+}
+
 // Mutation returns the JobObservationMutation object of the builder.
 func (_u *JobObservationUpdateOne) Mutation() *JobObservationMutation {
 	return _u.mutation
@@ -632,6 +824,30 @@ func (_u *JobObservationUpdateOne) sqlSave(ctx context.Context) (_node *JobObser
 	}
 	if value, ok := _u.mutation.AddedMemByteSeconds(); ok {
 		_spec.AddField(jobobservation.FieldMemByteSeconds, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.CPURequest(); ok {
+		_spec.SetField(jobobservation.FieldCPURequest, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedCPURequest(); ok {
+		_spec.AddField(jobobservation.FieldCPURequest, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.CPULimit(); ok {
+		_spec.SetField(jobobservation.FieldCPULimit, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedCPULimit(); ok {
+		_spec.AddField(jobobservation.FieldCPULimit, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.MemRequest(); ok {
+		_spec.SetField(jobobservation.FieldMemRequest, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedMemRequest(); ok {
+		_spec.AddField(jobobservation.FieldMemRequest, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.MemLimit(); ok {
+		_spec.SetField(jobobservation.FieldMemLimit, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedMemLimit(); ok {
+		_spec.AddField(jobobservation.FieldMemLimit, field.TypeFloat64, value)
 	}
 	_node = &JobObservation{config: _u.config}
 	_spec.Assign = _node.assignValues

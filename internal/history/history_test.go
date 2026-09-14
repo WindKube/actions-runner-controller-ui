@@ -44,6 +44,26 @@ func (q *countingQueries) RepoConsumption(context.Context, store.Range) ([]store
 	return nil, nil
 }
 
+func (q *countingQueries) Jobs(context.Context, store.JobFilter, store.Range) ([]store.JobRecord, int64, error) {
+	return nil, 0, nil
+}
+
+func (q *countingQueries) WorkflowRuns(context.Context, store.JobFilter, store.Range) ([]store.WorkflowRun, int64, error) {
+	return nil, 0, nil
+}
+
+func (q *countingQueries) Job(context.Context, int) (store.JobRecord, bool, error) {
+	return store.JobRecord{}, false, nil
+}
+
+func (q *countingQueries) JobSeries(context.Context, int, store.Range) ([]store.JobPoint, error) {
+	return nil, nil
+}
+
+func (q *countingQueries) JobFacets(context.Context, store.Range) (store.JobFacets, error) {
+	return store.JobFacets{}, nil
+}
+
 func (q *countingQueries) Failures(_ context.Context, setName string, _ store.Range, limit int) ([]store.FailureRecord, int64, error) {
 	q.gotSetName, q.gotLimit = setName, limit
 	return q.failures, q.failuresTotal, q.failuresErr
@@ -199,4 +219,148 @@ func TestFailuresScopeBecomesTheSetName(t *testing.T) {
 func window() web.Window {
 	to := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	return web.Window{From: to.Add(-6 * time.Hour), To: to, Points: 60}
+}
+
+// jobQueries records what it was asked and answers with fixtures, so the
+// adapter's mapping can be checked without a database.
+type jobQueries struct {
+	countingQueries
+
+	jobs  []store.JobRecord
+	runs  []store.WorkflowRun
+	total int64
+
+	gotFilter store.JobFilter
+	gotRange  store.Range
+}
+
+func (q *jobQueries) Jobs(_ context.Context, f store.JobFilter, r store.Range) ([]store.JobRecord, int64, error) {
+	q.gotFilter, q.gotRange = f, r
+	return q.jobs, q.total, nil
+}
+
+func (q *jobQueries) WorkflowRuns(_ context.Context, f store.JobFilter, r store.Range) ([]store.WorkflowRun, int64, error) {
+	q.gotFilter, q.gotRange = f, r
+	return q.runs, q.total, nil
+}
+
+func (q *jobQueries) JobSeries(context.Context, int, store.Range) ([]store.JobPoint, error) {
+	return []store.JobPoint{
+		{At: time.Unix(100, 0).UTC(), CPU: 1.5, Mem: 2 * gib},
+		{At: time.Unix(160, 0).UTC(), CPU: 2.5, Mem: 3 * gib},
+	}, nil
+}
+
+func (q *jobQueries) Job(context.Context, int) (store.JobRecord, bool, error) {
+	if len(q.jobs) == 0 {
+		return store.JobRecord{}, false, nil
+	}
+	return q.jobs[0], true, nil
+}
+
+func (q *jobQueries) JobFacets(context.Context, store.Range) (store.JobFacets, error) {
+	return store.JobFacets{Repositories: []string{"acme/api"}, Workflows: []string{"ci.yml"}}, nil
+}
+
+func TestJobsMapOntoTheViewContract(t *testing.T) {
+	t.Parallel()
+
+	q := &jobQueries{
+		total: 42,
+		jobs: []store.JobRecord{{
+			ID: 7, Runner: "r1", Set: "linux-x64", Repository: "acme/api",
+			Workflow: "ci.yml", Job: "build", RunID: 91,
+			StartedAt: time.Unix(1000, 0).UTC(), FinishedAt: time.Unix(1600, 0).UTC(),
+			Succeeded: true, CPUSeconds: 600, MemByteSeconds: 4 * gib,
+			CPURequest: 2, CPULimit: 4, MemRequest: 4 * gib, MemLimit: 8 * gib,
+		}},
+	}
+
+	got, err := New(q).Jobs(t.Context(), web.JobFilter{Repository: "acme/api"}, window())
+	require.NoError(t, err, "Jobs")
+
+	require.Len(t, got.Jobs, 1)
+	assert.Equal(t, int64(42), got.Total, "the window's total travels with the page")
+	assert.Equal(t, 7, got.Jobs[0].ID)
+	assert.Equal(t, "build", got.Jobs[0].Name)
+	assert.InDelta(t, 600.0, got.Jobs[0].CPUSeconds, 1e-9)
+	// Byte-seconds for a real job is a fourteen-digit number, so the views take
+	// GiB-seconds and the conversion has to happen exactly once.
+	assert.InDelta(t, 4.0, got.Jobs[0].MemGiBSecs, 1e-9, "byte-seconds should become GiB-seconds")
+	// The reservations, unlike the totals, stay in the store's own units: they
+	// are plotted against the usage series rather than summarised.
+	assert.InDelta(t, 2.0, got.Jobs[0].CPURequest, 1e-9, "cpu request")
+	assert.InDelta(t, 4.0, got.Jobs[0].CPULimit, 1e-9, "cpu limit")
+	assert.InDelta(t, 4*gib, got.Jobs[0].MemRequest, 1e-3, "memory request should stay in bytes")
+	assert.InDelta(t, 8*gib, got.Jobs[0].MemLimit, 1e-3, "memory limit should stay in bytes")
+	assert.Equal(t, "acme/api", q.gotFilter.Repository, "the filter should reach the store")
+}
+
+// The outcome vocabularies are declared at both ends. An unrecognised value
+// has to widen the listing rather than empty it, or a hand-edited URL shows a
+// blank table that looks like a fleet doing nothing.
+func TestOutcomeFilterMapsAndFallsBackToAny(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		in   web.JobOutcome
+		want store.Outcome
+	}{
+		{web.JobOK, store.OutcomeOK},
+		{web.JobFailed, store.OutcomeFailed},
+		{web.JobRunning, store.OutcomeRunning},
+		{web.JobAnyOutcome, store.OutcomeAny},
+		{web.JobOutcome("nonsense"), store.OutcomeAny},
+	} {
+		q := &jobQueries{}
+		_, err := New(q).Jobs(t.Context(), web.JobFilter{Outcome: tc.in}, window())
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, q.gotFilter.Outcome, "outcome %q", tc.in)
+	}
+}
+
+func TestWorkflowRunsMapOntoTheViewContract(t *testing.T) {
+	t.Parallel()
+
+	q := &jobQueries{
+		total: 9,
+		runs: []store.WorkflowRun{{
+			Repository: "acme/api", Workflow: "ci.yml", RunID: 91,
+			Jobs: 4, Running: 1, Failed: 2,
+			StartedAt:  time.Unix(1000, 0).UTC(),
+			CPUSeconds: 900, MemByteSeconds: 8 * gib,
+		}},
+	}
+
+	got, err := New(q).Workflows(t.Context(), web.JobFilter{}, window())
+	require.NoError(t, err, "Workflows")
+
+	require.Len(t, got.Runs, 1)
+	assert.Equal(t, int64(9), got.Total)
+	assert.Equal(t, 4, got.Runs[0].Jobs)
+	assert.Equal(t, 2, got.Runs[0].Failed)
+	assert.InDelta(t, 8.0, got.Runs[0].MemGiBSecs, 1e-9)
+	assert.True(t, got.Runs[0].FinishedAt.IsZero(), "a run with a job still going has no end")
+}
+
+func TestJobSeriesSplitsIntoParallelSlices(t *testing.T) {
+	t.Parallel()
+
+	got, err := New(&jobQueries{}).JobSeries(t.Context(), 7, window())
+	require.NoError(t, err, "JobSeries")
+
+	require.Equal(t, 2, got.Len())
+	assert.Len(t, got.CPU, got.Len(), "every slice is the length of the axis")
+	assert.Len(t, got.Mem, got.Len())
+	assert.InDelta(t, 2.5, got.CPU[1], 1e-9)
+	assert.InDelta(t, 3*gib, got.Mem[1], 1e-3, "memory stays in bytes for the chart")
+}
+
+func TestFacetsMapOntoTheViewContract(t *testing.T) {
+	t.Parallel()
+
+	got, err := New(&jobQueries{}).Facets(t.Context(), window())
+	require.NoError(t, err, "Facets")
+	assert.Equal(t, []string{"acme/api"}, got.Repositories)
+	assert.Equal(t, []string{"ci.yml"}, got.Workflows)
 }

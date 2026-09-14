@@ -194,6 +194,40 @@ func (s *Store) applyRetention(ctx context.Context, now time.Time, ret Retention
 			cutoff:    unixCutoff(now, ret.Scope1h),
 		},
 		{
+			// Per-job usage, on its own window. This is the knob that lets an
+			// operator keep a month of job rows while paying for a week of the
+			// samples behind them, which is the only table here whose size is
+			// driven by how BUSY the fleet is rather than how big it is.
+			//
+			// Sweeping on the sample's own timestamp means a job that straddles
+			// the boundary keeps the part of its series inside the window and
+			// loses the part outside it. That is bounded by maxJobRuntime and
+			// is the honest reading of "keep N of usage history"; the
+			// alternative, holding every sample of any job with one foot in the
+			// window, makes the window a lower bound rather than a limit.
+			what:      "job samples",
+			q:         `DELETE FROM job_samples WHERE ts < ?`,
+			retention: ret.JobSamples,
+			cutoff:    unixCutoff(now, ret.JobSamples),
+		},
+		{
+			// Samples whose job is about to go. These two run BEFORE the job
+			// sweeps below and select on the same cutoffs, so a sample can
+			// never outlive the row that gives it meaning — an orphan here
+			// would be unreachable and immortal, since nothing else in this
+			// list would ever match it again.
+			what:      "job samples of expiring finished jobs",
+			q:         `DELETE FROM job_samples WHERE job_id IN (SELECT id FROM job_observations WHERE finished_at > 0 AND finished_at < ?)`,
+			retention: ret.Scope5m,
+			cutoff:    unixCutoff(now, ret.Scope5m),
+		},
+		{
+			what:      "job samples of expiring abandoned jobs",
+			q:         `DELETE FROM job_samples WHERE job_id IN (SELECT id FROM job_observations WHERE finished_at <= 0 AND started_at < ?)`,
+			retention: ret.Scope5m,
+			cutoff:    unixCutoff(now, addWindows(ret.Scope5m, maxJobRuntime)),
+		},
+		{
 			// Finished jobs age from their completion, not from their start. A
 			// row becomes history the moment it stops changing, and sweeping on
 			// started_at would delete a week-long build that finished a minute

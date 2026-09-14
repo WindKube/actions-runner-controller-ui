@@ -207,3 +207,57 @@ func TestAssetsAreServedUnderTheHashedPath(t *testing.T) {
 	assert.True(t, strings.HasPrefix(resp.Header.Get("Content-Type"), "text/javascript"),
 		"Content-Type = %q", resp.Header.Get("Content-Type"))
 }
+
+// The two history tabs are new top-level routes. A page that renders but is
+// not mounted is indistinguishable from one that was never written, and the
+// tab strip links to these from every other page.
+func TestHistoryTabsAreMounted(t *testing.T) {
+	t.Parallel()
+
+	srv, base := testServer(t, nil)
+	defer func() { _ = srv.Shutdown(context.Background()) }()
+
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/workflows", http.StatusOK},
+		{"/jobs", http.StatusOK},
+		// No history store here, so no job has been recorded under any id.
+		{"/jobs/1", http.StatusNotFound},
+		// The id is the store's row id, so a non-numeric one is a missing page
+		// rather than a parse error rendered at 200.
+		{"/jobs/not-a-number", http.StatusNotFound},
+	} {
+		resp, err := http.Get(base + tc.path) //nolint:noctx // test client
+		require.NoError(t, err, "GET %s", tc.path)
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, resp.Body.Close())
+		require.NoError(t, err)
+
+		assert.Equal(t, tc.want, resp.StatusCode, "GET %s", tc.path)
+		assert.NotContains(t, string(body), "not found\n", "GET %s should be a rendered page", tc.path)
+	}
+}
+
+// Each tab has its own SSE endpoint. A stream that 404s leaves the page
+// server-rendered but frozen, which looks exactly like a quiet fleet.
+func TestHistoryStreamsAreMounted(t *testing.T) {
+	t.Parallel()
+
+	srv, base := testServer(t, nil)
+	defer func() { _ = srv.Shutdown(context.Background()) }()
+
+	for _, path := range []string{"/stream/workflows", "/stream/jobs"} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+path, nil)
+		require.NoError(t, err)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err, "GET %s", path)
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "GET %s", path)
+		assert.True(t, strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"),
+			"%s Content-Type = %q", path, resp.Header.Get("Content-Type"))
+		require.NoError(t, resp.Body.Close())
+	}
+}

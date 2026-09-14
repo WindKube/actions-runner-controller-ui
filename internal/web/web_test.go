@@ -109,6 +109,16 @@ func renderOverviewWith(t *testing.T, b *Builder) string {
 	return sb.String()
 }
 
+// renderComponent renders any view as a complete document, for the pages that
+// are not the overview.
+func renderComponent(t *testing.T, p Page, body templ.Component) string {
+	t.Helper()
+
+	var sb strings.Builder
+	require.NoError(t, Document(p, body).Render(context.Background(), &sb), "render")
+	return sb.String()
+}
+
 // statsHistory is NoHistory with a store-statistics answer, so the footer can
 // be rendered without a database anywhere in sight.
 type statsHistory struct {
@@ -353,7 +363,7 @@ func TestRunnerDetailUsesAFixedShortWindow(t *testing.T) {
 	// far right of an empty chart.
 	var got Window
 	b := testBuilder()
-	b.History = windowSpy{&got}
+	b.History = windowSpy{got: &got}
 
 	_, ok := b.Runner(context.Background(), "arc-ubuntu-abc", Signals{Range: "30d"}, now, nil)
 	require.True(t, ok, "runner not found")
@@ -361,21 +371,16 @@ func TestRunnerDetailUsesAFixedShortWindow(t *testing.T) {
 }
 
 // windowSpy records the window a runner query was made with.
-type windowSpy struct{ got *Window }
-
-func (s windowSpy) Scope(context.Context, Scope, Window) (ScopeSeries, error) {
-	return ScopeSeries{}, nil
+// windowSpy records the window one method was asked for. It embeds NoHistory
+// so that adding a method to History does not break every double in this file.
+type windowSpy struct {
+	NoHistory
+	got *Window
 }
+
 func (s windowSpy) Runner(_ context.Context, _ string, w Window) (RunnerSeries, error) {
 	*s.got = w
 	return RunnerSeries{}, nil
-}
-func (s windowSpy) Throughput(context.Context, Scope, Window) (Counts, error) { return Counts{}, nil }
-func (s windowSpy) Churn(context.Context, Scope, Window) (Counts, error)      { return Counts{}, nil }
-func (s windowSpy) Repos(context.Context, Window, int) ([]RepoHistory, error) { return nil, nil }
-func (s windowSpy) Stats(context.Context) (StoreStats, error)                 { return StoreStats{}, nil }
-func (s windowSpy) Failures(context.Context, Scope, Window, int) (FailureWindow, error) {
-	return FailureWindow{}, nil
 }
 
 func TestMissingRunnerIsNotFoundNotAnError(t *testing.T) {
@@ -985,4 +990,775 @@ func TestPartlyAvailableSourceIsReportedAsDegraded(t *testing.T) {
 
 	assert.Contains(t, html, "17 of 20 listeners scraped",
 		"a partial scrape has to reach the page; it is the only sign those sets are missing")
+}
+
+// ---------------------------------------------------------------------------
+// Workflows and Jobs tabs
+// ---------------------------------------------------------------------------
+
+// stubHistory serves fixed job history. It embeds NoHistory so each test names
+// only the dimension it is about.
+type stubHistory struct {
+	NoHistory
+
+	jobs      JobList
+	runs      WorkflowList
+	job       Job
+	jobFound  bool
+	series    JobSeries
+	facets    JobFacets
+	enabled   bool
+	gotFilter JobFilter
+	gotWindow Window
+}
+
+func (h *stubHistory) Jobs(_ context.Context, f JobFilter, w Window) (JobList, error) {
+	h.gotFilter, h.gotWindow = f, w
+	return h.jobs, nil
+}
+
+func (h *stubHistory) Workflows(_ context.Context, f JobFilter, w Window) (WorkflowList, error) {
+	h.gotFilter, h.gotWindow = f, w
+	return h.runs, nil
+}
+
+func (h *stubHistory) Job(context.Context, int) (Job, bool, error) {
+	return h.job, h.jobFound, nil
+}
+
+func (h *stubHistory) JobSeries(_ context.Context, _ int, w Window) (JobSeries, error) {
+	h.gotWindow = w
+	return h.series, nil
+}
+
+func (h *stubHistory) Facets(context.Context, Window) (JobFacets, error) { return h.facets, nil }
+
+func (h *stubHistory) Stats(context.Context) (StoreStats, error) {
+	return StoreStats{Enabled: h.enabled}, nil
+}
+
+func builderWith(h History) *Builder {
+	b := testBuilder()
+	b.History = h
+	return b
+}
+
+// sampleJob is a finished job with enough cost recorded to exercise the tiles.
+func sampleJob() Job {
+	return Job{
+		ID: 7, Runner: "arc-ubuntu-2xl-r7k2p", Set: "arc-ubuntu-2xl",
+		Repository: "WindKube/platform", Workflow: "ci.yml", Name: "build",
+		RunID: 991, StartedAt: now.Add(-10 * time.Minute), FinishedAt: now.Add(-4 * time.Minute),
+		Succeeded: true, CPUSeconds: 720, MemGiBSecs: 1440,
+		// No CPU limit, which is the usual ARC configuration and the case the
+		// chart has to draw nothing for.
+		CPURequest: 4, MemRequest: 8 * fleet.GiB, MemLimit: 8 * fleet.GiB,
+	}
+}
+
+// Both history tabs are entirely store-backed, so "no store" and "nothing ran"
+// have to render differently. An empty table for the first would be the
+// dashboard reporting an idle fleet it cannot actually see.
+func TestHistoryTabsDistinguishNoStoreFromNoRows(t *testing.T) {
+	t.Parallel()
+
+	off := builderWith(&stubHistory{enabled: false})
+	jobs := off.Jobs(context.Background(), Signals{}, now)
+	workflows := off.Workflows(context.Background(), Signals{}, now)
+	assert.False(t, jobs.Enabled, "a dashboard with no store must not claim an empty job list")
+	assert.False(t, workflows.Enabled, "nor an empty workflow list")
+
+	on := builderWith(&stubHistory{enabled: true})
+	assert.True(t, on.Jobs(context.Background(), Signals{}, now).Enabled)
+	assert.True(t, on.Workflows(context.Background(), Signals{}, now).Enabled)
+}
+
+func TestJobsTabRendersRowsAndTotal(t *testing.T) {
+	t.Parallel()
+
+	h := &stubHistory{
+		enabled: true,
+		jobs:    JobList{Jobs: []Job{sampleJob()}, Total: 4312},
+	}
+	v := builderWith(h).Jobs(context.Background(), Signals{}, now)
+
+	require.Len(t, v.Rows, 1, "one job")
+	row := v.Rows[0]
+	assert.Equal(t, "/jobs/7", row.Href, "the row links to the job's detail page")
+	assert.Equal(t, "ok", row.Badge)
+	assert.Equal(t, "6m 0s", row.Duration, "duration runs start to finish")
+	assert.Contains(t, v.Summary, "4,312", "the window's total belongs beside the page")
+	assert.Contains(t, v.Summary, "1 of", "and so does how much of it is shown")
+	assert.Equal(t, TabJobs, v.Tab, "the jobs tab should mark itself active")
+}
+
+func TestRunningJobIsMeasuredToNow(t *testing.T) {
+	t.Parallel()
+
+	j := sampleJob()
+	j.FinishedAt = time.Time{}
+	assert.Equal(t, 10*time.Minute, j.Duration(now), "an unfinished job runs up to now")
+	assert.Equal(t, "running", JobBadge(j))
+	assert.Equal(t, ToneAccent, JobTone(j))
+}
+
+// A run with any failed job is a failed run. "Some of it worked" is the one
+// thing nobody scanning this table needs to know.
+func TestWorkflowRunTakesItsWorstOutcome(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		run   WorkflowRun
+		tone  Tone
+		badge string
+	}{
+		{"all good", WorkflowRun{Jobs: 3}, ToneSuccess, "ok"},
+		{"still going", WorkflowRun{Jobs: 3, Running: 1}, ToneAccent, "running"},
+		{"a failure outranks a running job", WorkflowRun{Jobs: 3, Running: 1, Failed: 2}, ToneDanger, "2 failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.tone, RunTone(tc.run))
+			assert.Equal(t, tc.badge, RunBadge(tc.run))
+		})
+	}
+}
+
+func TestWorkflowRowLinksToItsJobs(t *testing.T) {
+	t.Parallel()
+
+	h := &stubHistory{
+		enabled: true,
+		runs: WorkflowList{Runs: []WorkflowRun{
+			{Repository: "acme/api", Workflow: "ci.yml", RunID: 42, Jobs: 3, StartedAt: now.Add(-time.Hour)},
+			{Repository: "acme/api", Workflow: "nightly.yml", Jobs: 1, StartedAt: now.Add(-time.Hour)},
+		}},
+	}
+	v := builderWith(h).Workflows(context.Background(), Signals{}, now)
+	require.Len(t, v.Rows, 2)
+
+	assert.Contains(t, v.Rows[0].Href, "run=42", "a run links to its own jobs")
+	assert.Contains(t, v.Rows[0].Href, "workflow=ci.yml")
+	assert.NotContains(t, v.Rows[1].Href, "run=",
+		"a run ARC reported no id for must not link to a filter matching every such job")
+}
+
+func TestJobDetailWindowIsTheJobsOwnLife(t *testing.T) {
+	t.Parallel()
+
+	j := sampleJob()
+	h := &stubHistory{enabled: true, job: j, jobFound: true}
+
+	// The range picker says 30 days; the chart is still the job's six minutes,
+	// because a job is a bounded thing and its chart should show all of it.
+	v, ok := builderWith(h).Job(context.Background(), j.ID, Signals{Range: "30d"}, now)
+	require.True(t, ok, "the job should be found")
+
+	assert.Equal(t, j.StartedAt, h.gotWindow.From, "the window starts when the job did")
+	assert.WithinDuration(t, j.FinishedAt, h.gotWindow.To, 2*time.Second, "and ends when it did")
+	assert.Equal(t, TabJobs, v.Tab, "a job belongs to the jobs tab")
+}
+
+// The empty chart is the whole reason per-job sampling exists, so it has to be
+// distinguishable from a job that genuinely used nothing.
+func TestJobWithNoSamplesSaysSoRatherThanDrawingZero(t *testing.T) {
+	t.Parallel()
+
+	j := sampleJob()
+	h := &stubHistory{enabled: true, job: j, jobFound: true}
+	v, ok := builderWith(h).Job(context.Background(), j.ID, Signals{}, now)
+	require.True(t, ok)
+
+	assert.Zero(t, v.Buckets, "no samples were recorded")
+	assert.True(t, v.CPU.Empty, "so the cpu chart renders its empty state")
+	assert.True(t, v.Mem.Empty, "and so does memory")
+
+	html := renderComponent(t, v.Page, JobPage(v))
+	assert.Contains(t, html, "no resource samples recorded for this job")
+}
+
+func TestJobWithSamplesDrawsThem(t *testing.T) {
+	t.Parallel()
+
+	j := sampleJob()
+	h := &stubHistory{
+		enabled: true, job: j, jobFound: true,
+		series: JobSeries{
+			At:  []time.Time{now.Add(-9 * time.Minute), now.Add(-8 * time.Minute)},
+			CPU: []float64{0.5, 1.5},
+			Mem: []float64{fleet.GiB, 2 * fleet.GiB},
+		},
+	}
+	v, ok := builderWith(h).Job(context.Background(), j.ID, Signals{}, now)
+	require.True(t, ok)
+
+	assert.Equal(t, 2, v.Buckets)
+	assert.False(t, v.CPU.Empty, "a job with samples draws them")
+	assert.NotEmpty(t, v.CPU.Line.Points, "and the line has geometry")
+}
+
+// The reference lines are the only thing on the job chart that says whether the
+// usage below them was a tight fit or a rounding error.
+func TestJobChartDrawsWhatTheRunnerReserved(t *testing.T) {
+	t.Parallel()
+
+	j := sampleJob()
+	h := &stubHistory{
+		enabled: true, job: j, jobFound: true,
+		series: JobSeries{
+			At:  []time.Time{now.Add(-9 * time.Minute), now.Add(-8 * time.Minute)},
+			CPU: []float64{0.5, 1.5},
+			Mem: []float64{fleet.GiB, 2 * fleet.GiB},
+		},
+	}
+	v, ok := builderWith(h).Job(context.Background(), j.ID, Signals{}, now)
+	require.True(t, ok)
+
+	require.Len(t, v.CPU.Refs, 1, "a request with no limit is one line, not a line at zero")
+	require.Len(t, v.Mem.Refs, 2, "memory has both")
+
+	// The series peaks at 1.5 cores and the request is 4, so a scale taken from
+	// the series alone would put the request line above the chart.
+	assert.Contains(t, legendValue(t, v.CPU, "request"), "4", "the request is named in the legend")
+	assert.Equal(t, "1.5", legendValue(t, v.CPU, "peak"), "peak still reports the series, not the scale")
+
+	assert.Equal(t, "8Gi", legendValue(t, v.Mem, "limit"), "the limit is named too")
+
+	// The dashes carry no text of their own, which is why the legend above has
+	// to: both have to survive as far as the markup.
+	html := renderComponent(t, v.Page, JobPage(v))
+	assert.Contains(t, html, `stroke="`+strokeDanger+`" stroke-width="1" stroke-dasharray="4 4"`,
+		"the limit is drawn as a dashed rule")
+	assert.Contains(t, html, `request <span class="font-mono text-fg-body">4.0</span>`,
+		"and the legend says what it was")
+}
+
+func TestJobChartDrawsNoReferenceLinesForAJobWithNoneRecorded(t *testing.T) {
+	t.Parallel()
+
+	// A job recorded before reservations were stored. Zero is "never observed",
+	// and a line at zero would read as a pod that was promised nothing.
+	j := sampleJob()
+	j.CPURequest, j.MemRequest, j.MemLimit = 0, 0, 0
+	h := &stubHistory{
+		enabled: true, job: j, jobFound: true,
+		series: JobSeries{At: []time.Time{now.Add(-9 * time.Minute)}, CPU: []float64{0.5}, Mem: []float64{fleet.GiB}},
+	}
+	v, ok := builderWith(h).Job(context.Background(), j.ID, Signals{}, now)
+	require.True(t, ok)
+
+	assert.Empty(t, v.CPU.Refs, "nothing observed is nothing drawn")
+	assert.Empty(t, v.Mem.Refs, "for memory too")
+	for _, it := range append(v.CPU.Legend, v.Mem.Legend...) {
+		assert.NotContains(t, []string{"request", "limit"}, it.Label, "and nothing claimed in the legend")
+	}
+}
+
+func legendValue(t *testing.T, c LineChart, label string) string {
+	t.Helper()
+	for _, it := range c.Legend {
+		if it.Label == label {
+			return it.Value
+		}
+	}
+	t.Fatalf("no %q in legend %+v", label, c.Legend)
+	return ""
+}
+
+func TestMissingJobIsNotFoundNotAnError(t *testing.T) {
+	t.Parallel()
+
+	_, ok := builderWith(&stubHistory{enabled: true}).Job(context.Background(), 404, Signals{}, now)
+	assert.False(t, ok, "an unrecorded job should report not found")
+}
+
+// The averages are derived from the integrated cost rather than the samples,
+// because cost is a column on the job row and survives the samples being swept.
+func TestJobTilesDeriveAveragesFromCost(t *testing.T) {
+	t.Parallel()
+
+	j := sampleJob() // 720 core-seconds over 6 minutes = 2 cores.
+	tiles := jobTiles(j, now)
+
+	byLabel := map[string]Tile{}
+	for _, t := range tiles {
+		byLabel[t.Label] = t
+	}
+	assert.Equal(t, "2.0", byLabel["avg cpu"].Value, "720 core-s over 6m is 2 cores")
+	assert.Equal(t, "4Gi", byLabel["avg memory"].Value, "1440 GiB-s over 6m is 4 GiB")
+	assert.Equal(t, "ok", byLabel["outcome"].Value)
+}
+
+func TestJobFilterSignalsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	sig := SignalsFromQuery(url.Values{
+		"repo":    {"acme/api"},
+		"outcome": {"failed"},
+		"run":     {"42"},
+		"q":       {"deploy"},
+	})
+
+	f := sig.JobFilter()
+	assert.Equal(t, "acme/api", f.Repository)
+	assert.Equal(t, JobFailed, f.Outcome)
+	assert.Equal(t, int64(42), f.RunID)
+	assert.Equal(t, "deploy", f.Search)
+
+	// And back out to a shareable URL.
+	q := sig.Query()
+	assert.Equal(t, "acme/api", q.Get("repo"))
+	assert.Equal(t, "failed", q.Get("outcome"))
+	assert.Equal(t, "42", q.Get("run"))
+	assert.Equal(t, "deploy", q.Get("q"))
+}
+
+// Every other filter treats the empty string as "all". The search box cannot:
+// there is no dropdown for it to select, and "all" is a perfectly good thing
+// to search for.
+func TestSearchAndRunDoNotBecomeTheAnyValueSentinel(t *testing.T) {
+	t.Parallel()
+
+	sig := Signals{}.Normalize()
+	assert.Empty(t, sig.Q, "an empty search box must stay empty, not become 'all'")
+	assert.Empty(t, sig.Run, "and an unset run must not become a filter")
+	assert.Equal(t, fleet.AnyValue, sig.Repo, "while the dropdowns do use the sentinel")
+
+	assert.Empty(t, sig.Query().Get("q"), "an empty search leaves no query parameter")
+	assert.Empty(t, sig.JobFilter().Search)
+}
+
+// Zero is not merely a useless run filter, it is the value ARC reports for a
+// job whose run it does not know — so a literal "0" would narrow the table to
+// exactly those rows.
+func TestRunFilterRejectsNonPositiveValues(t *testing.T) {
+	t.Parallel()
+
+	for _, v := range []string{"0", "-1", "", "abc", "1e3"} {
+		assert.Empty(t, Signals{Run: v}.Normalize().Run, "run=%q should not filter", v)
+	}
+	assert.Equal(t, "42", Signals{Run: " 42 "}.Normalize().Run, "a real run id survives")
+}
+
+func TestClearFiltersResetsSearchToEmptyNotAll(t *testing.T) {
+	t.Parallel()
+
+	js := ClearFilters("/stream/jobs")
+	assert.Contains(t, js, "$q = ''", "the search box clears to empty")
+	assert.Contains(t, js, "$run = ''", "and so does the run filter")
+	assert.Contains(t, js, "$repo = 'all'", "while the dropdowns clear to the sentinel")
+}
+
+func TestTabStripMarksTheActiveTab(t *testing.T) {
+	t.Parallel()
+
+	h := &stubHistory{enabled: true}
+	v := builderWith(h).Jobs(context.Background(), Signals{}, now)
+	html := renderComponent(t, v.Page, JobsPage(v))
+
+	assert.Contains(t, html, `href="/workflows"`, "every tab is reachable from every page")
+	assert.Contains(t, html, `href="/jobs"`)
+	// The active tab is the one carrying aria-current, which is what a screen
+	// reader announces and what the underline is drawn from.
+	assert.Regexp(t, `href="/jobs"[^>]*aria-current="page"`, html,
+		"the jobs tab should be marked current on the jobs page")
+}
+
+// Switching tab must not carry the fleet's filters across: they are over
+// runner state, which the history tables have no column for.
+func TestTabLinksCarryNoFilterState(t *testing.T) {
+	t.Parallel()
+
+	for _, tab := range AllTabs() {
+		assert.NotContains(t, tab.Href, "?", "tab %s should link to a bare path", tab.Label)
+	}
+}
+
+func TestHistoryFilterDropdownsComeFromTheWindow(t *testing.T) {
+	t.Parallel()
+
+	h := &stubHistory{
+		enabled: true,
+		facets: JobFacets{
+			Repositories: []string{"acme/api"},
+			Workflows:    []string{"ci.yml"},
+			Sets:         []string{"linux-x64"},
+		},
+	}
+	v := builderWith(h).Jobs(context.Background(), Signals{}, now)
+
+	byKey := map[string]fleet.Select{}
+	for _, s := range v.Selects {
+		byKey[s.Key] = s
+	}
+	require.Contains(t, byKey, "repo")
+	assert.Equal(t, []string{"all", "acme/api"}, optionValues(byKey["repo"]),
+		"a dropdown offers the sentinel plus what the window holds")
+	assert.Contains(t, byKey, "outcome", "the jobs tab filters by outcome")
+
+	// A run is a set of jobs that can have ended several ways at once, so an
+	// ok/failed dropdown over one would claim a precision the row lacks.
+	w := builderWith(h).Workflows(context.Background(), Signals{}, now)
+	wKeys := map[string]bool{}
+	for _, s := range w.Selects {
+		wKeys[s.Key] = true
+	}
+	assert.False(t, wKeys["outcome"], "the workflows tab has no outcome dropdown")
+}
+
+// A filter the window no longer contains is kept rather than silently dropped,
+// or the select would show a different filter than the URL says is applied.
+func TestUnmatchedFilterValueIsKept(t *testing.T) {
+	t.Parallel()
+
+	h := &stubHistory{enabled: true, facets: JobFacets{Repositories: []string{"acme/api"}}}
+	v := builderWith(h).Jobs(context.Background(), Signals{Repo: "acme/gone"}, now)
+
+	for _, s := range v.Selects {
+		if s.Key != "repo" {
+			continue
+		}
+		assert.Contains(t, optionValues(s), "acme/gone", "the active filter stays on the list")
+		assert.True(t, s.Filtering, "and the select shows it is narrowing")
+		return
+	}
+	t.Fatal("no repo select")
+}
+
+func optionValues(s fleet.Select) []string {
+	out := make([]string, 0, len(s.Options))
+	for _, o := range s.Options {
+		out = append(out, o.Value)
+	}
+	return out
+}
+
+func TestCostFormattingPromotesToHours(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "—", CoreSeconds(0), "no cost recorded is not zero cost")
+	assert.Equal(t, "90 core-s", CoreSeconds(90))
+	assert.Equal(t, "2.0 core-h", CoreSeconds(7200))
+	assert.Equal(t, "—", GiBSeconds(0))
+	assert.Equal(t, "1.5 GiB-h", GiBSeconds(5400))
+}
+
+func TestRunLabelSpellsOutAMissingRunID(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "#42", RunLabel(42))
+	assert.Equal(t, "no run id", RunLabel(0), "printing #0 would look like a real run")
+}
+
+// handlerWith is testHandler over a caller-supplied history, for the pages
+// that have nothing to render without one.
+func handlerWith(h History) *Handler {
+	handler := testHandler(hub.New())
+	handler.Builder = builderWith(h)
+	return handler
+}
+
+// The two history pages must render complete on the server like every other
+// view: a deep link into a filtered job list has to work before any script runs.
+func TestHistoryPagesRenderServerSide(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// pick returns the handler under test. stubHistory records what it was
+		// asked, so each subtest gets its own rather than racing on one.
+		pick func(*Handler) http.HandlerFunc
+		path string
+		want []string
+	}{
+		{
+			"jobs",
+			func(h *Handler) http.HandlerFunc { return h.Jobs },
+			"/jobs?repo=WindKube%2Fplatform",
+			// The patch targets the stream pushes to, plus the row itself.
+			[]string{`id="jobs"`, `id="filterbar"`, `id="health"`, "build", "/jobs/7"},
+		},
+		{
+			"workflows",
+			func(h *Handler) http.HandlerFunc { return h.Workflows },
+			"/workflows",
+			[]string{`id="workflows"`, `id="filterbar"`, `id="health"`, "ci.yml", "run=42"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := handlerWith(&stubHistory{
+				enabled: true,
+				jobs:    JobList{Jobs: []Job{sampleJob()}, Total: 1},
+				runs: WorkflowList{Runs: []WorkflowRun{
+					{Repository: "acme/api", Workflow: "ci.yml", RunID: 42, Jobs: 2, StartedAt: now.Add(-time.Hour)},
+				}, Total: 1},
+			})
+
+			rec := httptest.NewRecorder()
+			tc.pick(h)(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			body := rec.Body.String()
+			for _, want := range tc.want {
+				assert.Contains(t, body, want)
+			}
+		})
+	}
+}
+
+// The search box is a filter like any other, so it has to survive a plain page
+// load rather than only a signal round-trip.
+func TestJobsPageAppliesQueryStringFilters(t *testing.T) {
+	t.Parallel()
+
+	hist := &stubHistory{enabled: true}
+	h := handlerWith(hist)
+
+	rec := httptest.NewRecorder()
+	h.Jobs(rec, httptest.NewRequest(http.MethodGet, "/jobs?repo=acme%2Fapi&q=deploy&outcome=failed&run=42", nil))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "acme/api", hist.gotFilter.Repository, "a deep link's filters must reach the store")
+	assert.Equal(t, "deploy", hist.gotFilter.Search)
+	assert.Equal(t, JobFailed, hist.gotFilter.Outcome)
+	assert.Equal(t, int64(42), hist.gotFilter.RunID)
+	assert.Equal(t, historyRows, hist.gotFilter.Limit, "the page cap is the builder's, not the caller's")
+	assert.Contains(t, rec.Body.String(), `value="deploy"`, "the box shows what is being searched for")
+}
+
+func TestJobDetailPageRendersAndFourOhFours(t *testing.T) {
+	t.Parallel()
+
+	found := handlerWith(&stubHistory{enabled: true, job: sampleJob(), jobFound: true})
+	rec := httptest.NewRecorder()
+	found.JobDetail(rec, httptest.NewRequest(http.MethodGet, "/jobs/7", nil), "7")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `id="resources"`, "the usage panel is a patch target")
+
+	missing := handlerWith(&stubHistory{enabled: true})
+	for _, id := range []string{"7", "not-a-number", "0", "-3"} {
+		rec := httptest.NewRecorder()
+		missing.JobDetail(rec, httptest.NewRequest(http.MethodGet, "/jobs/"+id, nil), id)
+		assert.Equal(t, http.StatusNotFound, rec.Code, "GET /jobs/%s", id)
+		// A 404 still renders the dashboard rather than a bare string, so the
+		// tab strip is there to click out of.
+		assert.Contains(t, rec.Body.String(), `id="health"`, "GET /jobs/%s", id)
+	}
+}
+
+// Every id the stream patches has to exist in the initial document, or the
+// first push lands nowhere and that region silently stops updating.
+func TestHistoryStreamsPatchOnlyRenderedRegions(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// Each subtest builds its own handler: stubHistory records what it was
+		// asked, and these run in parallel.
+		stream  func(*Handler) http.HandlerFunc
+		page    func(*Handler) http.HandlerFunc
+		path    string
+		regions []string
+	}{
+		{
+			"jobs",
+			func(h *Handler) http.HandlerFunc { return h.StreamJobs },
+			func(h *Handler) http.HandlerFunc { return h.Jobs },
+			"/jobs", []string{"filterbar", "jobs", "health"},
+		},
+		{
+			"workflows",
+			func(h *Handler) http.HandlerFunc { return h.StreamWorkflows },
+			func(h *Handler) http.HandlerFunc { return h.Workflows },
+			"/workflows", []string{"filterbar", "workflows", "health"},
+		},
+		{
+			"job detail",
+			func(h *Handler) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) { h.StreamJob(w, r, "7") }
+			},
+			func(h *Handler) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) { h.JobDetail(w, r, "7") }
+			},
+			"/jobs/7",
+			[]string{"tiles", "resources", "facts", "health"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := handlerWith(&stubHistory{
+				enabled:  true,
+				jobs:     JobList{Jobs: []Job{sampleJob()}, Total: 1},
+				job:      sampleJob(),
+				jobFound: true,
+			})
+
+			page := httptest.NewRecorder()
+			tc.page(handler)(page, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			rendered := page.Body.String()
+
+			srv := httptest.NewServer(tc.stream(handler))
+			defer srv.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+			require.NoError(t, err)
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+			assert.Positive(t, readUntilSignal(t, bufio.NewReader(resp.Body)),
+				"the initial paint should carry element patches")
+
+			for _, id := range tc.regions {
+				assert.Contains(t, rendered, `id="`+id+`"`,
+					"the stream patches %q, so the page must render it", id)
+			}
+		})
+	}
+}
+
+// A job that vanished — swept by retention while someone had its page open —
+// ends the stream rather than erroring. On a store with a retention window
+// that is the normal end of a job page's life.
+func TestJobStreamEndsWhenTheJobGoesAway(t *testing.T) {
+	t.Parallel()
+
+	handler := handlerWith(&stubHistory{enabled: true})
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) { handler.StreamJob(w, r, "7") }))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err, "the stream should close cleanly, not hang")
+
+	// The address-bar sync is written before the first render, so it is there
+	// either way. What must be absent is any region: the loop has to bail on
+	// the missing job before rendering one, and never send a _seq that would
+	// reset the browser's staleness counter for a page that is not updating.
+	assert.NotContains(t, string(body), `id="tiles"`, "a job that is not there has no regions")
+	assert.NotContains(t, string(body), `id="resources"`)
+	assert.NotContains(t, string(body), "_seq", "nor a sequence bump")
+}
+
+// A non-numeric id never reaches the builder: the stream is addressed by the
+// store's row id, and a parse failure there is a missing page.
+func TestJobStreamRejectsANonNumericID(t *testing.T) {
+	t.Parallel()
+
+	handler := handlerWith(&stubHistory{enabled: true, job: sampleJob(), jobFound: true})
+	rec := httptest.NewRecorder()
+	handler.StreamJob(rec, httptest.NewRequest(http.MethodGet, "/stream/jobs/nope", nil), "nope")
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// The history tabs came after autorefresh became opt-in, so they have to obey
+// it too: a filter click on a paused page opens a stream that paints the new
+// table once and closes, rather than holding a connection open per tab.
+func TestHistoryStreamsHonourTheAutorefreshToggle(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		stream func(*Handler) http.HandlerFunc
+	}{
+		{"jobs", func(h *Handler) http.HandlerFunc { return h.StreamJobs }},
+		{"workflows", func(h *Handler) http.HandlerFunc { return h.StreamWorkflows }},
+		{
+			"job detail",
+			func(h *Handler) http.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request) { h.StreamJob(w, r, "7") }
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := handlerWith(&stubHistory{
+				enabled:  true,
+				jobs:     JobList{Jobs: []Job{sampleJob()}, Total: 1},
+				job:      sampleJob(),
+				jobFound: true,
+			})
+			srv := httptest.NewServer(tc.stream(handler))
+			defer srv.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+				streamAt(t, srv.URL, Signals{}), nil)
+			require.NoError(t, err)
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			reader := bufio.NewReader(resp.Body)
+			assert.NotZero(t, readUntilSignal(t, reader), "the paused stream sent no element patches")
+
+			// The table the click asked for is on screen, so the connection
+			// must end. Leaving it open would make the toggle a label.
+			done := make(chan error, 1)
+			go func() {
+				_, err := io.ReadAll(reader)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				assert.NoError(t, err, "the paused stream should end cleanly")
+			case <-time.After(5 * time.Second):
+				t.Fatal("a paused stream stayed open")
+			}
+		})
+	}
+}
+
+// And with the toggle on they stay open and re-render, so a job's usage chart
+// follows a run that is still going.
+func TestLiveJobStreamStaysOpenAndRepaints(t *testing.T) {
+	t.Parallel()
+
+	h := hub.New()
+	handler := handlerWith(&stubHistory{
+		enabled: true,
+		jobs:    JobList{Jobs: []Job{sampleJob()}, Total: 1},
+	})
+	handler.Hub = h
+	srv := httptest.NewServer(http.HandlerFunc(handler.StreamJobs))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		streamAt(t, srv.URL, Signals{Live: true}), nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	reader := bufio.NewReader(resp.Body)
+	require.NotZero(t, readUntilSignal(t, reader), "no initial paint")
+
+	// A fleet change has to reach a live history tab, or a job that just
+	// finished keeps reading as running until someone reloads.
+	h.Broadcast(now.Add(time.Second))
+	assert.NotPanics(t, func() { readUntilSignal(t, reader) },
+		"a live stream should paint again on a fleet change")
 }

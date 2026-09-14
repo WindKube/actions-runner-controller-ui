@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -61,6 +62,145 @@ func TestWritePreview(t *testing.T) {
 	require.True(t, ok, "preview runner missing")
 	runner.Stream = "/stream/runners/arc-ubuntu-2xl-r7k2p"
 	write(t, dir, "runner.html", css, runner.Page, RunnerPage(runner))
+
+	workflows := b.Workflows(ctx, sig, previewNow)
+	workflows.Stream = "/stream/workflows"
+	write(t, dir, "workflows.html", css, workflows.Page, WorkflowsPage(workflows))
+
+	jobs := b.Jobs(ctx, sig, previewNow)
+	jobs.Stream = "/stream/jobs"
+	write(t, dir, "jobs.html", css, jobs.Page, JobsPage(jobs))
+
+	job, ok := b.Job(ctx, previewJobID, sig, previewNow)
+	require.True(t, ok, "preview job missing")
+	job.Stream = fmt.Sprintf("/stream/jobs/%d", previewJobID)
+	write(t, dir, "job.html", css, job.Page, JobPage(job))
+}
+
+// previewJobID is the job the detail preview renders — the one with a full
+// series behind it, so the chart has something to draw.
+const previewJobID = 1
+
+// previewJobs is a window of job history: a mix of outcomes, two repositories,
+// one job still running, and one that ARC reported no run id for.
+func previewJobs() []Job {
+	mins := func(n int) time.Time { return previewNow.Add(-time.Duration(n) * time.Minute) }
+	return []Job{
+		{
+			ID: previewJobID, Runner: "arc-ubuntu-2xl-r7k2p", Set: "arc-ubuntu-2xl",
+			Repository: "WindKube/platform", Workflow: "ci.yml", Name: "build (ubuntu-2xl)",
+			RunID: 4_182_993, StartedAt: mins(42), Succeeded: false,
+			CPUSeconds: 2_940, MemGiBSecs: 5_880,
+			// The detail preview is rendered from this row. Memory is
+			// burstable and CPU has no limit, which is the ARC default and
+			// gives the chart one line on one axis and two on the other.
+			CPURequest: 2, MemRequest: 3 * fleet.GiB, MemLimit: 4 * fleet.GiB,
+		},
+		{
+			ID: 2, Runner: "arc-ubuntu-2xl-h9z1w", Set: "arc-ubuntu-2xl",
+			Repository: "WindKube/platform", Workflow: "ci.yml", Name: "test (integration)",
+			RunID: 4_182_993, StartedAt: mins(41), FinishedAt: mins(12), Succeeded: true,
+			CPUSeconds: 3_180, MemGiBSecs: 7_420,
+		},
+		{
+			ID: 3, Runner: "arc-arm64-graviton-b2k7d", Set: "arc-arm64-graviton",
+			Repository: "WindKube/actions-runner-controller-ui", Workflow: "release.yml",
+			Name: "publish", RunID: 4_182_871, StartedAt: mins(96), FinishedAt: mins(74),
+			Succeeded: false, CPUSeconds: 1_104, MemGiBSecs: 2_030,
+		},
+		{
+			ID: 4, Runner: "arc-ubuntu-2xl-x7p3r", Set: "arc-ubuntu-2xl",
+			Repository: "WindKube/platform", Workflow: "nightly.yml", Name: "e2e",
+			StartedAt: mins(188), FinishedAt: mins(41), Succeeded: true,
+			CPUSeconds: 26_400, MemGiBSecs: 61_200,
+		},
+	}
+}
+
+// Jobs is the window's job history, narrowed the way the store would narrow
+// it. The filtering is deliberately real rather than ignored: the preview is
+// how the filter bar's own rendering gets checked.
+func (previewHistory) Jobs(_ context.Context, f JobFilter, _ Window) (JobList, error) {
+	var out []Job
+	for _, j := range previewJobs() {
+		if f.Repository != "" && j.Repository != f.Repository {
+			continue
+		}
+		if f.Workflow != "" && j.Workflow != f.Workflow {
+			continue
+		}
+		out = append(out, j)
+	}
+	return JobList{Jobs: out, Total: 4_312}, nil
+}
+
+// Workflows rolls the same jobs up the way the store's GROUP BY would.
+func (previewHistory) Workflows(_ context.Context, _ JobFilter, _ Window) (WorkflowList, error) {
+	mins := func(n int) time.Time { return previewNow.Add(-time.Duration(n) * time.Minute) }
+	return WorkflowList{
+		Runs: []WorkflowRun{
+			{
+				Repository: "WindKube/platform", Workflow: "ci.yml", RunID: 4_182_993,
+				Jobs: 12, Running: 1, Failed: 0, StartedAt: mins(42),
+				CPUSeconds: 18_240, MemGiBSecs: 41_100,
+			},
+			{
+				Repository: "WindKube/actions-runner-controller-ui", Workflow: "release.yml",
+				RunID: 4_182_871, Jobs: 3, Failed: 1, StartedAt: mins(96), FinishedAt: mins(74),
+				CPUSeconds: 3_312, MemGiBSecs: 6_090,
+			},
+			{
+				Repository: "WindKube/platform", Workflow: "nightly.yml",
+				Jobs: 5, StartedAt: mins(188), FinishedAt: mins(41),
+				CPUSeconds: 44_800, MemGiBSecs: 98_300,
+			},
+		},
+		Total: 187,
+	}, nil
+}
+
+// Job returns one of the fixtures above by id.
+func (h previewHistory) Job(_ context.Context, id int) (Job, bool, error) {
+	for _, j := range previewJobs() {
+		if j.ID == id {
+			return j, true, nil
+		}
+	}
+	return Job{}, false, nil
+}
+
+// JobSeries is a job ramping up and then holding, which is the shape a build
+// actually makes and the one that shows whether the chart's peak scaling is
+// right.
+func (previewHistory) JobSeries(_ context.Context, id int, _ Window) (JobSeries, error) {
+	if id != previewJobID {
+		return JobSeries{}, nil
+	}
+	const n = 42
+	out := JobSeries{
+		At:  make([]time.Time, 0, n),
+		CPU: make([]float64, 0, n),
+		Mem: make([]float64, 0, n),
+	}
+	for i := range n {
+		at := previewNow.Add(-time.Duration(n-i) * time.Minute)
+		ramp := math.Min(1, float64(i)/8)
+		wobble := 0.18 * math.Sin(float64(i)/2.3)
+		out.At = append(out.At, at)
+		out.CPU = append(out.CPU, 1.15*ramp+wobble)
+		out.Mem = append(out.Mem, (2.4*ramp+0.4*wobble)*fleet.GiB)
+	}
+	return out, nil
+}
+
+// Facets are the dropdown options, which on a real store come from what the
+// window contains rather than from the whole table.
+func (previewHistory) Facets(context.Context, Window) (JobFacets, error) {
+	return JobFacets{
+		Repositories: []string{"WindKube/actions-runner-controller-ui", "WindKube/platform"},
+		Workflows:    []string{"ci.yml", "nightly.yml", "release.yml"},
+		Sets:         []string{"arc-arm64-graviton", "arc-ubuntu-2xl"},
+	}, nil
 }
 
 func write(t *testing.T, dir, name string, css []byte, p Page, body templ.Component) {
@@ -222,7 +362,7 @@ func previewEvents() []fleet.Event {
 // previewHistory synthesises plausible series so every chart has something to
 // draw. The shapes are deliberately uneven — a flat sine would hide exactly the
 // alignment bugs this preview exists to catch.
-type previewHistory struct{}
+type previewHistory struct{ NoHistory }
 
 // Failures is a lane with more in the window than fits on it, which is the
 // state the "+N more" footer exists for.
@@ -248,6 +388,7 @@ func (previewHistory) Stats(context.Context) (StoreStats, error) {
 		SizeBytes:   47 * 1024 * 1024,
 		Samples:     3_214_887,
 		Jobs:        18_402,
+		JobSamples:  742_118,
 		Phases:      91_755,
 		ChurnEvents: 36_804,
 		Failures:    1_142,
