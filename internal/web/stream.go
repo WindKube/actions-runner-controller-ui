@@ -94,6 +94,40 @@ func (h *Handler) RunnerDetail(w http.ResponseWriter, r *http.Request, name stri
 	h.render(w, r, d.Page, RunnerPage(d))
 }
 
+// Workflows serves the workflow-run history.
+func (h *Handler) Workflows(w http.ResponseWriter, r *http.Request) {
+	sig := SignalsFromQuery(r.URL.Query())
+	v := h.Builder.Workflows(r.Context(), sig, h.now())
+	v.Stream = "/stream/workflows"
+	h.render(w, r, v.Page, WorkflowsPage(v))
+}
+
+// Jobs serves the job history.
+func (h *Handler) Jobs(w http.ResponseWriter, r *http.Request) {
+	sig := SignalsFromQuery(r.URL.Query())
+	v := h.Builder.Jobs(r.Context(), sig, h.now())
+	v.Stream = "/stream/jobs"
+	h.render(w, r, v.Page, JobsPage(v))
+}
+
+// JobDetail serves one job's usage. The id is the history store's row id, so a
+// non-numeric one is a 404 rather than a parse error on the page.
+func (h *Handler) JobDetail(w http.ResponseWriter, r *http.Request, id string) {
+	sig := SignalsFromQuery(r.URL.Query())
+	n, err := strconv.Atoi(id)
+	if err != nil || n <= 0 {
+		h.notFound(w, r, sig, "job", id)
+		return
+	}
+	v, ok := h.Builder.Job(r.Context(), n, sig, h.now())
+	if !ok {
+		h.notFound(w, r, sig, "job", id)
+		return
+	}
+	v.Stream = "/stream/jobs/" + id
+	h.render(w, r, v.Page, JobPage(v))
+}
+
 // events fetches a runner's pod events, tolerating both a missing source and a
 // failed lookup: an empty events panel is a much better outcome than a 500 on
 // the page that explains why a runner failed.
@@ -157,6 +191,60 @@ func (h *Handler) StreamOverview(w http.ResponseWriter, r *http.Request) {
 			"failures":    FailuresPanel(o),
 			"store":       StoreFooter(o),
 			"health":      HealthStrip(o.Page),
+		}, true
+	})
+}
+
+// StreamWorkflows keeps the workflow-run table live.
+func (h *Handler) StreamWorkflows(w http.ResponseWriter, r *http.Request) {
+	h.stream(w, r, "/stream/workflows", func(ctx context.Context, sig Signals, now time.Time) (regionSet, bool) {
+		v := h.Builder.Workflows(ctx, sig, now)
+		v.Stream = "/stream/workflows"
+		return regionSet{
+			"filterbar": HistoryFilterBar(v.Selects, v.Search, v.Summary, v.Stream),
+			"workflows": WorkflowsTable(v),
+			"health":    HealthStrip(v.Page),
+		}, true
+	})
+}
+
+// StreamJobs keeps the job table live.
+func (h *Handler) StreamJobs(w http.ResponseWriter, r *http.Request) {
+	h.stream(w, r, "/stream/jobs", func(ctx context.Context, sig Signals, now time.Time) (regionSet, bool) {
+		v := h.Builder.Jobs(ctx, sig, now)
+		v.Stream = "/stream/jobs"
+		return regionSet{
+			"filterbar": HistoryFilterBar(v.Selects, v.Search, v.Summary, v.Stream),
+			"jobs":      JobsTable(v),
+			"health":    HealthStrip(v.Page),
+		}, true
+	})
+}
+
+// StreamJob keeps one job's detail view live.
+//
+// A finished job is immutable and its regions stop changing, which the stream
+// handles for free: patch only sends a region whose markup differs from what
+// this client last received, so a completed job costs a heartbeat and nothing
+// else.
+func (h *Handler) StreamJob(w http.ResponseWriter, r *http.Request, id string) {
+	n, err := strconv.Atoi(id)
+	if err != nil || n <= 0 {
+		http.NotFound(w, r)
+		return
+	}
+	url := "/stream/jobs/" + id
+	h.stream(w, r, url, func(ctx context.Context, sig Signals, now time.Time) (regionSet, bool) {
+		v, ok := h.Builder.Job(ctx, n, sig, now)
+		if !ok {
+			return nil, false
+		}
+		v.Stream = url
+		return regionSet{
+			"tiles":     JobTiles(v),
+			"resources": JobResources(v),
+			"facts":     JobFacts(v),
+			"health":    HealthStrip(v.Page),
 		}, true
 	})
 }
