@@ -1474,6 +1474,50 @@ func TestHistoryFilterDropdownsComeFromTheWindow(t *testing.T) {
 	assert.False(t, wKeys["outcome"], "the workflows tab has no outcome dropdown")
 }
 
+// A runner leaves the informer cache the moment its job ends, so a fleet bar
+// built from the snapshot alone can only name work in flight — and the
+// repository whose build failed twenty minutes ago is the one an operator
+// arrives looking for.
+func TestFleetFilterDropdownsOfferWhatTheWindowRecorded(t *testing.T) {
+	t.Parallel()
+
+	h := &stubHistory{
+		enabled: true,
+		facets: JobFacets{
+			Repositories: []string{"WindKube/payments", "WindKube/web-api"},
+			Workflows:    []string{"nightly.yml"},
+			Jobs:         []string{"playwright"},
+			Sets:         []string{"arc-retired"},
+		},
+	}
+	v := builderWith(h).Overview(context.Background(), Signals{}, now)
+
+	byKey := map[string]fleet.Select{}
+	for _, s := range v.Selects {
+		byKey[s.Key] = s
+	}
+
+	// web-api is busy right now and also recorded; it must appear once.
+	assert.Equal(t, []string{"all", "WindKube/payments", "WindKube/web-api"},
+		optionValues(byKey["repo"]), "the bar names what ran, not only what is running")
+	assert.Contains(t, optionValues(byKey["workflow"]), "nightly.yml")
+	assert.Contains(t, optionValues(byKey["job"]), "playwright")
+	assert.Contains(t, optionValues(byKey["set"]), "arc-retired")
+}
+
+// Selecting one of those values narrows the live fleet and nothing else: the
+// snapshot has no runner for it, and the charts could not follow it anyway —
+// samples are dimensioned by fleet, set and runner, and carry no repository.
+func TestFleetFilterOnARecordedValueReportsNoMatches(t *testing.T) {
+	t.Parallel()
+
+	h := &stubHistory{enabled: true, facets: JobFacets{Repositories: []string{"WindKube/gone"}}}
+	v := builderWith(h).Overview(context.Background(), Signals{Repo: "WindKube/gone"}, now)
+
+	assert.Empty(t, v.Runners, "no live runner carries that repository")
+	assert.Equal(t, "0 of 3 runners match 1 filter", v.Summary)
+}
+
 // A filter the window no longer contains is kept rather than silently dropped,
 // or the select would show a different filter than the URL says is applied.
 func TestUnmatchedFilterValueIsKept(t *testing.T) {

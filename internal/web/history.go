@@ -303,10 +303,11 @@ type JobSeries struct {
 func (s JobSeries) Len() int { return len(s.At) }
 
 // JobFacets are the distinct values the window contains, for the filter
-// dropdowns above the two tabs.
+// dropdowns. Each slice is already capped and sorted by the store.
 type JobFacets struct {
 	Repositories []string
 	Workflows    []string
+	Jobs         []string
 	Sets         []string
 }
 

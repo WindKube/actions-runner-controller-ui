@@ -21,6 +21,15 @@ import (
 // change, for every connected browser.
 const statsTTL = time.Minute
 
+// facetsTTL bounds how stale a filter dropdown's options may be.
+//
+// Each facet is a DISTINCT over every job in the window, four of them per call,
+// and the filter bar is rebuilt on every snapshot change for every connected
+// browser. Nothing currently running goes missing for half a minute because of
+// it: the fleet bar unions these with the live snapshot, and history is by
+// definition already over.
+const facetsTTL = 30 * time.Second
+
 // Queries is the slice of the store this adapter uses. Declaring it as an
 // interface keeps the adapter testable without a database.
 type Queries interface {
@@ -41,15 +50,22 @@ type Queries interface {
 type Adapter struct {
 	Q Queries
 
-	// stats memoises Q.Stats. A nil cache counts on every call, which is what a
-	// zero-valued Adapter does; New always supplies one.
-	stats *statsCache
+	// stats and facets memoise the two queries whose cost follows the size of
+	// the store rather than the size of the window. A nil cache queries on
+	// every call, which is what a zero-valued Adapter does; New always
+	// supplies both.
+	stats  *statsCache
+	facets *facetCache
 }
 
 var _ web.History = Adapter{}
 
 func New(q Queries) Adapter {
-	return Adapter{Q: q, stats: &statsCache{clock: time.Now}}
+	return Adapter{
+		Q:      q,
+		stats:  &statsCache{clock: time.Now},
+		facets: &facetCache{clock: time.Now},
+	}
 }
 
 // statsCache holds one memoised store.Stats answer.
@@ -59,6 +75,19 @@ type statsCache struct {
 
 	at  time.Time
 	val web.StoreStats
+}
+
+// facetCache holds one memoised answer per range width.
+type facetCache struct {
+	mu    sync.Mutex
+	clock func() time.Time
+
+	entries map[time.Duration]facetEntry
+}
+
+type facetEntry struct {
+	at  time.Time
+	val web.JobFacets
 }
 
 // Failures returns the newest failures in the window plus the window's total.
@@ -358,6 +387,45 @@ func (a Adapter) JobSeries(ctx context.Context, id int, w web.Window) (web.JobSe
 
 // Facets returns the distinct values the window contains.
 func (a Adapter) Facets(ctx context.Context, w web.Window) (web.JobFacets, error) {
+	if a.facets == nil {
+		return a.readFacets(ctx, w)
+	}
+	return a.facets.get(ctx, w, a.readFacets)
+}
+
+// get returns the memoised facets for this window's width, or reads fresh ones.
+//
+// The key is the width rather than the window itself: To is always about now,
+// so keying on the pair would miss on every tick. ParseRange admits six widths,
+// which is the whole key space.
+func (c *facetCache) get(
+	ctx context.Context,
+	w web.Window,
+	read func(context.Context, web.Window) (web.JobFacets, error),
+) (web.JobFacets, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := c.clock()
+	width := w.To.Sub(w.From)
+	if e, ok := c.entries[width]; ok && now.Sub(e.at) < facetsTTL {
+		return e.val, nil
+	}
+
+	val, err := read(ctx, w)
+	if err != nil {
+		return web.JobFacets{}, err
+	}
+
+	if c.entries == nil {
+		c.entries = make(map[time.Duration]facetEntry)
+	}
+	c.entries[width] = facetEntry{at: now, val: val}
+	return val, nil
+}
+
+// readFacets asks the store and maps its answer onto the view contract.
+func (a Adapter) readFacets(ctx context.Context, w web.Window) (web.JobFacets, error) {
 	f, err := a.Q.JobFacets(ctx, rng(w))
 	if err != nil {
 		return web.JobFacets{}, err
@@ -365,6 +433,7 @@ func (a Adapter) Facets(ctx context.Context, w web.Window) (web.JobFacets, error
 	return web.JobFacets{
 		Repositories: f.Repositories,
 		Workflows:    f.Workflows,
+		Jobs:         f.Jobs,
 		Sets:         f.Sets,
 	}, nil
 }

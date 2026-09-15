@@ -100,13 +100,29 @@ type Select struct {
 	Filtering bool
 }
 
-// Selects builds the five filter dropdowns from what the fleet actually
-// contains, so a dimension never offers a value that would match nothing.
-func (f Filter) Selects(s Snapshot) []Select {
-	repos := distinct(s.Runners, func(r Runner) string { return r.Job.Repository })
-	workflows := distinct(s.Runners, func(r Runner) string { return r.Job.Workflow })
-	jobs := distinct(s.Runners, func(r Runner) string { return r.Job.Name })
-	setNames := distinct(s.Sets, func(set RunnerSet) string { return set.Name })
+// Facets are values a dimension offers beyond what the live snapshot holds:
+// what the history store saw run earlier in the window.
+//
+// A runner is gone from the informer cache the moment its job ends, so without
+// these the bar can only ever name work that is running this instant — and the
+// repository whose build failed twenty minutes ago is exactly the one an
+// operator arrives looking for. A zero Facets leaves the bar showing the live
+// fleet alone, which is what a dashboard with no store does.
+type Facets struct {
+	Repos     []string
+	Workflows []string
+	Jobs      []string
+	Sets      []string
+}
+
+// Selects builds the five filter dropdowns from what the fleet holds now and
+// what the window recorded, so a dimension never offers a value that would
+// match nothing in either.
+func (f Filter) Selects(s Snapshot, known Facets) []Select {
+	repos := distinct(s.Runners, func(r Runner) string { return r.Job.Repository }, known.Repos)
+	workflows := distinct(s.Runners, func(r Runner) string { return r.Job.Workflow }, known.Workflows)
+	jobs := distinct(s.Runners, func(r Runner) string { return r.Job.Name }, known.Jobs)
+	setNames := distinct(s.Sets, func(set RunnerSet) string { return set.Name }, known.Sets)
 	states := lo.Map(AllStates(), func(st State, _ int) string { return string(st) })
 
 	return []Select{
@@ -118,14 +134,21 @@ func (f Filter) Selects(s Snapshot) []Select {
 	}
 }
 
-// distinct collects the sorted, deduplicated values key reports for items.
-func distinct[T any](items []T, key func(T) string) []string {
-	seen := make(map[string]struct{}, len(items))
-	for _, item := range items {
+// distinct collects the sorted, deduplicated values key reports for items,
+// merged with values the live fleet no longer holds.
+func distinct[T any](items []T, key func(T) string, known []string) []string {
+	seen := make(map[string]struct{}, len(items)+len(known))
+	add := func(v string) {
 		// An idle runner has no repository or job; those are absences, not values.
-		if v := key(item); v != "" && v != "—" {
+		if v != "" && v != "—" {
 			seen[v] = struct{}{}
 		}
+	}
+	for _, item := range items {
+		add(key(item))
+	}
+	for _, v := range known {
+		add(v)
 	}
 	return slices.Sorted(maps.Keys(seen))
 }

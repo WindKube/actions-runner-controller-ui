@@ -248,11 +248,17 @@ type JobPoint struct {
 }
 
 // JobFacets are the distinct values a window actually contains, which is what
-// the filter dropdowns above the two tabs are built from. A dimension never
-// offers a value that would match nothing.
+// the filter dropdowns are built from. A dimension never offers a value that
+// would match nothing.
+//
+// Each slice is capped at MaxFacetValues, keeping the most recently active
+// values: Jobs in particular is unbounded in principle — one name per job in a
+// matrix, per workflow, per repository — and the whole set is re-rendered into
+// the filter bar on every push.
 type JobFacets struct {
 	Repositories []string
 	Workflows    []string
+	Jobs         []string
 	Sets         []string
 }
 

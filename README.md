@@ -21,6 +21,7 @@ ago.**
 
 - [Why](#why)
 - [Screenshots](#screenshots)
+- [Filters](#filters)
 - [Workflows and Jobs](#workflows-and-jobs)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
@@ -92,6 +93,28 @@ The fleet overview is the screenshot at the top of this page.
 
 These are generated from fixture data, not a live cluster, so they are
 reproducible — see [Regenerating the screenshots](#regenerating-the-screenshots).
+
+## Filters
+
+Every tab's filter bar offers what the **selected range** contains, not only
+what is running this instant. An ephemeral runner leaves the cluster the moment
+its job ends, so a bar built from the live fleet alone could only ever name work
+in flight — and the repository whose build failed twenty minutes ago is the one
+you arrived looking for. Widen the range to go further back; the store keeps job
+rows for `ARC_UI_RETENTION_SCOPE_5M` (30 days by default), which is also the
+widest the picker goes.
+
+Two consequences worth knowing:
+
+- **On the Fleet tab a recorded value narrows the live fleet, and nothing
+  else.** Pick a repository with no runner on it now and the page honestly says
+  `0 of N runners match`. The charts there cannot follow it either: samples are
+  dimensioned by fleet, set and runner, and carry no repository or workflow.
+  **Workflows** and **Jobs** are the tabs that answer questions about finished
+  work.
+- **Each dropdown is capped at 200 values**, keeping the most recently active.
+  Distinct job names over a month of a busy fleet are otherwise unbounded, and
+  the whole list is re-rendered into the page on every push.
 
 ## Workflows and Jobs
 
