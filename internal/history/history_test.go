@@ -14,11 +14,16 @@ import (
 )
 
 // countingQueries answers the store contract with fixtures and counts how often
-// Stats was asked, which is the whole point of the cache under test.
+// the memoised queries were asked, which is the whole point of the caches under
+// test.
 type countingQueries struct {
 	stats      store.Stats
 	statsErr   error
 	statsCalls int
+
+	facets      store.JobFacets
+	facetsErr   error
+	facetsCalls int
 
 	failures      []store.FailureRecord
 	failuresTotal int64
@@ -61,7 +66,8 @@ func (q *countingQueries) JobSeries(context.Context, int, store.Range) ([]store.
 }
 
 func (q *countingQueries) JobFacets(context.Context, store.Range) (store.JobFacets, error) {
-	return store.JobFacets{}, nil
+	q.facetsCalls++
+	return q.facets, q.facetsErr
 }
 
 func (q *countingQueries) Failures(_ context.Context, setName string, _ store.Range, limit int) ([]store.FailureRecord, int64, error) {
@@ -257,7 +263,13 @@ func (q *jobQueries) Job(context.Context, int) (store.JobRecord, bool, error) {
 }
 
 func (q *jobQueries) JobFacets(context.Context, store.Range) (store.JobFacets, error) {
-	return store.JobFacets{Repositories: []string{"acme/api"}, Workflows: []string{"ci.yml"}}, nil
+	q.facetsCalls++
+	return store.JobFacets{
+		Repositories: []string{"acme/api"},
+		Workflows:    []string{"ci.yml"},
+		Jobs:         []string{"build"},
+		Sets:         []string{"linux-x64"},
+	}, nil
 }
 
 func TestJobsMapOntoTheViewContract(t *testing.T) {
@@ -361,4 +373,71 @@ func TestFacetsMapOntoTheViewContract(t *testing.T) {
 	require.NoError(t, err, "Facets")
 	assert.Equal(t, []string{"acme/api"}, got.Repositories)
 	assert.Equal(t, []string{"ci.yml"}, got.Workflows)
+	assert.Equal(t, []string{"build"}, got.Jobs, "job names did not survive the mapping")
+	assert.Equal(t, []string{"linux-x64"}, got.Sets)
+}
+
+// Four DISTINCTs over every job in the window, rebuilt into the filter bar on
+// every snapshot change for every connected browser. The fleet bar unions these
+// with the live snapshot, so the TTL delays nothing that is running.
+func TestFacetsAreNotRequeriedWithinTheirTTL(t *testing.T) {
+	t.Parallel()
+
+	q := &countingQueries{}
+	a := New(q)
+	c := &clock{at: time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)}
+	a.facets.clock = c.now
+
+	_, err := a.Facets(t.Context(), window())
+	require.NoError(t, err, "first Facets")
+
+	c.at = c.at.Add(facetsTTL - time.Second)
+	_, err = a.Facets(t.Context(), window())
+	require.NoError(t, err, "second Facets")
+	assert.Equal(t, 1, q.facetsCalls, "want one read for two renders inside the TTL")
+
+	c.at = c.at.Add(time.Second)
+	_, err = a.Facets(t.Context(), window())
+	require.NoError(t, err, "third Facets")
+	assert.Equal(t, 2, q.facetsCalls, "want a fresh read once the TTL has passed")
+}
+
+// Ranges are cached apart, or switching the picker from 1h to 30d would serve
+// the hour's options for the next half minute.
+func TestFacetsAreCachedPerRangeWidth(t *testing.T) {
+	t.Parallel()
+
+	q := &countingQueries{}
+	a := New(q)
+	c := &clock{at: time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)}
+	a.facets.clock = c.now
+
+	wide := window()
+	narrow := web.Window{From: wide.To.Add(-time.Hour), To: wide.To, Points: 60}
+
+	for _, w := range []web.Window{wide, narrow, wide, narrow} {
+		_, err := a.Facets(t.Context(), w)
+		require.NoError(t, err, "Facets")
+	}
+	assert.Equal(t, 2, q.facetsCalls, "want one read per width, not one per call")
+}
+
+// Same reasoning as the stats cache: a database busy for milliseconds must not
+// empty every dropdown for the next half minute.
+func TestFacetsErrorIsNotMemoised(t *testing.T) {
+	t.Parallel()
+
+	q := &countingQueries{facetsErr: errors.New("database is locked")}
+	a := New(q)
+
+	_, err := a.Facets(t.Context(), window())
+	require.Error(t, err, "want the store error surfaced")
+
+	q.facetsErr = nil
+	q.facets = store.JobFacets{Repositories: []string{"acme/api"}}
+	got, err := a.Facets(t.Context(), window())
+	require.NoError(t, err, "want a retry after the failure")
+
+	assert.Equal(t, 2, q.facetsCalls, "a failed read must not be cached")
+	assert.Equal(t, []string{"acme/api"}, got.Repositories)
 }
