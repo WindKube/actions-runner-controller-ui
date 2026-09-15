@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -1646,7 +1647,29 @@ func TestJobFacetsOfferOnlyWhatTheWindowHolds(t *testing.T) {
 	assert.Equal(t, []string{"acme/api", "acme/web"}, facets.Repositories,
 		"a dropdown must not offer a value that would match nothing")
 	assert.Equal(t, []string{"ci.yml", "nightly.yml", "release.yml"}, facets.Workflows)
+	assert.Equal(t, []string{"build", "e2e_suite", "publish", "test"}, facets.Jobs,
+		"job names are a facet in their own right, not only a search term")
 	assert.Equal(t, []string{"linux-x64"}, facets.Sets)
+}
+
+func TestJobFacetsCapKeepsTheMostRecent(t *testing.T) {
+	t.Parallel()
+
+	s := newStore(t)
+	// One more than the cap, oldest first, so the value that must survive is
+	// the one an ORDER BY over the name alone would drop.
+	for i := range MaxFacetValues + 1 {
+		jobAt(t, s, "acme/api", "ci.yml", fmt.Sprintf("job-%04d", i), int64(i),
+			base.Add(-time.Hour).Add(time.Duration(i)*time.Second), true)
+	}
+
+	facets, err := s.JobFacets(t.Context(), listRange())
+	require.NoError(t, err, "JobFacets")
+	require.Len(t, facets.Jobs, MaxFacetValues,
+		"a month of a busy fleet's job names must not all reach the filter bar")
+	assert.Equal(t, "job-0001", facets.Jobs[0], "the oldest name is the one dropped")
+	assert.Equal(t, fmt.Sprintf("job-%04d", MaxFacetValues), facets.Jobs[MaxFacetValues-1])
+	assert.True(t, slices.IsSorted(facets.Jobs), "the cap is by recency, the order is for reading")
 }
 
 func TestJobByIDReportsMissingRatherThanFailing(t *testing.T) {

@@ -731,8 +731,17 @@ func (s *Store) JobSeries(ctx context.Context, id int, r Range) ([]JobPoint, err
 	return out, nil
 }
 
-// JobFacets returns the distinct repositories, workflows and runner sets the
-// window contains, each sorted, for the filter dropdowns.
+// MaxFacetValues caps how many options one filter dropdown offers.
+//
+// Two hundred is already past what anyone scrolls, and the cap is what stops a
+// month of a busy fleet's job names becoming a few hundred kilobytes of
+// <option> pushed down every stream. Which two hundred matters more than the
+// number: the most recently active, because a dimension is looked up to find
+// something that just ran.
+const MaxFacetValues = 200
+
+// JobFacets returns the distinct repositories, workflows, job names and runner
+// sets the window contains, each sorted, for the filter dropdowns.
 func (s *Store) JobFacets(ctx context.Context, r Range) (JobFacets, error) {
 	from, to, _, ok := r.window()
 	if !ok {
@@ -746,15 +755,22 @@ func (s *Store) JobFacets(ctx context.Context, r Range) (JobFacets, error) {
 	}{
 		{"repository", &out.Repositories},
 		{"workflow", &out.Workflows},
+		{"job_name", &out.Jobs},
 		{"set_name", &out.Sets},
 	} {
+		// Ordering by latest activity is what makes the cap keep the useful
+		// end of the list; the rows are sorted into display order afterwards,
+		// because a dropdown is read alphabetically.
+		//
 		// #nosec G202 -- column comes from this literal slice, never a caller
-		q := `SELECT DISTINCT ` + facet.column + ` FROM job_observations WHERE ` +
-			jobWindow + ` AND ` + facet.column + ` <> '' ORDER BY ` + facet.column
-		values, err := s.distinct(ctx, q, to, from)
+		q := `SELECT ` + facet.column + ` FROM job_observations WHERE ` +
+			jobWindow + ` AND ` + facet.column + ` <> '' GROUP BY ` + facet.column +
+			` ORDER BY MAX(started_at) DESC LIMIT ?`
+		values, err := s.distinct(ctx, q, to, from, MaxFacetValues)
 		if err != nil {
 			return JobFacets{}, fmt.Errorf("job facet %s: %w", facet.column, err)
 		}
+		slices.Sort(values)
 		*facet.into = values
 	}
 	return out, nil
