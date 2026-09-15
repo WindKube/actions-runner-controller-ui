@@ -193,12 +193,20 @@ func (previewHistory) JobSeries(_ context.Context, id int, _ Window) (JobSeries,
 }
 
 // Facets are the dropdown options, which on a real store come from what the
-// window contains rather than from the whole table.
+// window contains rather than from the whole table. Several of these are
+// running nothing right now — which is the point: the fleet bar unions them
+// with the live snapshot so the bar names what ran, not only what is running.
 func (previewHistory) Facets(context.Context, Window) (JobFacets, error) {
 	return JobFacets{
-		Repositories: []string{"WindKube/actions-runner-controller-ui", "WindKube/platform"},
-		Workflows:    []string{"ci.yml", "nightly.yml", "release.yml"},
-		Sets:         []string{"arc-arm64-graviton", "arc-ubuntu-2xl"},
+		Repositories: []string{
+			"WindKube/actions-runner-controller-ui", "WindKube/docs",
+			"WindKube/payments", "WindKube/platform", "WindKube/web-api",
+		},
+		Workflows: []string{"ci.yml", "deploy.yml", "nightly.yml", "release.yml"},
+		Jobs: []string{
+			"build (ubuntu-2xl)", "e2e", "lint", "publish-image", "unit-tests",
+		},
+		Sets: []string{"arc-arm64-graviton", "arc-ubuntu-2xl"},
 	}, nil
 }
 

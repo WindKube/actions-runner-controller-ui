@@ -448,6 +448,7 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 	churn, _ := b.History.Churn(ctx, scope, win)
 	repos, _ := b.History.Repos(ctx, win, 8)
 	stats, _ := b.History.Stats(ctx)
+	facets, _ := b.History.Facets(ctx, win)
 
 	// A store that cannot answer leaves the live snapshot, which still knows what is
 	// broken this instant. An empty lane would claim a healthy fleet at the exact
@@ -462,7 +463,7 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 
 	return Overview{
 		Page:       page,
-		Selects:    filter.Selects(snap),
+		Selects:    filter.Selects(snap, fleetFacets(facets)),
 		Summary:    filter.Summary(len(runners), len(snap.Runners), len(snap.Sets)),
 		Active:     filter.Active(),
 		Tiles:      overviewTiles(totals),
@@ -1310,6 +1311,21 @@ func (b *Builder) Job(ctx context.Context, id int, sig Signals, now time.Time) (
 	view.Mem = jobLine("memory", series.Mem, ticks,
 		j.MemRequest, j.MemLimit, strokeMem, fillMem, ToneMemory, fleet.FormatGiB)
 	return view, true
+}
+
+// fleetFacets hands the window's recorded values to the fleet's filter bar.
+//
+// Only the bar is widened by them. The fleet page's own panels still describe
+// the live snapshot, so a value nothing is running under reports zero matches —
+// and its charts could not do otherwise: samples are dimensioned by fleet, set
+// and runner, and carry no repository, workflow or job.
+func fleetFacets(f JobFacets) fleet.Facets {
+	return fleet.Facets{
+		Repos:     f.Repositories,
+		Workflows: f.Workflows,
+		Jobs:      f.Jobs,
+		Sets:      f.Sets,
+	}
 }
 
 // jobSelects builds the filter dropdowns from what the window actually

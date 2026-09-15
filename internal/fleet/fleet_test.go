@@ -85,7 +85,7 @@ func TestFilterSummaryWording(t *testing.T) {
 func TestSelectsOfferOnlyPresentValues(t *testing.T) {
 	t.Parallel()
 
-	byKey := lo.KeyBy(Filter{}.Selects(sampleSnapshot()), func(s Select) string { return s.Key })
+	byKey := lo.KeyBy(Filter{}.Selects(sampleSnapshot(), Facets{}), func(s Select) string { return s.Key })
 
 	// Two busy runners on two repos, plus the "all repositories" entry.
 	assert.Len(t, byKey["repo"].Options, 3)
@@ -96,13 +96,37 @@ func TestSelectsOfferOnlyPresentValues(t *testing.T) {
 	}
 }
 
+func TestSelectsOfferWhatTheWindowRecorded(t *testing.T) {
+	t.Parallel()
+
+	// The fleet is running nothing for WindKube/billing, but the window saw it
+	// an hour ago. Without this the dimension can only name work in flight.
+	byKey := lo.KeyBy(Filter{}.Selects(sampleSnapshot(), Facets{
+		Repos:     []string{"WindKube/billing", "WindKube/web-api"},
+		Workflows: []string{"nightly.yml"},
+		Jobs:      []string{"integration"},
+		Sets:      []string{"arc-retired"},
+	}), func(s Select) string { return s.Key })
+
+	values := func(key string) []string {
+		return lo.Map(byKey[key].Options, func(o Option, _ int) string { return o.Value })
+	}
+
+	// web-api is both live and recorded, and must appear once.
+	assert.Equal(t, []string{AnyValue, "WindKube/billing", "WindKube/payments", "WindKube/web-api"},
+		values("repo"))
+	assert.Contains(t, values("workflow"), "nightly.yml")
+	assert.Contains(t, values("job"), "integration")
+	assert.Contains(t, values("set"), "arc-retired")
+}
+
 func TestSelectsKeepAStaleSelection(t *testing.T) {
 	t.Parallel()
 
-	// A repo present in the URL but absent from the fleet (its runners just
-	// finished) must stay selected, or the page silently shows a different
+	// A repo in neither the fleet nor the window — the URL outlived the
+	// retention — must stay selected, or the page silently shows a different
 	// filter than the address bar claims.
-	sel := Filter{Repo: "WindKube/gone"}.Selects(sampleSnapshot())
+	sel := Filter{Repo: "WindKube/gone"}.Selects(sampleSnapshot(), Facets{})
 
 	found := lo.ContainsBy(sel[0].Options, func(o Option) bool {
 		return o.Value == "WindKube/gone" && o.Selected
