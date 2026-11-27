@@ -9,6 +9,8 @@
 package v1alpha1
 
 import (
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -90,6 +92,9 @@ func (s AutoscalingRunnerSetSpec) ContainerMode() string {
 		}
 		for _, e := range c.Env {
 			if e.Name == "ACTIONS_RUNNER_CONTAINER_HOOKS" {
+				if strings.Contains(e.Value, "k8s-novolume") {
+					return "kubernetes-novolume"
+				}
 				return "kubernetes"
 			}
 		}

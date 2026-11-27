@@ -87,10 +87,22 @@ func BuildSnapshot(in SnapshotInput) fleet.Snapshot {
 	}
 
 	current := make(map[string]int, len(in.Sets))
-	for _, r := range snap.Runners {
-		switch r.State {
-		case fleet.StateBusy, fleet.StateIdle, fleet.StatePending:
-			current[objectKey(r.Namespace, r.SetName)]++
+	if in.RunnersDegraded {
+		// The runner cache can't be counted; the ERS replica targets still can.
+		for _, ers := range in.EphemeralSets {
+			if ers == nil {
+				continue
+			}
+			if set, ok := ersOwner[objectKey(ers.Namespace, ers.Name)]; ok {
+				current[objectKey(ers.Namespace, set)] += ers.Spec.Replicas
+			}
+		}
+	} else {
+		for _, r := range snap.Runners {
+			switch r.State {
+			case fleet.StateBusy, fleet.StateIdle, fleet.StatePending:
+				current[objectKey(r.Namespace, r.SetName)]++
+			}
 		}
 	}
 
@@ -239,17 +251,19 @@ func buildRunner(er *arcapi.EphemeralRunner, pod *corev1.Pod, setName string, ar
 // runnerState: busy is a non-empty jobId, never phase == Running, which idle
 // runners report too.
 func runnerState(er *arcapi.EphemeralRunner, pod *corev1.Pod) fleet.State {
-	if er.HasJob() {
-		return fleet.StateBusy
-	}
+	// ARC keeps the job fields on a finished runner, so terminal phases come
+	// before the job check or a done runner counts as busy.
 	if er.Status.Phase == arcapi.EphemeralRunnerPhaseFailed || podFailed(pod) {
 		return fleet.StateFailed
 	}
-	// A pod being torn down goes NotReady, which is not pending.
-	if er.DeletionTimestamp != nil || (pod != nil && pod.DeletionTimestamp != nil) {
+	if er.Status.Phase == arcapi.EphemeralRunnerPhaseSucceeded || er.Status.Phase == arcapi.EphemeralRunnerPhaseOutdated {
 		return fleet.StateTerminating
 	}
-	if er.Status.Phase == arcapi.EphemeralRunnerPhaseSucceeded || er.Status.Phase == arcapi.EphemeralRunnerPhaseOutdated {
+	if er.HasJob() {
+		return fleet.StateBusy
+	}
+	// A pod being torn down goes NotReady, which is not pending.
+	if er.DeletionTimestamp != nil || (pod != nil && pod.DeletionTimestamp != nil) {
 		return fleet.StateTerminating
 	}
 	if er.Status.Phase == arcapi.EphemeralRunnerPhasePending || !runnerReady(er, pod) {

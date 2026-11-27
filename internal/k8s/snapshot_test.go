@@ -235,14 +235,24 @@ func TestCountsComeFromRunners(t *testing.T) {
 			runner("idle", "ubuntu-new", arcapi.EphemeralRunnerStatus{Phase: "Running", Ready: true, RunnerID: 2}),
 			runner("pending", "ubuntu-old", arcapi.EphemeralRunnerStatus{Phase: "Pending"}),
 			runner("failed", "ubuntu-new", arcapi.EphemeralRunnerStatus{Phase: "Failed"}),
-			runner("done", "ubuntu-old", arcapi.EphemeralRunnerStatus{Phase: "Succeeded"}),
+			runner("done", "ubuntu-old", arcapi.EphemeralRunnerStatus{Phase: "Succeeded", JobID: "j9"}),
 		},
 	})
 
 	require.Len(t, snap.Sets, 1)
-	assert.Equal(t, 3, snap.Sets[0].Current, "busy + idle + pending")
+	assert.Equal(t, 3, snap.Sets[0].Current, "busy + idle + pending; a Succeeded runner keeps its jobId but is done")
 	assert.Equal(t, "0.15.1", snap.Sets[0].Version)
 	assert.Equal(t, []string{"0.15.1"}, snap.ARCVersions)
+
+	g1, g2 := gen("ubuntu-old"), gen("ubuntu-new")
+	g1.Spec.Replicas, g2.Spec.Replicas = 1, 4
+	degraded := BuildSnapshot(SnapshotInput{
+		Now:             testNow,
+		Sets:            []*arcapi.AutoscalingRunnerSet{ars},
+		EphemeralSets:   []*arcapi.EphemeralRunnerSet{g1, g2},
+		RunnersDegraded: true,
+	})
+	assert.Equal(t, 5, degraded.Sets[0].Current, "with no usable runner cache the ERS replica targets stand in, not zero")
 }
 
 func TestStoppedListenerIsUnhealthy(t *testing.T) {

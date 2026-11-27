@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
@@ -55,7 +57,9 @@ func TestFixturesDecode(t *testing.T) {
 			assert.Equal(t, v, ars.Labels[LabelVersion])
 			assert.Equal(t, "https://github.com/WindKube", ars.Spec.GitHubConfigURL)
 			assert.Equal(t, "Running", ars.Status.Phase)
-			assert.True(t, Supported(ars.Labels[LabelVersion]))
+			if major, minor, _ := majorMinor(v); fmt.Sprintf("%d.%d", major, minor) == SupportedMinors()[0] {
+				assert.True(t, Supported(ars.Labels[LabelVersion]), "the pinned minor's fixture must be supported")
+			}
 			maxRunners, ok := ars.Spec.MaxRunnersValue()
 			assert.True(t, ok)
 			assert.Equal(t, 10, maxRunners)
@@ -168,15 +172,42 @@ func missingFields(t reflect.Type, schema map[string]any, prefix string) []strin
 	return missing
 }
 
+func TestContainerModeTellsTheKubernetesHooksApart(t *testing.T) {
+	t.Parallel()
+	mode := func(hook string) string {
+		var s AutoscalingRunnerSetSpec
+		s.Template.Spec.Containers = []corev1.Container{{
+			Name: RunnerContainerName,
+			Env:  []corev1.EnvVar{{Name: "ACTIONS_RUNNER_CONTAINER_HOOKS", Value: hook}},
+		}}
+		return s.ContainerMode()
+	}
+	assert.Equal(t, "kubernetes", mode("/home/runner/k8s/index.js"))
+	assert.Equal(t, "kubernetes-novolume", mode("/home/runner/k8s-novolume/index.js"))
+	assert.Equal(t, "default", AutoscalingRunnerSetSpec{}.ContainerMode())
+}
+
+// Everything here is derived from the pin, so bumping arc-version never needs
+// a test edit.
 func TestSupportedMinorsFollowThePin(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "0.15.1", PinnedVersion())
-	assert.Equal(t, []string{"0.15", "0.14"}, SupportedMinors())
+	major, minor, ok := majorMinor(PinnedVersion())
+	require.True(t, ok, "arc-version %q must be a version", PinnedVersion())
+	require.Positive(t, minor, "the previous-minor rule needs a minor above zero")
+
+	assert.Equal(t, []string{fmt.Sprintf("%d.%d", major, minor), fmt.Sprintf("%d.%d", major, minor-1)}, SupportedMinors())
 
 	for v, want := range map[string]bool{
-		"0.15.1": true, "0.15.0": true, "v0.14.2": true,
-		"0.13.1": false, "0.16.0": false, "": false, "latest": false,
+		PinnedVersion():                         true,
+		fmt.Sprintf("%d.%d.0", major, minor):    true,
+		fmt.Sprintf("v%d.%d.7", major, minor-1): true,
+		fmt.Sprintf("%d.%d.0", major, minor+1):  false,
+		fmt.Sprintf("%d.%d.0", major+1, minor):  false,
+		"":                                      false, "latest": false,
 	} {
 		assert.Equal(t, want, Supported(v), v)
+	}
+	if minor >= 2 {
+		assert.False(t, Supported(fmt.Sprintf("%d.%d.0", major, minor-2)))
 	}
 }
