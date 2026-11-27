@@ -526,9 +526,14 @@ docs/screenshots/    generated previews, HTML and PNG
 
 The **kind e2e** job ([`test/e2e/run.sh`](test/e2e/run.sh), `task e2e` locally)
 installs the pinned ARC release and the chart with the bundled VictoriaMetrics
-store into kind, then checks that every page serves, that the app's
-ServiceAccount cannot write or read secrets, and that the store actually scrapes
-cAdvisor through `nodes/metrics` (and is denied `nodes/proxy`).
+store and kube-state-metrics into kind. It then checks that:
+
+- every page serves;
+- the app's ServiceAccount cannot write or read secrets;
+- the store actually scrapes cAdvisor through `nodes/metrics` and is denied
+  `nodes/proxy`;
+- `kube_pod_labels` for a pod with the ARC runner labels lands in the store
+  with those labels.
 
 **Dependency updates** come from [Renovate](.github/renovate.json5): Go modules,
 SHA-pinned actions, Dockerfile base images, the chart's subcharts and the ARC pin
