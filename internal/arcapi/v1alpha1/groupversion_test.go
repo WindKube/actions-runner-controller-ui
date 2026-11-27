@@ -58,9 +58,6 @@ func TestWorkflowFileFromRef(t *testing.T) {
 func TestMaxRunnersValueTreatsNilAndMaxIntAsUnbounded(t *testing.T) {
 	t.Parallel()
 
-	// A nil maxRunners means unbounded, and the controller expands it to
-	// MaxInt32 before the listener ever sees it. Both must read as unlimited
-	// or the dashboard draws a capacity line at two billion.
 	_, ok := (AutoscalingRunnerSetSpec{}).MaxRunnersValue()
 	assert.False(t, ok, "nil maxRunners should report unbounded")
 
@@ -77,7 +74,6 @@ func TestMaxRunnersValueTreatsNilAndMaxIntAsUnbounded(t *testing.T) {
 func TestHasJobIsTheBusyTest(t *testing.T) {
 	t.Parallel()
 
-	// A runner whose pod is Running but which holds no job is idle, not busy.
 	idle := &EphemeralRunner{Status: EphemeralRunnerStatus{Phase: EphemeralRunnerPhaseRunning}}
 	assert.False(t, idle.HasJob(), "a Running runner with no jobId must not count as busy")
 
@@ -86,13 +82,4 @@ func TestHasJobIsTheBusyTest(t *testing.T) {
 		JobID: "abc-123",
 	}}
 	assert.True(t, busy.HasJob(), "a runner holding a jobId must count as busy")
-}
-
-func TestEffectivePhaseFallsBackToLegacyState(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, "Running", (AutoscalingRunnerSetStatus{Phase: "Running"}).EffectivePhase())
-	// Controllers older than 0.14.0 populate state, not phase.
-	assert.Equal(t, "Running", (AutoscalingRunnerSetStatus{State: "Running"}).EffectivePhase(),
-		"legacy state ignored")
 }

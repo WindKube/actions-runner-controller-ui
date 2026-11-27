@@ -1,0 +1,102 @@
+apiVersion: actions.github.com/v1alpha1
+kind: AutoscalingRunnerSet
+metadata:
+  name: linux-x64
+  namespace: arc-runners
+  uid: 5a1c0000-0000-0000-0000-000000000001
+  labels:
+    app.kubernetes.io/version: 0.14.2
+    actions.github.com/scale-set-name: linux-x64
+    actions.github.com/scale-set-namespace: arc-runners
+  annotations:
+    runner-scale-set-id: "7"
+spec:
+  githubConfigUrl: https://github.com/WindKube
+  githubConfigSecret: arc-github
+  runnerGroup: default
+  runnerScaleSetName: linux-x64
+  minRunners: 0
+  maxRunners: 10
+  template:
+    spec:
+      initContainers:
+        - name: init-dind-externals
+          image: ghcr.io/actions/actions-runner:2.329.0
+      containers:
+        - name: runner
+          image: ghcr.io/actions/actions-runner:2.329.0
+        - name: dind
+          image: docker:28-dind
+status:
+  currentRunners: 2
+  phase: Running
+  pendingEphemeralRunners: 0
+  runningEphemeralRunners: 2
+  failedEphemeralRunners: 0
+---
+apiVersion: actions.github.com/v1alpha1
+kind: EphemeralRunnerSet
+metadata:
+  name: linux-x64-abcde
+  namespace: arc-runners
+  ownerReferences:
+    - apiVersion: actions.github.com/v1alpha1
+      kind: AutoscalingRunnerSet
+      name: linux-x64
+      uid: 5a1c0000-0000-0000-0000-000000000001
+spec:
+  replicas: 2
+  patchID: 3
+status:
+  currentReplicas: 2
+  pendingEphemeralRunners: 0
+  runningEphemeralRunners: 2
+  failedEphemeralRunners: 0
+  phase: Running
+---
+apiVersion: actions.github.com/v1alpha1
+kind: EphemeralRunner
+metadata:
+  name: linux-x64-abcde-runner-x1y2z
+  namespace: arc-runners
+  labels:
+    actions.github.com/scale-set-name: linux-x64
+  ownerReferences:
+    - apiVersion: actions.github.com/v1alpha1
+      kind: EphemeralRunnerSet
+      name: linux-x64-abcde
+      uid: 5a1c0000-0000-0000-0000-000000000002
+spec:
+  githubConfigUrl: https://github.com/WindKube
+  runnerScaleSetId: 7
+  spec:
+    containers:
+      - name: runner
+        image: ghcr.io/actions/actions-runner:2.329.0
+status:
+  ready: true
+  phase: Running
+  runnerId: 4242
+  runnerName: linux-x64-abcde-runner-x1y2z
+  jobRequestId: 123456
+  jobId: 8a6f3c1e-0000-0000-0000-000000000000
+  jobRepositoryName: WindKube/web-api
+  jobWorkflowRef: WindKube/web-api/.github/workflows/ci.yml@refs/heads/main
+  workflowRunId: 9876543210
+  jobDisplayName: build
+---
+apiVersion: actions.github.com/v1alpha1
+kind: AutoscalingListener
+metadata:
+  name: linux-x64-6c7d8f-listener
+  namespace: arc-systems
+spec:
+  githubConfigUrl: https://github.com/WindKube
+  githubConfigSecret: arc-github
+  runnerScaleSetId: 7
+  autoscalingRunnerSetNamespace: arc-runners
+  autoscalingRunnerSetName: linux-x64
+  ephemeralRunnerSetName: linux-x64-abcde
+  maxRunners: 10
+  minRunners: 0
+  image: ghcr.io/actions/gha-runner-scale-set-controller:0.14.2

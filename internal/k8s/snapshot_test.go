@@ -198,76 +198,73 @@ func TestMaxRunnersUnbounded(t *testing.T) {
 	}
 }
 
-// TestCountsComeFromNewestEphemeralRunnerSet covers a rollout, where several
-// generations exist at once and only the newest is being scaled.
-func TestCountsComeFromNewestEphemeralRunnerSet(t *testing.T) {
+// TestCountsComeFromRunners: 0.15 removed the status counts, so the current
+// population is counted from the EphemeralRunners themselves, across every
+// EphemeralRunnerSet generation a rollout leaves alive.
+func TestCountsComeFromRunners(t *testing.T) {
 	t.Parallel()
 
 	ars := &arcapi.AutoscalingRunnerSet{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "arc", Name: "ubuntu", UID: "ars-uid"},
-		Status: arcapi.AutoscalingRunnerSetStatus{
-			CurrentRunners:          99, // the lagging mirror we must NOT use
-			RunningEphemeralRunners: 99,
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "arc", Name: "ubuntu", UID: "ars-uid",
+			Labels: map[string]string{arcapi.LabelVersion: "0.15.1"},
 		},
 	}
-	old := &arcapi.EphemeralRunnerSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:         "arc",
-			Name:              "ubuntu-old",
-			CreationTimestamp: metav1.Time{Time: testNow.Add(-2 * time.Hour)},
-			OwnerReferences:   []metav1.OwnerReference{ownerRef("AutoscalingRunnerSet", "ubuntu", "ars-uid")},
-		},
-		Status: arcapi.EphemeralRunnerSetStatus{CurrentReplicas: 2, RunningEphemeralRunners: 2},
+	gen := func(name string) *arcapi.EphemeralRunnerSet {
+		return &arcapi.EphemeralRunnerSet{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "arc", Name: name,
+			OwnerReferences: []metav1.OwnerReference{ownerRef("AutoscalingRunnerSet", "ubuntu", "ars-uid")},
+		}}
 	}
-	current := &arcapi.EphemeralRunnerSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:         "arc",
-			Name:              "ubuntu-new",
-			CreationTimestamp: metav1.Time{Time: testNow.Add(-5 * time.Minute)},
-			OwnerReferences:   []metav1.OwnerReference{ownerRef("AutoscalingRunnerSet", "ubuntu", "ars-uid")},
-		},
-		Status: arcapi.EphemeralRunnerSetStatus{
-			CurrentReplicas:         7,
-			PendingEphemeralRunners: 3,
-			RunningEphemeralRunners: 4,
-			FailedEphemeralRunners:  1,
-		},
-	}
-	// Belongs to a different scale set entirely and must be ignored.
-	foreign := &arcapi.EphemeralRunnerSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:         "arc",
-			Name:              "windows-1",
-			CreationTimestamp: metav1.Time{Time: testNow},
-			OwnerReferences:   []metav1.OwnerReference{ownerRef("AutoscalingRunnerSet", "windows", "other-uid")},
-		},
-		Status: arcapi.EphemeralRunnerSetStatus{CurrentReplicas: 500},
+	runner := func(name, ers string, status arcapi.EphemeralRunnerStatus) *arcapi.EphemeralRunner {
+		return &arcapi.EphemeralRunner{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "arc", Name: name, UID: types.UID(name),
+				OwnerReferences: []metav1.OwnerReference{ownerRef("EphemeralRunnerSet", ers, "")},
+			},
+			Status: status,
+		}
 	}
 
 	snap := BuildSnapshot(SnapshotInput{
 		Now:           testNow,
 		Sets:          []*arcapi.AutoscalingRunnerSet{ars},
-		EphemeralSets: []*arcapi.EphemeralRunnerSet{old, current, foreign},
+		EphemeralSets: []*arcapi.EphemeralRunnerSet{gen("ubuntu-old"), gen("ubuntu-new")},
+		Runners: []*arcapi.EphemeralRunner{
+			runner("busy", "ubuntu-new", arcapi.EphemeralRunnerStatus{Phase: "Running", JobID: "j1", RunnerID: 1}),
+			runner("idle", "ubuntu-new", arcapi.EphemeralRunnerStatus{Phase: "Running", Ready: true, RunnerID: 2}),
+			runner("pending", "ubuntu-old", arcapi.EphemeralRunnerStatus{Phase: "Pending"}),
+			runner("failed", "ubuntu-new", arcapi.EphemeralRunnerStatus{Phase: "Failed"}),
+			runner("done", "ubuntu-old", arcapi.EphemeralRunnerStatus{Phase: "Succeeded"}),
+		},
 	})
 
-	set := snap.Sets[0]
-	require.Equal(t, 7, set.Current, "counts = %+v, want the newest EphemeralRunnerSet's 7/3/4/1", set)
-	require.Equal(t, 3, set.Pending, "counts = %+v, want the newest EphemeralRunnerSet's 7/3/4/1", set)
-	require.Equal(t, 4, set.Running, "counts = %+v, want the newest EphemeralRunnerSet's 7/3/4/1", set)
-	require.Equal(t, 1, set.Failed, "counts = %+v, want the newest EphemeralRunnerSet's 7/3/4/1", set)
+	require.Len(t, snap.Sets, 1)
+	assert.Equal(t, 3, snap.Sets[0].Current, "busy + idle + pending")
+	assert.Equal(t, "0.15.1", snap.Sets[0].Version)
+	assert.Equal(t, []string{"0.15.1"}, snap.ARCVersions)
 }
 
-func TestCountsFallBackToScaleSetStatusWithoutAnEphemeralRunnerSet(t *testing.T) {
+func TestStoppedListenerIsUnhealthy(t *testing.T) {
 	t.Parallel()
 
+	ars := &arcapi.AutoscalingRunnerSet{ObjectMeta: metav1.ObjectMeta{Namespace: "arc-runners", Name: "ubuntu"}}
+	l := &arcapi.AutoscalingListener{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "arc-systems", Name: "ubuntu-listener"},
+		Spec: arcapi.AutoscalingListenerSpec{
+			Phase:                         arcapi.AutoscalingListenerPhaseStopped,
+			AutoscalingRunnerSetNamespace: "arc-runners",
+			AutoscalingRunnerSetName:      "ubuntu",
+		},
+	}
 	snap := BuildSnapshot(SnapshotInput{
-		Now: testNow,
-		Sets: []*arcapi.AutoscalingRunnerSet{{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "arc", Name: "ubuntu"},
-			Status:     arcapi.AutoscalingRunnerSetStatus{CurrentRunners: 3, RunningEphemeralRunners: 3},
-		}},
+		Now:            testNow,
+		Sets:           []*arcapi.AutoscalingRunnerSet{ars},
+		Listeners:      []*arcapi.AutoscalingListener{l},
+		ControllerPods: []*corev1.Pod{readyPod("arc-systems", "ubuntu-listener")},
 	})
-	require.Equal(t, 3, snap.Sets[0].Current, "want the scale set's own 3 when no runner set is visible")
+	require.True(t, snap.Sets[0].ListenerKnown)
+	assert.False(t, snap.Sets[0].ListenerHealthy, "a Stopped listener with a ready pod is not healthy")
 }
 
 // TestRunnerJoinsPodByName covers the 1:1 name join and its namespace scoping.
@@ -827,28 +824,6 @@ func TestJobStartTrackerForgetsFinishedRunners(t *testing.T) {
 	got = nilTracker.Observe("uid-2", true, testNow)
 	require.True(t, got.IsZero(), "nil tracker Observe = %v, want zero", got)
 	nilTracker.Retain(nil)
-}
-
-func TestImageTag(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		image string
-		want  string
-	}{
-		{name: "plain tag", image: "ghcr.io/actions/gha-runner-scale-set-controller:0.14.2", want: "0.14.2"},
-		{name: "registry port is not a tag", image: "registry:5000/actions/controller", want: ""},
-		{name: "registry port with tag", image: "registry:5000/actions/controller:1.2.3", want: "1.2.3"},
-		{name: "digest pins no readable version", image: "ghcr.io/actions/controller@sha256:abcdef", want: ""},
-		{name: "no tag at all", image: "controller", want: ""},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			require.Equal(t, tc.want, imageTag(tc.image), "imageTag(%q)", tc.image)
-		})
-	}
 }
 
 func TestRunnerResourcesFallBackToTheScaleSetTemplate(t *testing.T) {

@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/samber/lo"
 
+	arcapi "arc-ui/internal/arcapi/v1alpha1"
 	"arc-ui/internal/chart"
 	"arc-ui/internal/fleet"
 )
@@ -882,6 +884,8 @@ func setConfig(s fleet.RunnerSet) []KV {
 		{Label: "bounds", Value: Bounds(s), Mono: true},
 		{Label: "image", Value: Dash(s.Image), Mono: true},
 		{Label: "labels", Value: fleet.FormatLabels(s.RunnerLabels), Mono: true},
+		{Label: "container mode", Value: Dash(s.ContainerMode), Mono: true},
+		{Label: "arc version", Value: Dash(s.Version), Mono: true},
 		{Label: "cpu request", Value: fleet.FormatCores(s.CPURequest), Mono: true},
 		{Label: "cpu limit", Value: limitOrNone(s.CPULimit, fleet.FormatCores), Mono: true},
 		{Label: "memory request", Value: fleet.FormatGiB(s.MemRequest), Mono: true},
@@ -981,10 +985,18 @@ func sourceRows(s fleet.Snapshot, interval time.Duration) []SourceRow {
 		SourceRow{Label: "scrape interval", Value: interval.String(), Tone: ToneMuted},
 		SourceRow{Label: "listeners", Value: listenerValue(s), Tone: listenerTone(s)},
 	)
-	if s.ControllerVersion != "" {
-		rows = append(rows, SourceRow{Label: "controller", Value: s.ControllerVersion, Tone: ToneMuted})
+	if len(s.ARCVersions) > 0 {
+		tone := ToneMuted
+		if len(unsupportedVersions(s)) > 0 {
+			tone = ToneAttention
+		}
+		rows = append(rows, SourceRow{Label: "arc", Value: strings.Join(s.ARCVersions, ", "), Tone: tone})
 	}
 	return rows
+}
+
+func unsupportedVersions(s fleet.Snapshot) []string {
+	return lo.Reject(s.ARCVersions, func(v string, _ int) bool { return arcapi.Supported(v) })
 }
 
 func listenerValue(s fleet.Snapshot) string {
@@ -1096,6 +1108,10 @@ func warnings(s fleet.Snapshot, t fleet.Totals) []string {
 		out = append(out, fmt.Sprintf(
 			"resource usage covers %d of %d runners — the rest have not been scraped yet",
 			t.MetricsCovered, t.Runners))
+	}
+	if bad := unsupportedVersions(s); len(bad) > 0 {
+		out = append(out, fmt.Sprintf("ARC %s is outside the supported range (%s.x); fields may be missing or misread",
+			strings.Join(bad, ", "), strings.Join(arcapi.SupportedMinors(), ".x, ")))
 	}
 	if !t.QueuedKnown && len(s.Sets) > 0 {
 		out = append(out, "queue depth is unavailable: ARC listener metrics are disabled")

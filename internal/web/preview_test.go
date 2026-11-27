@@ -333,8 +333,8 @@ func previewSnapshot() fleet.Snapshot {
 	return fleet.Snapshot{
 		At: previewNow.Add(-3 * time.Second), Org: "WindKube",
 		Sets: sets, Runners: runners,
-		ControllerVersion: "0.14.2",
-		ListenersReady:    2, ListenersTotal: 3,
+		ARCVersions:    []string{"0.15.1"},
+		ListenersReady: 2, ListenersTotal: 3,
 		Sources: []fleet.Source{
 			{Name: fleet.SourceKubernetes, Available: true, CheckedAt: previewNow},
 			{Name: fleet.SourceARCCRDs, Available: true, CheckedAt: previewNow},

@@ -1,9 +1,6 @@
 // Package fleet is the dashboard's domain model: the current state of every
-// runner and scale set, plus the filtering and aggregation the views render.
-//
-// It knows nothing about Kubernetes or HTTP. Collectors push a Snapshot in, the
-// web layer reads view models out, and that boundary is what makes aggregation
-// testable without a cluster.
+// runner and scale set, and the filtering and aggregation the views render. It
+// knows nothing about Kubernetes or HTTP.
 package fleet
 
 import (
@@ -16,14 +13,10 @@ import (
 	"github.com/samber/lo"
 )
 
-// State is a runner's lifecycle state as the dashboard presents it.
-//
-// This is deliberately not ARC's EphemeralRunner phase. That phase describes the
-// *pod* — a runner sitting idle waiting for work reports "Running" — so it
-// cannot distinguish the two states an operator most wants to tell apart.
+// State is a runner's state as the dashboard shows it. It is not ARC's phase,
+// which describes the pod: an idle runner reports Running.
 type State string
 
-// Runner states, in the order the runner table sorts them.
 const (
 	StateBusy        State = "busy"
 	StatePending     State = "pending"
@@ -32,12 +25,10 @@ const (
 	StateFailed      State = "failed"
 )
 
-// AllStates lists every state a filter may select, in display order.
 func AllStates() []State {
 	return []State{StateBusy, StateIdle, StatePending, StateFailed, StateTerminating}
 }
 
-// sortRank orders the runner table: work first, problems last.
 func (s State) sortRank() int {
 	switch s {
 	case StateBusy:
@@ -54,12 +45,8 @@ func (s State) sortRank() int {
 	return 5
 }
 
-// Resources is a request/limit/usage triple for one dimension.
-//
-// Used is only meaningful when At is non-zero: metrics-server holds no history
-// and takes up to ~30s to first report a pod, so a short-lived ephemeral runner
-// may live and die without ever being scraped. That must render as "—", never as
-// zero, or the dashboard understates fleet usage.
+// Resources is request/limit/usage for one dimension. Used means something only
+// when At is set; a runner that was never scraped renders "—", not zero.
 type Resources struct {
 	Used    float64
 	Request float64
@@ -69,18 +56,17 @@ type Resources struct {
 
 func (r Resources) HasUsage() bool { return !r.At.IsZero() }
 
-// Job is the workflow job a runner is currently executing.
 type Job struct {
 	Repository string
-	Workflow   string // filename, parsed out of jobWorkflowRef
-	Name       string // jobDisplayName
+	Workflow   string
+	Name       string
 	RunID      int64
 	StartedAt  time.Time
 }
 
 func (j Job) Present() bool { return j.Repository != "" || j.Name != "" }
 
-// Runner is one EphemeralRunner joined with its pod and latest metrics.
+// Runner is one EphemeralRunner joined with its pod and latest usage.
 type Runner struct {
 	Name      string
 	Namespace string
@@ -96,20 +82,14 @@ type Runner struct {
 	Restarts  int32
 	RunnerID  int
 
-	// PodUID pins the events lookup's field selector to this exact pod: runner names
-	// are generated from the scale set name and do get reused, and a selector on
-	// name alone will happily return a long-dead pod's events as this runner's.
+	// PodUID pins event lookups to this pod; runner names get reused.
 	PodUID string
 
 	CPU Resources // cores
 	Mem Resources // bytes
 
-	// FailureReason is the human-facing cause shown in the failure lane:
-	// ImagePullBackOff, OOMKilled, exit code 1, never registered.
 	FailureReason string
-	// FailedAt is when the failure was observed, for the failure lane's
-	// relative timestamps.
-	FailedAt time.Time
+	FailedAt      time.Time
 }
 
 func (r Runner) Age(now time.Time) time.Duration {
@@ -119,7 +99,6 @@ func (r Runner) Age(now time.Time) time.Duration {
 	return now.Sub(r.CreatedAt)
 }
 
-// JobAge is how long the current job has been running, or zero when idle.
 func (r Runner) JobAge(now time.Time) time.Duration {
 	if r.Job.StartedAt.IsZero() {
 		return 0
@@ -127,18 +106,14 @@ func (r Runner) JobAge(now time.Time) time.Duration {
 	return now.Sub(r.Job.StartedAt)
 }
 
-// RunnerSet is an AutoscalingRunnerSet joined with its live EphemeralRunnerSet
-// counts and, when available, listener queue depth.
+// RunnerSet is an AutoscalingRunnerSet with its live runner count.
 type RunnerSet struct {
 	Name      string
 	Namespace string
 
 	MinRunners int
 	MaxRunners int
-	// Unbounded is true when maxRunners was unset. The controller substitutes
-	// MaxInt32 internally, so this flag is the only way to tell "two billion"
-	// from "no ceiling" and render the capacity line honestly.
-	Unbounded bool
+	Unbounded  bool
 
 	RunnerGroup     string
 	Image           string
@@ -147,20 +122,15 @@ type RunnerSet struct {
 	GitHubConfigURL string
 	ScaleSetID      string
 	Phase           string
+	ContainerMode   string
+	Version         string
 
-	// Counts come from the EphemeralRunnerSet, which is authoritative.
+	// Current counts the set's pending, idle and busy runners from the cluster.
 	Current int
-	Pending int
-	Running int
-	Failed  int
 
-	// Queued is jobs assigned to this scale set with no runner yet. It comes
-	// from the ARC listener's metrics, which are disabled by default, so
-	// QueuedKnown is false on most installs.
 	Queued      int
 	QueuedKnown bool
 
-	// Per-runner requests, used to compute the set's aggregate request.
 	CPURequest float64
 	MemRequest float64
 	CPULimit   float64
@@ -170,15 +140,13 @@ type RunnerSet struct {
 	ListenerKnown   bool
 }
 
-// AtCapacity reports whether the set has hit its ceiling.
 func (s RunnerSet) AtCapacity() bool {
 	return !s.Unbounded && s.MaxRunners > 0 && s.Current >= s.MaxRunners
 }
 
 func (s RunnerSet) ScaledToZero() bool { return s.Current == 0 }
 
-// CapacityDenominator is the value capacity bars scale against. An unbounded
-// set has no ceiling to draw, so fall back to the current population.
+// CapacityDenominator falls back to the current population for unbounded sets.
 func (s RunnerSet) CapacityDenominator() float64 {
 	if !s.Unbounded && s.MaxRunners > 0 {
 		return float64(s.MaxRunners)
@@ -189,21 +157,15 @@ func (s RunnerSet) CapacityDenominator() float64 {
 	return 1
 }
 
-// Usage is one observed resource sample for a pod, as reported by
-// metrics-server. A zero At means "never scraped", which is a routine outcome
-// for short-lived ephemeral runners and must not be confused with zero usage.
+// Usage is one resource sample for a pod. A zero At means never scraped.
 type Usage struct {
 	CPUCores float64
 	MemBytes float64
 	At       time.Time
 }
 
-// Event is a Kubernetes event shown on the runner detail page.
-//
-// ARC's modern controllers emit no events of their own, so everything here comes
-// from the kubelet and scheduler acting on the runner pod.
 type Event struct {
-	Type    string // Normal or Warning
+	Type    string
 	Reason  string
 	Message string
 	At      time.Time
@@ -212,35 +174,23 @@ type Event struct {
 
 func (e Event) Warning() bool { return e.Type == "Warning" }
 
-// Source records whether one upstream data source is usable. Every source is
-// optional: the dashboard boots and serves with all of them broken, naming the
-// failures in the control-plane strip rather than rendering zeros.
+// Source says whether one upstream is usable. Reason explains an outage, or a
+// partial answer when Available is true.
 type Source struct {
 	Name      string
 	Available bool
-	// Reason explains a source that is unavailable — or, when Available is true, one
-	// that answered only partly. A fleet whose listeners are half reachable has real
-	// queue depth for half its sets, and painting that as an outage would be as
-	// wrong as painting it as healthy.
 	Reason    string
 	CheckedAt time.Time
 }
 
 // ListenerTarget is one ARC listener metrics endpoint to scrape.
-//
-// It lives here rather than in the scraper because the two sides must not import
-// each other: the collector discovers targets and the scraper consumes them.
 type ListenerTarget struct {
-	// Set and Namespace name the scale set this listener serves. They key nothing —
-	// the exposition carries its own labels — but they are what makes a per-target
-	// error message mean something.
 	Set       string
 	Namespace string
 	Pod       string
 	URL       string
 }
 
-// Names of the data sources reported in the control-plane strip.
 const (
 	SourceKubernetes = "kubernetes"
 	SourceARCCRDs    = "arc-crds"
@@ -249,7 +199,6 @@ const (
 	SourceStore      = "store"
 )
 
-// Snapshot is the complete current state of the fleet at one instant.
 type Snapshot struct {
 	At      time.Time
 	Org     string
@@ -257,10 +206,10 @@ type Snapshot struct {
 	Runners []Runner
 	Sources []Source
 
-	// ControllerVersion is the ARC controller image tag, for the health strip.
-	ControllerVersion string
-	ListenersReady    int
-	ListenersTotal    int
+	// ARCVersions are the distinct app.kubernetes.io/version labels on the sets.
+	ARCVersions    []string
+	ListenersReady int
+	ListenersTotal int
 }
 
 func (s Snapshot) Source(name string) (Source, bool) {
@@ -275,8 +224,7 @@ func (s Snapshot) Runner(name string) (Runner, bool) {
 	return lo.Find(s.Runners, func(r Runner) bool { return r.Name == name })
 }
 
-// SortRunners orders runners for display: busy first and longest-running
-// first within that, so the work that has been going longest is at the top.
+// SortRunners puts busy first, longest-running job first within that.
 func SortRunners(runners []Runner, now time.Time) {
 	slices.SortStableFunc(runners, func(a, b Runner) int {
 		return cmp.Or(
@@ -287,19 +235,15 @@ func SortRunners(runners []Runner, now time.Time) {
 	})
 }
 
-// SetSort names an ordering for the runner-set table.
 type SetSort string
 
-// Runner-set orderings offered by the design.
 const (
-	// SortPressure puts sets that need attention first: queued work, then
-	// proximity to the ceiling.
+	// SortPressure puts queued work first, then proximity to the ceiling.
 	SortPressure    SetSort = "pressure"
 	SortRunnerCount SetSort = "runners"
 	SortName        SetSort = "name"
 )
 
-// ParseSetSort maps a query value to a sort, defaulting to pressure.
 func ParseSetSort(v string) SetSort {
 	switch SetSort(v) {
 	case SortRunnerCount:
@@ -315,25 +259,17 @@ func SortSets(sets []RunnerSet, by SetSort) {
 	switch by {
 	case SortRunnerCount:
 		slices.SortStableFunc(sets, func(a, b RunnerSet) int {
-			return cmp.Or(
-				cmp.Compare(b.Current, a.Current),
-				cmp.Compare(a.Name, b.Name),
-			)
+			return cmp.Or(cmp.Compare(b.Current, a.Current), cmp.Compare(a.Name, b.Name))
 		})
 	case SortName:
 		slices.SortStableFunc(sets, func(a, b RunnerSet) int { return cmp.Compare(a.Name, b.Name) })
 	default:
 		slices.SortStableFunc(sets, func(a, b RunnerSet) int {
-			return cmp.Or(
-				cmp.Compare(b.Queued, a.Queued),
-				cmp.Compare(b.saturation(), a.saturation()),
-			)
+			return cmp.Or(cmp.Compare(b.Queued, a.Queued), cmp.Compare(b.saturation(), a.saturation()))
 		})
 	}
 }
 
-// saturation is how close a set is to its ceiling. Unbounded sets never
-// saturate, so they sort below anything under real pressure.
 func (s RunnerSet) saturation() float64 {
 	if s.Unbounded || s.MaxRunners <= 0 {
 		return 0
@@ -341,9 +277,7 @@ func (s RunnerSet) saturation() float64 {
 	return float64(s.Current) / float64(s.MaxRunners)
 }
 
-// FormatAge renders a duration the way the design does: seconds under a
-// minute, minutes and seconds under an hour, hours and minutes beyond.
-// A non-positive duration is an em dash, not "0s".
+// FormatAge renders 42s, 3m 5s or 2h 10m; a non-positive duration is "—".
 func FormatAge(d time.Duration) string {
 	secs := int(d.Seconds())
 	switch {
@@ -358,16 +292,11 @@ func FormatAge(d time.Duration) string {
 	}
 }
 
-// FormatRelative renders how long ago something happened, e.g. "4m ago".
 func FormatRelative(t, now time.Time) string {
 	if t.IsZero() {
 		return "—"
 	}
-	d := now.Sub(t)
-	if d < 0 {
-		d = 0
-	}
-	secs := int(d.Seconds())
+	secs := int(max(0, now.Sub(t)).Seconds())
 	switch {
 	case secs < 60:
 		return fmt.Sprintf("%ds ago", secs)
@@ -380,15 +309,9 @@ func FormatRelative(t, now time.Time) string {
 	}
 }
 
-// GiB is one gibibyte, the unit the design shows memory in.
 const GiB = 1024 * 1024 * 1024
 
-// FormatGiB renders a byte count as the design does, e.g. "12Gi".
-//
-// Sub-gibibyte values get a decimal place. At %.0f a 512Mi request renders as
-// "0Gi", identical to no request at all. Anything positive that would still
-// round to "0.0Gi" is shown as "<0.1Gi" rather than reintroducing the same
-// ambiguity one decimal further down.
+// FormatGiB keeps a decimal under 1Gi so 512Mi does not render as "0Gi".
 func FormatGiB(bytes float64) string {
 	if bytes <= 0 {
 		return "0Gi"
@@ -402,14 +325,8 @@ func FormatGiB(bytes float64) string {
 	return fmt.Sprintf("%.0fGi", bytes/GiB)
 }
 
-// FormatBytes renders a byte count with the largest unit that leaves a readable
-// mantissa, e.g. "512 B", "4.0 KiB", "12.0 MiB", "1.5 GiB". The SQLite file this
-// reports on spans four orders of magnitude over an install's life, so a fixed
-// unit is unreadable at one end or the other.
-//
-// Promotion happens after rounding, not before: 1048575 bytes is 1023.999 KiB,
-// which one decimal place renders as "1024.0 KiB", a quantity nobody writes.
-// Binary units throughout, because the numbers are compared against ls and du.
+// FormatBytes uses binary units and promotes after rounding, so 1048575 bytes
+// is "1.0 MiB", not "1024.0 KiB".
 func FormatBytes(bytes int64) string {
 	if bytes <= 0 {
 		return "0 B"
@@ -417,9 +334,6 @@ func FormatBytes(bytes int64) string {
 	if bytes < 1024 {
 		return fmt.Sprintf("%d B", bytes)
 	}
-
-	// The last unit has nothing to promote to, so it keeps whatever mantissa it
-	// has rather than reporting a number in a unit that does not exist.
 	units := []string{"KiB", "MiB", "GiB", "TiB"}
 	v, i := float64(bytes)/1024, 0
 	for i < len(units)-1 && v >= 1023.95 {
@@ -429,10 +343,8 @@ func FormatBytes(bytes int64) string {
 	return fmt.Sprintf("%.1f %s", v, units[i])
 }
 
-// FormatCores renders a core count to one decimal place.
 func FormatCores(cores float64) string { return fmt.Sprintf("%.1f", cores) }
 
-// FormatLabels joins runner labels the way the config panel shows them.
 func FormatLabels(labels []string) string {
 	if len(labels) == 0 {
 		return "—"

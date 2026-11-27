@@ -501,29 +501,6 @@ func TestSortSourcesIsStable(t *testing.T) {
 	}
 }
 
-func TestIsControllerImage(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		container string
-		image     string
-		want      bool
-	}{
-		{name: "modern controller image", container: "manager", image: "ghcr.io/actions/gha-runner-scale-set-controller:0.14.2", want: true},
-		{name: "legacy controller image", container: "x", image: "summerwind/actions-runner-controller:v0.27.6", want: true},
-		{name: "helm container name alone", container: "manager", image: "ghcr.io/acme/something:1", want: true},
-		{name: "unrelated workload", container: "app", image: "nginx:1.27", want: false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			require.Equal(t, tc.want, isControllerImage(tc.container, tc.image),
-				"isControllerImage(%q, %q)", tc.container, tc.image)
-		})
-	}
-}
-
 func TestWatchFailureOverridesTheProbeAndThenExpires(t *testing.T) {
 	t.Parallel()
 
