@@ -40,6 +40,19 @@ tests:
             app.kubernetes.io/component: runner-scale-set-listener
         documentIndex: 1
 
+  - it: moves the monitors without moving what they scrape
+    set:
+      podMonitors.arc.enabled: true
+      podMonitors.arc.requireCapability: false
+      podMonitors.arc.namespace: monitoring
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: monitoring
+      - equal:
+          path: spec.namespaceSelector.matchNames
+          value: [arc-systems]
+
   - it: skips without the Prometheus Operator CRD unless told not to
     set:
       podMonitors.arc.enabled: true

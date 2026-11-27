@@ -19,8 +19,10 @@ otherwise bite you.
 - **ARC metrics.** Enable the `metrics:` block in the
   `gha-runner-scale-set-controller` values, then scrape the controller and every
   listener on their `metrics` port. `podMonitors.arc.enabled=true` renders two
-  PodMonitors for that, in `rbac.controllerNamespace`, with a `labelmap` that
-  turns `actions.github.com/*` pod labels into `actions_github_com_*`.
+  PodMonitors for that, scraping `rbac.controllerNamespace`, with a `labelmap`
+  that turns `actions.github.com/*` pod labels into `actions_github_com_*`. They
+  are created there too, unless `podMonitors.arc.namespace` names the namespace
+  your Prometheus selects monitors from.
 - **cAdvisor.** The kubelet's `/metrics/cadvisor`, for runner pod CPU and memory.
 - **kube-state-metrics with the scale set label allowlisted.** It drops pod
   labels unless told otherwise:

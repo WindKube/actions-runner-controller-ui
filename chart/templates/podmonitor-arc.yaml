@@ -1,6 +1,7 @@
 {{- with .Values.podMonitors.arc }}
 {{- if and .enabled (or (not .requireCapability) ($.Capabilities.APIVersions.Has "monitoring.coreos.com/v1")) }}
-{{- $ns := .namespace | default $.Values.rbac.controllerNamespace }}
+{{- $arcNs := $.Values.rbac.controllerNamespace }}
+{{- $ns := .namespace | default $arcNs }}
 {{- $pm := . }}
 {{- range $role, $selector := dict "controller" .controllerSelector "listeners" .listenerSelector }}
 ---
@@ -20,7 +21,7 @@ spec:
       {{- toYaml $selector | nindent 6 }}
   namespaceSelector:
     matchNames:
-      - {{ $ns }}
+      - {{ $arcNs }}
   podMetricsEndpoints:
     - port: metrics
       interval: {{ $pm.interval }}

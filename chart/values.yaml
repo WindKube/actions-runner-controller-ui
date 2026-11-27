@@ -212,7 +212,8 @@ podMonitors:
   arc:
     enabled: false
     requireCapability: true
-    # Defaults to rbac.controllerNamespace.
+    # Where the PodMonitors are created, e.g. the namespace your Prometheus
+    # selects monitors from. They always scrape rbac.controllerNamespace.
     namespace: ""
     labels: {}
     interval: 30s
