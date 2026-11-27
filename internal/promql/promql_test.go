@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,7 +21,7 @@ import (
 )
 
 var testQueries = Queries{Schema: prom.Schema{
-	ScaleSetLabel:    "actions_github_com_scale_set_name",
+	ScaleSetLabel:    "name",
 	KSMScaleSetLabel: "label_actions_github_com_scale_set_name",
 	RunnerNamespaces: []string{"arc-runners"},
 }}
@@ -88,11 +90,31 @@ func TestSetScopeJoinsKubeStateMetricsAndFleetScopeDoesNot(t *testing.T) {
 	assert.Contains(t, setCPU, `namespace=~"arc-runners"`)
 	assert.Contains(t, setCPU, "[120s]", "a rate window under two minutes misses samples at a 30s scrape")
 
-	assert.Contains(t, testQueries.Busy("linux-x64"), `actions_github_com_scale_set_name="linux-x64"`)
+	assert.Contains(t, testQueries.Busy("linux-x64"), `name="linux-x64"`)
 	assert.Contains(t, testQueries.Pending("linux-x64"), `name="linux-x64"`, "controller series name the set in their own label")
 	assert.Contains(t, testQueries.Capacity(""), "< 2147483647", "an unbounded set must not become the ceiling")
 	assert.Contains(t, testQueries.Completed("", true, time.Minute), `job_result="succeeded"`)
 	assert.Contains(t, testQueries.Completed("", false, time.Minute), `job_result!="succeeded"`)
+}
+
+func TestJobCountersSpanTwoScrapesAtEveryRange(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(1_700_000_000, 0)
+	window := regexp.MustCompile(`\[(\d+)s\]\)\) \* (\d+)$`)
+	for _, tr := range web.AllRanges() {
+		r := rangeOf(web.Window{From: now.Add(-tr.Duration()), To: now, Points: tr.Points()})
+		for _, q := range []string{
+			testQueries.Completed("", true, r.Step),
+			testQueries.Started("linux-x64", r.Step),
+			testQueries.AllCompleted("", r.Step),
+		} {
+			m := window.FindStringSubmatch(q)
+			require.Len(t, m, 3, "%s: %s", tr, q)
+			secs, _ := strconv.Atoi(m[1])
+			assert.GreaterOrEqual(t, secs, 60, "%s: the range must hold two 30s scrapes", tr)
+			assert.Equal(t, strconv.FormatInt(int64(r.Step.Seconds()), 10), m[2], "%s: scaled back to one step", tr)
+		}
+	}
 }
 
 func TestScopeLinesEverySeriesUpOnOneAxis(t *testing.T) {
@@ -209,7 +231,7 @@ func TestLiveTickFeedsUsageAndQueue(t *testing.T) {
 	q := &fakeQuerier{instant: map[string][]prom.Sample{
 		"container_cpu_usage_seconds_total":  {{Labels: pod, Value: 0.5}},
 		"container_memory_working_set_bytes": {{Labels: pod, Value: 1 << 30}},
-		"gha_assigned_jobs":                  {{Labels: map[string]string{"actions_github_com_scale_set_name": "linux-x64"}, Value: 2.4}},
+		"gha_assigned_jobs":                  {{Labels: map[string]string{"name": "linux-x64"}, Value: 2.4}},
 	}}
 	sink := &recordingSink{}
 	Live{Client: q, Queries: testQueries, Sink: sink, Log: zerolog.New(io.Discard)}.Tick(context.Background(), t0)

@@ -98,6 +98,13 @@ func (q Queries) Requested(resource, set string) string {
 		q.Schema.NamespaceMatcher(), resource), set))
 }
 
+// perStep is a counter's increase per step. increase over [step] is empty when
+// the step is shorter than two scrapes, so the rate is taken over rateWindow
+// and scaled back to the step.
+func perStep(selector string, step time.Duration) string {
+	return fmt.Sprintf(`sum(rate(%s[%s])) * %s`, selector, rateWindow(step), strconv.FormatInt(int64(step.Seconds()), 10))
+}
+
 // Completed counts jobs finished per step; ok selects job_result="succeeded"
 // or everything else.
 func (q Queries) Completed(set string, ok bool, step time.Duration) string {
@@ -105,15 +112,15 @@ func (q Queries) Completed(set string, ok bool, step time.Duration) string {
 	if ok {
 		op = "="
 	}
-	return fmt.Sprintf(`sum(increase(gha_completed_jobs_total{%s,job_result%s"succeeded"}[%s]))`, q.listener(set), op, promDuration(step))
+	return perStep(fmt.Sprintf(`gha_completed_jobs_total{%s,job_result%s"succeeded"}`, q.listener(set), op), step)
 }
 
 func (q Queries) Started(set string, step time.Duration) string {
-	return fmt.Sprintf(`sum(increase(gha_started_jobs_total{%s}[%s]))`, q.listener(set), promDuration(step))
+	return perStep(fmt.Sprintf(`gha_started_jobs_total{%s}`, q.listener(set)), step)
 }
 
 func (q Queries) AllCompleted(set string, step time.Duration) string {
-	return fmt.Sprintf(`sum(increase(gha_completed_jobs_total{%s}[%s]))`, q.listener(set), promDuration(step))
+	return perStep(fmt.Sprintf(`gha_completed_jobs_total{%s}`, q.listener(set)), step)
 }
 
 // RepoSeconds and RepoJobs rank repositories by runner time over a window.
