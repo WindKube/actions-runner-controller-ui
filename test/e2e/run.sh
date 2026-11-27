@@ -54,13 +54,35 @@ helm install e2e-set oci://ghcr.io/actions/actions-runner-controller-charts/gha-
   --set controllerServiceAccount.name=arc-gha-rs-controller
 kubectl -n arc-runners get autoscalingrunnersets
 
-step "install arc-ui with the bundled store"
+# The dummy token means ARC never starts a runner, so this stands in for one:
+# a pod carrying the labels ARC puts on runner pods.
+kubectl apply -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: e2e-set-runner-stand-in
+  namespace: arc-runners
+  labels:
+    actions-ephemeral-runner: "True"
+    actions.github.com/scale-set-name: e2e-set
+    actions.github.com/scale-set-namespace: arc-runners
+spec:
+  containers:
+    - name: runner
+      image: registry.k8s.io/pause:3.10
+      resources:
+        requests: {cpu: 10m, memory: 16Mi}
+EOF
+
+step "install arc-ui with the bundled store and kube-state-metrics"
 helm repo add vm https://victoriametrics.github.io/helm-charts --force-update
 helm repo add grafana https://grafana.github.io/helm-charts --force-update
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
 helm dependency build chart/
 helm install arc-ui chart/ -n "$ns" --wait --timeout 5m \
   --set image.repository=arc-ui --set image.tag=e2e --set image.pullPolicy=Never \
   --set victoria-metrics-single.enabled=true \
+  --set kubeStateMetrics.enabled=true \
   --set podMonitors.arc.enabled=false \
   --set env.ARC_UI_NAMESPACES=arc-runners \
   --set env.ARC_UI_CONTROLLER_NAMESPACE="$ns"
@@ -98,18 +120,23 @@ done
 curl -fsS http://127.0.0.1:18080/ | grep -q e2e-set || { echo "overview does not list e2e-set" >&2; exit 1; }
 curl -fsS http://127.0.0.1:18080/metrics | grep -q '^arc_ui_sse_clients'
 
-step "the store scrapes cAdvisor and the ARC controller"
+step "the store scrapes cAdvisor, the ARC controller and kube-state-metrics"
 forward arc-ui-vm 18428 8428 /health
-up() {
-  curl -fsS "http://127.0.0.1:18428/api/v1/query" --data-urlencode "query=max(up{job=\"$1\"})" \
-    | grep -q '"value":\[[0-9.]*,"1"\]'
+query() {
+  curl -fsS "http://127.0.0.1:18428/api/v1/query" --data-urlencode "query=$1"
 }
-for job in kubelet-cadvisor arc; do
+eventually() {
+  local what=$1 q=$2
   for i in $(seq 40); do
-    up "$job" && { echo "$job up"; break; }
-    [[ $i == 40 ]] && { echo "$job never came up in the store" >&2; exit 1; }
+    query "$q" | grep -q '"value":\[[0-9.]*,"1"\]' && { echo "$what"; return 0; }
+    [[ $i == 40 ]] && { echo "never saw: $what" >&2; query "$q" >&2 || true; exit 1; }
     sleep 5
   done
+}
+for job in kubelet-cadvisor arc kube-state-metrics; do
+  eventually "$job up" "max(up{job=\"$job\"})"
 done
+eventually "kube_pod_labels carries the ARC labels" \
+  'max(kube_pod_labels{namespace="arc-runners",pod="e2e-set-runner-stand-in",label_actions_ephemeral_runner="True",label_actions_github_com_scale_set_name="e2e-set",label_actions_github_com_scale_set_namespace="arc-runners"})'
 
 step "ok"

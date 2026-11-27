@@ -225,15 +225,15 @@ podMonitors:
       app.kubernetes.io/component: runner-scale-set-listener
 
 # What the bundled store or collector scrapes. Namespaces come from
-# env.ARC_UI_NAMESPACES and env.ARC_UI_CONTROLLER_NAMESPACE. kube-state-metrics
-# is not bundled: it must already run in the cluster, with the label allowlist
-# described in NOTES.
+# env.ARC_UI_NAMESPACES and env.ARC_UI_CONTROLLER_NAMESPACE.
 collection:
   interval: 30s
   # Kubelet serving certificates are rarely signed by the cluster CA.
   kubeletInsecureSkipVerify: true
   kubeStateMetrics:
-    # app.kubernetes.io/name of the kube-state-metrics pods, and their port.
+    # The cluster's own kube-state-metrics, found by app.kubernetes.io/name and
+    # port name. Ignored when kubeStateMetrics.enabled; the bundled one is
+    # scraped instead.
     name: kube-state-metrics
     port: http
   # Where the collector sends samples. Empty means the bundled store.
@@ -291,6 +291,29 @@ collector:
       create: false
       name: arc-ui-collector-config
       key: config.alloy
+
+# kube-state-metrics for clusters that do not run one, cut down to the pod
+# series and labels the app joins on. Clusters that already have it should add
+# the metricLabelsAllowlist entry below to theirs instead.
+kubeStateMetrics:
+  enabled: false
+  fullnameOverride: arc-ui-ksm
+  # The alias would otherwise become the container name, which must be lowercase.
+  nameOverride: kube-state-metrics
+  # Must list the same namespaces as env.ARC_UI_NAMESPACES; the render fails
+  # otherwise. Empty means every namespace and needs rbac.useClusterRole: true.
+  namespaces: arc-runners
+  rbac:
+    useClusterRole: false
+  collectors: [pods]
+  metricAllowlist:
+    - kube_pod_labels
+    - kube_pod_container_resource_requests
+    - kube_pod_container_resource_limits
+  metricLabelsAllowlist:
+    - pods=[actions-ephemeral-runner,actions.github.com/scale-set-name,actions.github.com/scale-set-namespace]
+  service:
+    port: 8080
 
 nodeSelector: {}
 tolerations: []

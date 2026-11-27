@@ -27,9 +27,16 @@ Prometheus at {{ include "arc-ui.prometheusURL" . }}:
       container_cpu_usage_seconds_total and container_memory_working_set_bytes
       for the runner pods, from the kubelet's /metrics/cadvisor.
   * kube-state-metrics
-      kube_pod_labels with the scale set label. kube-state-metrics drops pod
-      labels unless allowlisted:
-        --metric-labels-allowlist=pods=[actions.github.com/scale-set-name]
+{{- if .Values.kubeStateMetrics.enabled }}
+      bundled as {{ .Values.kubeStateMetrics.fullnameOverride }}, pods in {{ include "arc-ui.runnerNamespaces" . | default "every namespace" }}, with the ARC
+      labels allowlisted. If your cluster already runs kube-state-metrics, you
+      can turn this off and add the allowlist below to that one instead.
+{{- else }}
+      kube_pod_labels with the ARC pod labels. If your cluster already runs
+      kube-state-metrics, add the allowlist there; it drops pod labels
+      otherwise. If it runs none, set kubeStateMetrics.enabled=true.
+{{- end }}
+        --metric-labels-allowlist=pods=[actions-ephemeral-runner,actions.github.com/scale-set-name,actions.github.com/scale-set-namespace]
       (kube-prometheus-stack: kube-state-metrics.metricLabelsAllowlist).
 {{- $vm := index .Values "victoria-metrics-single" }}
 {{- if or $vm.enabled .Values.collector.enabled }}
@@ -42,9 +49,12 @@ Bundled collection:
   collector  {{ .Values.collector.fullnameOverride }} (Alloy) writing to {{ include "arc-ui.remoteWriteURL" . }}
 {{- end }}
   {{ if include "arc-ui.vmScrapes" . }}The store{{ else }}The collector{{ end }} scrapes the ARC pods, the kubelet's cAdvisor and kube-state-metrics.
-  kube-state-metrics itself is not bundled: it must already run in the
-  cluster with the allowlist above, labelled
+{{- if .Values.kubeStateMetrics.enabled }}
+  kube-state-metrics is the bundled {{ include "arc-ui.ksmTarget" . }}.
+{{- else }}
+  kube-state-metrics is the cluster's own, with the allowlist above, labelled
   app.kubernetes.io/name={{ .Values.collection.kubeStateMetrics.name }} and exposing port "{{ .Values.collection.kubeStateMetrics.port }}".
+{{- end }}
 {{- end }}
 {{- if not .Values.persistence.enabled }}
 

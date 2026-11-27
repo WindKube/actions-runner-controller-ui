@@ -191,9 +191,10 @@ metrics.
 
 ```bash
 # Once per checkout: fetch the subcharts pinned in chart/Chart.lock. helm
-# refuses to install without them, even with both disabled.
+# refuses to install without them, even with all of them disabled.
 helm repo add vm https://victoriametrics.github.io/helm-charts
 helm repo add grafana https://grafana.github.io/helm-charts
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm dependency build chart/        # or: task helm:deps
 
 helm install arc-ui ./chart \
@@ -314,10 +315,12 @@ Service in front of them.
 
 kube-state-metrics drops pod labels unless they are allowlisted, and without
 `actions.github.com/scale-set-name` on `kube_pod_labels` the dashboard cannot
-tell which scale set a runner pod's usage belongs to:
+tell which scale set a runner pod's usage belongs to. The chart's bundled
+kube-state-metrics (`kubeStateMetrics.enabled`) has this preset. If your cluster
+already runs one, add it there:
 
 ```text
---metric-labels-allowlist=pods=[actions.github.com/scale-set-name]
+--metric-labels-allowlist=pods=[actions-ephemeral-runner,actions.github.com/scale-set-name,actions.github.com/scale-set-namespace]
 ```
 
 In kube-prometheus-stack that is:
@@ -325,7 +328,7 @@ In kube-prometheus-stack that is:
 ```yaml
 kube-state-metrics:
   metricLabelsAllowlist:
-    - pods=[actions.github.com/scale-set-name]
+    - pods=[actions-ephemeral-runner,actions.github.com/scale-set-name,actions.github.com/scale-set-namespace]
 ```
 
 ### No Prometheus
@@ -334,8 +337,10 @@ The chart can bring its own: `victoria-metrics-single.enabled=true` installs a
 VictoriaMetrics store (30d, 16Gi) that scrapes ARC, cAdvisor and
 kube-state-metrics and is wired in as `ARC_UI_PROMETHEUS_URL`.
 `collector.enabled=true` adds an Alloy collector that remote-writes into it, or
-into any store named by `collection.remoteWrite.url`. Both are off by default,
-and kube-state-metrics with the allowlist above still has to exist. Details in
+into any store named by `collection.remoteWrite.url`. For a cluster with no
+kube-state-metrics, `kubeStateMetrics.enabled=true` adds a small one limited to
+runner pods and the ARC labels. If you already run one, add the allowlist above
+to it instead. All three are off by default. Details in
 [`chart/README.md`](chart/README.md#no-prometheus-the-bundled-store-and-collector).
 
 ## Kubernetes
@@ -521,9 +526,14 @@ docs/screenshots/    generated previews, HTML and PNG
 
 The **kind e2e** job ([`test/e2e/run.sh`](test/e2e/run.sh), `task e2e` locally)
 installs the pinned ARC release and the chart with the bundled VictoriaMetrics
-store into kind, then checks that every page serves, that the app's
-ServiceAccount cannot write or read secrets, and that the store actually scrapes
-cAdvisor through `nodes/metrics` (and is denied `nodes/proxy`).
+store and kube-state-metrics into kind. It then checks that:
+
+- every page serves;
+- the app's ServiceAccount cannot write or read secrets;
+- the store actually scrapes cAdvisor through `nodes/metrics` and is denied
+  `nodes/proxy`;
+- `kube_pod_labels` for a pod with the ARC runner labels lands in the store
+  with those labels.
 
 **Dependency updates** come from [Renovate](.github/renovate.json5): Go modules,
 SHA-pinned actions, Dockerfile base images, the chart's subcharts and the ARC pin

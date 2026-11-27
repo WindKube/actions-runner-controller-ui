@@ -52,6 +52,10 @@ data:
             action: keep
       - job_name: kube-state-metrics
         honor_labels: true
+        {{- with include "arc-ui.ksmTarget" . }}
+        static_configs:
+          - targets: [{{ . | quote }}]
+        {{- else }}
         kubernetes_sd_configs:
           - role: pod
         relabel_configs:
@@ -61,6 +65,7 @@ data:
           - source_labels: [__meta_kubernetes_pod_container_port_name]
             regex: {{ $c.kubeStateMetrics.port | regexQuoteMeta | quote }}
             action: keep
+        {{- end }}
         metric_relabel_configs:
           - source_labels: [__name__]
             regex: kube_pod_labels|kube_pod_container_resource_requests|kube_pod_container_resource_limits

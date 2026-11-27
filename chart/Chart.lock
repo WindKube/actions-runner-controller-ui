@@ -5,5 +5,8 @@ dependencies:
 - name: alloy
   repository: https://grafana.github.io/helm-charts
   version: 1.16.0
-digest: sha256:92b366220cdf600dac5675e70fcd4e74a25f7b31d2531d1053125204ec292f29
-generated: "2026-11-27T14:14:45.958029324+01:00"
+- name: kube-state-metrics
+  repository: https://prometheus-community.github.io/helm-charts
+  version: 9.0.1
+digest: sha256:6452456c39963dc41f66f92cd4e2805cb1c385810088df5b2c8dc9b3c8acb8c5
+generated: "2026-11-27T15:13:32.89824935+01:00"

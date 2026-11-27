@@ -23,7 +23,7 @@ sources:
 maintainers:
   - name: SRE
 
-# Both off by default. Renovate bumps the pins; Chart.lock is committed and CI
+# All off by default. Renovate bumps the pins; Chart.lock is committed and CI
 # runs `helm dependency build`.
 dependencies:
   - name: victoria-metrics-single
@@ -35,6 +35,11 @@ dependencies:
     version: 1.16.0
     repository: https://grafana.github.io/helm-charts
     condition: collector.enabled
+  - name: kube-state-metrics
+    alias: kubeStateMetrics
+    version: 9.0.1
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: kubeStateMetrics.enabled
 
 annotations:
   # The dashboard never writes to the cluster; the shipped ClusterRole holds
