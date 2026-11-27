@@ -70,7 +70,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "arc-ui.vmScrapes" -}}
 {{- $vm := index .Values "victoria-metrics-single" }}
 {{- $url := .Values.collection.remoteWrite.url }}
-{{- $intoVM := or (not $url) (regexMatch (printf "^https?://%s([.:/]|$)" (regexQuoteMeta $vm.server.fullnameOverride)) $url) }}
+{{- $host := printf "^https?://%s(\\.%s(\\.svc(\\.[^:/]+)?)?)?([:/]|$)" (regexQuoteMeta $vm.server.fullnameOverride) (regexQuoteMeta .Release.Namespace) }}
+{{- $intoVM := or (not $url) (regexMatch $host $url) }}
 {{- if and $vm.enabled (not (and .Values.collector.enabled $intoVM)) }}true{{ end }}
 {{- end }}
 

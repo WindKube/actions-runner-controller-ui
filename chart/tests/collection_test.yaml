@@ -178,6 +178,39 @@ tests:
         documentIndex: 1
         template: scrape-rbac.yaml
 
+  - it: still scrapes when the collector writes to a same-named store in another namespace
+    set:
+      victoria-metrics-single.enabled: true
+      collector.enabled: true
+      collection.remoteWrite.url: http://arc-ui-vm.other.svc:8428/api/v1/write
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "job_name: kubelet-cadvisor"
+
+  - it: treats the short service name as the store
+    set:
+      victoria-metrics-single.enabled: true
+      collector.enabled: true
+      collection.remoteWrite.url: http://arc-ui-vm:8428/api/v1/write
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "scrape_configs: \\[\\]"
+
+  - it: matches the store's fully qualified cluster name too
+    set:
+      victoria-metrics-single.enabled: true
+      collector.enabled: true
+      collection.remoteWrite.url: http://arc-ui-vm.NAMESPACE.svc.cluster.local:8428/api/v1/write
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "scrape_configs: \\[\\]"
+
   - it: follows the store's http port override
     set:
       victoria-metrics-single.enabled: true
