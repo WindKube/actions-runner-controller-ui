@@ -183,19 +183,9 @@ type Source struct {
 	CheckedAt time.Time
 }
 
-// ListenerTarget is one ARC listener metrics endpoint to scrape.
-type ListenerTarget struct {
-	Set       string
-	Namespace string
-	Pod       string
-	URL       string
-}
-
 const (
 	SourceKubernetes = "kubernetes"
 	SourceARCCRDs    = "arc-crds"
-	SourceMetrics    = "metrics-server"
-	SourceListener   = "listener-metrics"
 	SourceStore      = "store"
 
 	SourcePrometheus        = "prometheus"

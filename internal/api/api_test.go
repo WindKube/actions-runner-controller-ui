@@ -26,7 +26,6 @@ func testConfig(addr string) config.Config {
 		// Both short: the drain semantics are what is under test, not the wait.
 		PreStopDelay:    50 * time.Millisecond,
 		ShutdownTimeout: 5 * time.Second,
-		ScrapeInterval:  15 * time.Second,
 	}
 }
 

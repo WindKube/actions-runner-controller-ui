@@ -161,16 +161,13 @@ func (c Counts) Sum() (up, down float64) {
 	return up, down
 }
 
-// RepoHistory is one repository's consumption over the selected window.
-//
-// Distinct from fleet.RepoUsage, which is the same panel's live fallback: this one
-// is integrated over time (core-seconds), that one is a snapshot of what is
-// running right now.
+// RepoHistory is one repository's runner time over the selected window;
+// fleet.RepoUsage is the live fallback.
 type RepoHistory struct {
 	Repository string
 	Jobs       int
-	CPUSeconds float64
-	MemGiBSecs float64
+	// Seconds is runner time spent executing the repository's jobs.
+	Seconds float64
 }
 
 // JobOutcome is how a job ended, as the Jobs tab filters and colours it.

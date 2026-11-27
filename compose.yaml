@@ -11,9 +11,7 @@
 #
 # `kubectl proxy` runs on the host toolchain's terms: it resolves the plugin, holds
 # the credential, and re-exposes the API server as plain unauthenticated HTTP. The
-# app then talks to one URL and needs no cluster credential at all. metrics.k8s.io
-# is an aggregated API served *through* the API server, so the proxy covers pod
-# metrics too — there is nothing else to point anywhere.
+# app then talks to one URL and needs no cluster credential at all.
 #
 # DEV ONLY. See the warning on the kube-proxy service before you copy any of this.
 
@@ -39,22 +37,13 @@ services:
       ARC_UI_LOG_LEVEL: "${ARC_UI_LOG_LEVEL:-debug}"
       ARC_UI_LOG_FORMAT: "${ARC_UI_LOG_FORMAT:-console}" # console is readable in a terminal; prod stays json
 
-      # The sidecar, not the cluster. This single URL covers the ARC custom
-      # resources, pods, events, nodes and metrics.k8s.io alike.
       KUBE_API_URL: "http://kube-proxy:8001"
 
       ARC_UI_NAMESPACES: "${ARC_UI_NAMESPACES:-arc-runners}"
       ARC_UI_CONTROLLER_NAMESPACE: "${ARC_UI_CONTROLLER_NAMESPACE:-arc-systems}"
-      ARC_UI_SCRAPE_INTERVAL: "${ARC_UI_SCRAPE_INTERVAL:-15s}"
-      # Left empty, the dashboard discovers the ARC listener pods and scrapes them
-      # at their pod IPs — which works in-cluster and NOT from here, because pod
-      # IPs are not routable from your machine. Expect the health strip to name
-      # every listener as unreachable in this stack. For queue depth locally,
-      # port-forward one listener and point this at it, accepting that one URL
-      # covers one scale set:
-      #   kubectl -n arc-systems port-forward pod/<listener> 8080:8080
-      #   ARC_UI_LISTENER_METRICS_URL=http://host.docker.internal:8080/metrics
-      ARC_UI_LISTENER_METRICS_URL: "${ARC_UI_LISTENER_METRICS_URL:-}"
+      # e.g. kubectl -n monitoring port-forward svc/prometheus 9090 and
+      # ARC_UI_PROMETHEUS_URL=http://host.docker.internal:9090
+      ARC_UI_PROMETHEUS_URL: "${ARC_UI_PROMETHEUS_URL:?set ARC_UI_PROMETHEUS_URL}"
       ARC_UI_GITHUB_ORG: "${ARC_UI_GITHUB_ORG:-}"
       ARC_UI_DB_PATH: "/data/arc-ui.db"
       ARC_UI_SENTRY_DSN: "${ARC_UI_SENTRY_DSN:-}"

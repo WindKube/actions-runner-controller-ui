@@ -86,11 +86,9 @@ func (f SnapshotFunc) Snapshot() fleet.Snapshot { return f() }
 // a snapshot plus a history query into something a template can render, which
 // is what keeps the templates free of logic and the handlers free of layout.
 type Builder struct {
-	Fleet   Snapshotter
-	History History
-	Version string
-	// Interval is the configured scrape interval, shown in the health strip so
-	// an operator can tell a stale chart from a slow one.
+	Fleet    Snapshotter
+	History  History
+	Version  string
 	Interval time.Duration
 
 	// CSS and JS are the content-hashed asset URLs. They are carried on the
@@ -197,10 +195,11 @@ type Overview struct {
 	Throughput BarChart
 	Churn      ChurnChart
 
-	Sets     []SetRow
-	Runners  []fleet.Runner
-	Repos    []RepoBar
-	Failures FailureLane
+	Sets             []SetRow
+	Runners          []fleet.Runner
+	Repos            []RepoBar
+	ReposUnavailable bool
+	Failures         FailureLane
 
 	// Store is the history store's own footprint, reported at the foot of the
 	// page. Nothing else on the dashboard is about the dashboard itself.
@@ -313,24 +312,23 @@ type RepoBar struct {
 	Detail     string
 }
 
-// AreaChart is a stacked area chart with an optional dashed ceiling.
+// AreaChart is a stacked area chart with an optional dashed ceiling. Width is
+// the viewBox width every coordinate was computed against; Unavailable means
+// the source did not answer, which must never draw as an empty or zero chart.
 type AreaChart struct {
-	// Width is the viewBox width every coordinate in this struct was computed
-	// against, and the width the template draws its viewBox with. It is zero on
-	// an empty chart, which renders a placeholder rather than an SVG.
 	Width float64
 
 	Areas []chart.Area
 	Grid  []chart.GridLine
 	Ticks []string
 
-	// Cap is the dashed max-capacity line, absent for unbounded sets.
 	Cap      string
 	CapLabel string
 	CapTopPx string
 
-	Legend []LegendItem
-	Empty  bool
+	Legend      []LegendItem
+	Empty       bool
+	Unavailable bool
 }
 
 // LegendItem is one swatch and label beneath a chart.
@@ -342,16 +340,16 @@ type LegendItem struct {
 
 // LineChart is a single series with optional flat reference lines.
 type LineChart struct {
-	// Width is the geometry's viewBox width; see AreaChart.Width.
 	Width float64
 
-	Title  string
-	Line   chart.Line
-	Refs   []RefLine
-	Grid   []chart.GridLine
-	Ticks  []string
-	Legend []LegendItem
-	Empty  bool
+	Title       string
+	Line        chart.Line
+	Refs        []RefLine
+	Grid        []chart.GridLine
+	Ticks       []string
+	Legend      []LegendItem
+	Empty       bool
+	Unavailable bool
 }
 
 // RefLine is a horizontal request or limit marker.
@@ -363,27 +361,25 @@ type RefLine struct {
 
 // BarChart is a two-segment stacked column chart.
 type BarChart struct {
-	// Width is the geometry's viewBox width; see AreaChart.Width.
 	Width float64
 
-	Bars   []chart.StackedBar
-	Ticks  []string
-	Legend []LegendItem
-	Empty  bool
+	Bars        []chart.StackedBar
+	Ticks       []string
+	Legend      []LegendItem
+	Empty       bool
+	Unavailable bool
 }
 
 // ChurnChart is a column chart mirrored about a centre line.
 type ChurnChart struct {
-	// Width is the geometry's viewBox width; see AreaChart.Width. The mirror
-	// line spans it, so a churn chart drawn at any other width would have its
-	// bars hanging off the end of the line they are mirrored about.
 	Width float64
 
-	Bars   []chart.DivergingBar
-	Centre string
-	Ticks  []string
-	Legend []LegendItem
-	Empty  bool
+	Bars        []chart.DivergingBar
+	Centre      string
+	Ticks       []string
+	Legend      []LegendItem
+	Empty       bool
+	Unavailable bool
 }
 
 // page builds the shared chrome.
@@ -445,10 +441,10 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 		scope = Set(filter.Set)
 	}
 
-	series, _ := b.History.Scope(ctx, scope, win)
-	throughput, _ := b.History.Throughput(ctx, scope, win)
-	churn, _ := b.History.Churn(ctx, scope, win)
-	repos, _ := b.History.Repos(ctx, win, 8)
+	series, seriesErr := b.History.Scope(ctx, scope, win)
+	throughput, throughputErr := b.History.Throughput(ctx, scope, win)
+	churn, churnErr := b.History.Churn(ctx, scope, win)
+	repos, reposErr := b.History.Repos(ctx, win, 8)
 	stats, _ := b.History.Stats(ctx)
 
 	// A store that cannot answer leaves the live snapshot, which still knows what is
@@ -463,25 +459,46 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 	page.Warnings = warnings(snap, totals)
 
 	return Overview{
-		Page:       page,
-		Selects:    filter.Selects(snap),
-		Summary:    filter.Summary(len(runners), len(snap.Runners), len(snap.Sets)),
-		Active:     filter.Active(),
-		Tiles:      overviewTiles(totals),
-		Totals:     totals,
-		History:    areaChart(series, rng),
-		Util:       utilChart(series, rng),
-		CPU:        cpuChart(series, rng),
-		Mem:        memChart(series, rng),
-		Throughput: throughputChart(throughput, rng),
-		Churn:      churnChart(churn, rng),
-		Sets:       setRows(fleet.GroupBySet(runners, sets)),
-		Runners:    runners,
-		Repos:      repoBars(repos, runners),
-		Failures:   lane,
-		Store:      storePanel(stats, now),
-		SetSort:    setSort,
+		Page:             page,
+		Selects:          filter.Selects(snap),
+		Summary:          filter.Summary(len(runners), len(snap.Runners), len(snap.Sets)),
+		Active:           filter.Active(),
+		Tiles:            overviewTiles(totals),
+		Totals:           totals,
+		History:          unavailableArea(areaChart(series, rng), seriesErr),
+		Util:             unavailableLine(utilChart(series, rng), seriesErr),
+		CPU:              unavailableLine(cpuChart(series, rng), seriesErr),
+		Mem:              unavailableLine(memChart(series, rng), seriesErr),
+		Throughput:       unavailableBars(throughputChart(throughput, rng), throughputErr),
+		Churn:            unavailableChurn(churnChart(churn, rng), churnErr),
+		Sets:             setRows(fleet.GroupBySet(runners, sets)),
+		Runners:          runners,
+		Repos:            repoBars(repos, runners),
+		ReposUnavailable: reposErr != nil,
+		Failures:         lane,
+		Store:            storePanel(stats, now),
+		SetSort:          setSort,
 	}
+}
+
+func unavailableArea(c AreaChart, err error) AreaChart {
+	c.Unavailable = err != nil
+	return c
+}
+
+func unavailableLine(c LineChart, err error) LineChart {
+	c.Unavailable = err != nil
+	return c
+}
+
+func unavailableBars(c BarChart, err error) BarChart {
+	c.Unavailable = err != nil
+	return c
+}
+
+func unavailableChurn(c ChurnChart, err error) ChurnChart {
+	c.Unavailable = err != nil
+	return c
 }
 
 // Set builds the RunnerSet detail view. It reports false when the named set is
@@ -502,8 +519,8 @@ func (b *Builder) Set(ctx context.Context, name string, sig Signals, now time.Ti
 	fleet.SortRunners(runners, now)
 	totals := fleet.Aggregate(runners, []fleet.RunnerSet{set})
 
-	series, _ := b.History.Scope(ctx, Set(name), win)
-	churn, _ := b.History.Churn(ctx, Set(name), win)
+	series, seriesErr := b.History.Scope(ctx, Set(name), win)
+	churn, churnErr := b.History.Churn(ctx, Set(name), win)
 
 	page := b.page(name, snap, sig, now, []Crumb{
 		{Label: snap.Org},
@@ -517,10 +534,10 @@ func (b *Builder) Set(ctx context.Context, name string, sig Signals, now time.Ti
 		Totals:  totals,
 		Tiles:   setTiles(set, totals),
 		Config:  setConfig(set),
-		History: areaChart(series, rng),
-		CPU:     cpuChart(series, rng),
-		Mem:     memChart(series, rng),
-		Churn:   churnChart(churn, rng),
+		History: unavailableArea(areaChart(series, rng), seriesErr),
+		CPU:     unavailableLine(cpuChart(series, rng), seriesErr),
+		Mem:     unavailableLine(memChart(series, rng), seriesErr),
+		Churn:   unavailableChurn(churnChart(churn, rng), churnErr),
 		Runners: runners,
 	}, true
 }
@@ -562,7 +579,7 @@ func (b *Builder) Runner(ctx context.Context, name string, sig Signals, now time
 }
 
 func overviewTiles(t fleet.Totals) []Tile {
-	queued := Tile{Label: "queued", Value: "—", Sub: "listener metrics off", Tone: ToneMuted}
+	queued := Tile{Label: "queued", Value: "—", Sub: "no listener metrics", Tone: ToneMuted}
 	if t.QueuedKnown {
 		queued = Tile{Label: "queued", Value: fmt.Sprint(t.Queued), Sub: "jobs waiting", Tone: ToneAttention}
 		if t.Queued == 0 {
@@ -609,7 +626,7 @@ func overviewTiles(t fleet.Totals) []Tile {
 }
 
 func setTiles(s fleet.RunnerSet, t fleet.Totals) []Tile {
-	queued := Tile{Label: "queued", Value: "—", Sub: "listener metrics off", Tone: ToneMuted}
+	queued := Tile{Label: "queued", Value: "—", Sub: "no listener metrics", Tone: ToneMuted}
 	if s.QueuedKnown {
 		queued = Tile{Label: "queued", Value: fmt.Sprint(s.Queued), Sub: "jobs waiting", Tone: ToneAttention}
 	}
@@ -759,15 +776,15 @@ func churnChart(c Counts, r TimeRange) ChurnChart {
 	if c.Len() == 0 {
 		return ChurnChart{Empty: true, Ticks: r.Ticks(), Centre: fmt.Sprintf("%.0f", churnCentre)}
 	}
-	created, destroyed := c.Sum()
+	started, finished := c.Sum()
 	return ChurnChart{
 		Width:  chartW,
 		Bars:   chart.Diverging(c.Up, c.Down, c.Len(), chartW, churnH, churnCentre, c.Peak(), barGap),
 		Centre: fmt.Sprintf("%.0f", churnCentre),
 		Ticks:  r.Ticks(),
 		Legend: []LegendItem{
-			{Label: "created", Tone: ToneSuccess, Value: fmt.Sprintf("%.0f", created)},
-			{Label: "destroyed", Tone: ToneMuted, Value: fmt.Sprintf("%.0f", destroyed)},
+			{Label: "started", Tone: ToneSuccess, Value: fmt.Sprintf("%.0f", started)},
+			{Label: "finished", Tone: ToneMuted, Value: fmt.Sprintf("%.0f", finished)},
 		},
 	}
 }
@@ -852,13 +869,13 @@ func setRows(groups []fleet.SetTotals) []SetRow {
 // and an operator staring at a saturated fleet still needs the answer.
 func repoBars(history []RepoHistory, runners []fleet.Runner) []RepoBar {
 	if len(history) > 0 {
-		peak := lo.MaxBy(history, func(a, b RepoHistory) bool { return a.CPUSeconds > b.CPUSeconds })
+		peak := lo.MaxBy(history, func(a, b RepoHistory) bool { return a.Seconds > b.Seconds })
 		return lo.Map(history, func(h RepoHistory, _ int) RepoBar {
 			return RepoBar{
 				Repository: h.Repository,
-				Value:      h.CPUSeconds,
-				Max:        peak.CPUSeconds,
-				Label:      fmt.Sprintf("%.0f core-s", h.CPUSeconds),
+				Value:      h.Seconds,
+				Max:        peak.Seconds,
+				Label:      RunnerTime(h.Seconds),
 				Detail:     fmt.Sprintf("%d jobs", h.Jobs),
 			}
 		})
@@ -962,8 +979,6 @@ func sourceRows(s fleet.Snapshot, interval time.Duration) []SourceRow {
 	strip := []struct{ name, label string }{
 		{fleet.SourceKubernetes, "kubernetes"},
 		{fleet.SourceARCCRDs, "arc crds"},
-		{fleet.SourceMetrics, "metrics-server"},
-		{fleet.SourceListener, "listener metrics"},
 		{fleet.SourcePrometheus, "prometheus"},
 		{fleet.SourceARCMetrics, "arc metrics"},
 		{fleet.SourceControllerMetrics, "controller metrics"},
@@ -987,7 +1002,7 @@ func sourceRows(s fleet.Snapshot, interval time.Duration) []SourceRow {
 	}
 
 	rows = append(rows,
-		SourceRow{Label: "scrape interval", Value: interval.String(), Tone: ToneMuted},
+		SourceRow{Label: "refresh", Value: interval.String(), Tone: ToneMuted},
 		SourceRow{Label: "listeners", Value: listenerValue(s), Tone: listenerTone(s)},
 	)
 	if len(s.ARCVersions) > 0 {

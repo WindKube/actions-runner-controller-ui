@@ -103,9 +103,8 @@ templ ThroughputPanel(o Overview) {
 	}
 }
 
-// ChurnPanel is runners created against runners destroyed.
 templ ChurnPanel(o Overview) {
-	@Card("churn", "runner churn", o.Range.Label()) {
+	@Card("churn", "jobs started / finished", o.Range.Label()) {
 		@ChurnChartView(o.Churn)
 	}
 }
@@ -215,8 +214,10 @@ templ RunnerRow(r fleet.Runner, now time.Time) {
 
 // ReposPanel ranks repositories by fleet consumption.
 templ ReposPanel(o Overview) {
-	@Card("repos", "consumption by repository", "") {
-		if len(o.Repos) == 0 {
+	@Card("repos", "runner time by repository", "") {
+		if o.ReposUnavailable {
+			@Unavailable()
+		} else if len(o.Repos) == 0 {
 			@Empty("no repository activity yet")
 		} else {
 			<div class="space-y-2.5">

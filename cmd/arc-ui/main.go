@@ -24,10 +24,9 @@ import (
 	"arc-ui/internal/history"
 	"arc-ui/internal/hub"
 	"arc-ui/internal/k8s"
-	"arc-ui/internal/listener"
 	"arc-ui/internal/logging"
-	"arc-ui/internal/metrics"
 	"arc-ui/internal/prom"
+	"arc-ui/internal/promql"
 	"arc-ui/internal/store"
 	"arc-ui/internal/telemetry"
 	"arc-ui/internal/web"
@@ -194,29 +193,16 @@ func run(parent context.Context) error {
 
 	events := hub.New()
 
-	if cfg.PrometheusURL == "" {
-		collector.SetSource(fleet.Source{Name: fleet.SourcePrometheus, Reason: "ARC_UI_PROMETHEUS_URL is not set"})
-	} else {
-		promClient, err := prom.New(promConfig(cfg))
-		if err != nil {
-			return err
-		}
-		prober := prom.NewProber(promClient, promSchema(cfg), cfg.PrometheusProbeInterval, collector, log)
-		go supervise(ctx, log, "prometheus probe", prober.Run)
+	promClient, err := prom.New(promConfig(cfg))
+	if err != nil {
+		return err
 	}
+	queries := promql.Queries{Schema: promSchema(cfg)}
+	prober := prom.NewProber(promClient, queries.Schema, cfg.PrometheusProbeInterval, collector, log)
+	go supervise(ctx, log, "prometheus probe", prober.Run)
 
-	poller := metrics.NewPoller(clients.Metrics, cfg.Namespaces, cfg.ScrapeInterval, log, collector)
-	go supervise(ctx, log, "metrics poller", poller.Run)
-
-	// A configured URL wins: it names one endpoint, which is what an operator pointing
-	// the dashboard at an aggregator has asked for. With nothing configured the
-	// listener pods are discovered from the controller namespace, because ARC runs one
-	// listener per scale set and each serves only its own series.
-	scraper := listener.NewDiscoveringScraper(collector, cfg.ScrapeInterval, log, collector)
-	if cfg.ListenerMetricsURL != "" {
-		scraper = listener.NewScraper(cfg.ListenerMetricsURL, cfg.ScrapeInterval, log, collector)
-	}
-	go supervise(ctx, log, "listener scraper", scraper.Run)
+	live := promql.Live{Client: promClient, Queries: queries, Interval: cfg.RefreshInterval, Sink: collector, Log: log}
+	go supervise(ctx, log, "live prometheus readings", live.Run)
 
 	// Fleet changes are handed to the recorder, which persists each snapshot for the
 	// history charts and then ticks the hub so connected browsers re-render. What is
@@ -257,16 +243,16 @@ func run(parent context.Context) error {
 	handler := &web.Handler{
 		Builder: &web.Builder{
 			Fleet:    collector,
-			History:  history.New(db),
+			History:  promql.History{Rest: history.New(db), Client: promClient, Queries: queries},
 			Version:  version,
-			Interval: cfg.ScrapeInterval,
+			Interval: cfg.RefreshInterval,
 			CSS:      assets.CSS(),
 			JS:       assets.JS(),
 		},
 		Hub:       events,
 		Log:       log,
 		Events:    eventSource{collector},
-		Heartbeat: cfg.ScrapeInterval,
+		Heartbeat: cfg.RefreshInterval,
 		Streams:   web.NewStreamRegistry(),
 	}
 

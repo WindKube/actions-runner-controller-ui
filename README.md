@@ -195,9 +195,16 @@ authority; this table is it in prose.
 | `ARC_UI_LOG_FORMAT` | `json` | `json` or `console`; anything else refuses to start |
 | `ARC_UI_NAMESPACES` | `arc-runners` | comma-separated namespaces holding the AutoscalingRunnerSets and runner pods. **Empty means every namespace** (needs cluster-wide RBAC) |
 | `ARC_UI_CONTROLLER_NAMESPACE` | `arc-systems` | where the ARC controller and the AutoscalingListener pods live. Not the runner namespace |
-| `ARC_UI_SCRAPE_INTERVAL` | `15s` | pod/node metrics poll period. Below 15s re-fetches identical data (metrics-server's own resolution) and only burns API quota; below 1s is rejected |
-| `ARC_UI_LISTENER_METRICS_URL` | — | scrape **one** endpoint instead of discovering the listeners — for something that aggregates them, such as a Prometheus `/federate` URL. See [Queue depth](#queue-depth) |
-| `ARC_UI_LISTENER_METRICS_PATH` | `/metrics` | the path discovered listeners serve metrics on; mirrors the controller chart's `metrics.listenerEndpoint` |
+| `ARC_UI_PROMETHEUS_URL` | — | **required**. Prometheus-compatible query API base URL; every chart, usage figure and queue depth is a query against it |
+| `ARC_UI_PROMETHEUS_BEARER_TOKEN` / `_BEARER_TOKEN_FILE` | — | bearer auth; the file is re-read on every request so a rotated token is picked up |
+| `ARC_UI_PROMETHEUS_USERNAME` / `_PASSWORD` | — | basic auth |
+| `ARC_UI_PROMETHEUS_HEADERS` | — | extra headers, `k=v,k2=v2` (e.g. `X-Scope-OrgID=tenant`) |
+| `ARC_UI_PROMETHEUS_CA_FILE` / `_INSECURE_SKIP_VERIFY` | — | TLS trust |
+| `ARC_UI_PROMETHEUS_TIMEOUT` | `10s` | per-query timeout |
+| `ARC_UI_PROMETHEUS_SCALE_SET_LABEL` | `actions_github_com_scale_set_name` | label your scrape config maps the listener pod's `actions.github.com/scale-set-name` to |
+| `ARC_UI_PROMETHEUS_KSM_SCALE_SET_LABEL` | `label_actions_github_com_scale_set_name` | the same label on `kube_pod_labels` (needs the kube-state-metrics label allowlist) |
+| `ARC_UI_PROMETHEUS_PROBE_INTERVAL` | `1m` | how often the expected series are re-checked for the health strip |
+| `ARC_UI_REFRESH_INTERVAL` | `15s` | live readings refresh and query cache lifetime |
 | `ARC_UI_DB_PATH` | `/data/arc-ui.db` | SQLite history file |
 | `ARC_UI_RETENTION_RUNNER_RAW` | `15m` | raw per-runner samples — only the runner detail view reads them |
 | `ARC_UI_RETENTION_SCOPE_RAW` | `6h` | raw per-scale-set samples |
@@ -216,8 +223,7 @@ authority; this table is it in prose.
 | `ARC_UI_SENTRY_DSN` | — | Sentry off when empty |
 | `ARC_UI_SENTRY_ENVIRONMENT` | `production` | |
 | `ARC_UI_SENTRY_SAMPLE_RATE` | `1.0` | |
-| `KUBE_API_URL` | — | override the API server address. **Unprefixed on purpose**: it names shared infrastructure, not this app's own setting. `metrics.k8s.io` is an aggregated API served *through* the API server, so this one URL covers custom resources, pods, events and metrics alike |
-| `METRICS_SERVER_URL` | — | deprecated alias for `KUBE_API_URL`, folded in with a warning. It was always a misunderstanding: nothing talks to metrics-server directly |
+| `KUBE_API_URL` | — | override the API server address. **Unprefixed on purpose**: it names shared infrastructure, not this app's own setting |
 
 ## Queue depth
 

@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -132,10 +130,6 @@ func (c *Collector) Start(ctx context.Context) error {
 	logSource(c.log, arcSrc)
 	c.SetSource(arcSrc)
 
-	metricsSrc := probeMetrics(ctx, c.clients.Kube, c.clients.Discovery, scope, now)
-	logSource(c.log, metricsSrc)
-	c.SetSource(metricsSrc)
-
 	syncFns := make([]cache.InformerSynced, 0, len(arcapi.AllGVRs())+2)
 	syncFns = append(syncFns, c.startCustomResourceInformers(ctx, scope, usable)...)
 	syncFns = append(syncFns, c.startPodInformers(ctx, scope)...)
@@ -237,61 +231,6 @@ func copySnapshot(s fleet.Snapshot) fleet.Snapshot {
 	s.Sources = slices.Clone(s.Sources)
 	s.ARCVersions = slices.Clone(s.ARCVersions)
 	return s
-}
-
-// listenerMetricsPort is the port name ARC gives listeners when metrics are on.
-const listenerMetricsPort = "metrics"
-
-const defaultListenerMetricsPath = "/metrics"
-
-// ListenerTargets returns one scrape target per running listener pod that
-// serves metrics. Each listener serves only its own scale set.
-func (c *Collector) ListenerTargets() []fleet.ListenerTarget {
-	path := c.cfg.ListenerMetricsPath
-	if path == "" {
-		path = defaultListenerMetricsPath
-	}
-
-	c.mu.Lock()
-	pods := lo.Values(c.ctrlPods)
-	c.mu.Unlock()
-
-	out := make([]fleet.ListenerTarget, 0, len(pods))
-	for _, pod := range pods {
-		if pod == nil || pod.Status.PodIP == "" || pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
-			continue
-		}
-		// The scale-set labels separate listeners from the controller manager.
-		set := pod.Labels[arcapi.LabelScaleSetName]
-		ns := pod.Labels[arcapi.LabelScaleSetNamespace]
-		if set == "" || ns == "" || pod.Labels[arcapi.LabelEphemeralRunner] == "True" {
-			continue
-		}
-		port, ok := metricsPortOf(pod)
-		if !ok {
-			continue
-		}
-		out = append(out, fleet.ListenerTarget{
-			Set:       set,
-			Namespace: ns,
-			Pod:       pod.Name,
-			URL:       fmt.Sprintf("http://%s%s", net.JoinHostPort(pod.Status.PodIP, strconv.Itoa(int(port))), path),
-		})
-	}
-
-	slices.SortFunc(out, func(a, b fleet.ListenerTarget) int { return strings.Compare(a.Pod, b.Pod) })
-	return out
-}
-
-func metricsPortOf(pod *corev1.Pod) (int32, bool) {
-	for _, ctr := range pod.Spec.Containers {
-		for _, p := range ctr.Ports {
-			if p.Name == listenerMetricsPort {
-				return p.ContainerPort, true
-			}
-		}
-	}
-	return 0, false
 }
 
 // SetUsage injects the latest pod usage, keyed "namespace/podname".

@@ -338,8 +338,11 @@ func previewSnapshot() fleet.Snapshot {
 		Sources: []fleet.Source{
 			{Name: fleet.SourceKubernetes, Available: true, CheckedAt: previewNow},
 			{Name: fleet.SourceARCCRDs, Available: true, CheckedAt: previewNow},
-			{Name: fleet.SourceMetrics, Available: true, CheckedAt: previewNow},
-			{Name: fleet.SourceListener, Available: true, CheckedAt: previewNow},
+			{Name: fleet.SourcePrometheus, Available: true, CheckedAt: previewNow},
+			{Name: fleet.SourceARCMetrics, Available: true, CheckedAt: previewNow},
+			{Name: fleet.SourceControllerMetrics, Available: true, CheckedAt: previewNow},
+			{Name: fleet.SourceCAdvisor, Available: true, CheckedAt: previewNow},
+			{Name: fleet.SourceKSM, Available: true, CheckedAt: previewNow},
 			{Name: fleet.SourceStore, Available: true, CheckedAt: previewNow},
 		},
 	}
@@ -466,11 +469,11 @@ func previewCounts(w Window, n int, amp, freq float64) Counts {
 
 func (previewHistory) Repos(_ context.Context, _ Window, limit int) ([]RepoHistory, error) {
 	all := []RepoHistory{
-		{Repository: "WindKube/web-api", Jobs: 412, CPUSeconds: 184320, MemGiBSecs: 372000},
-		{Repository: "WindKube/payments", Jobs: 208, CPUSeconds: 96400, MemGiBSecs: 201400},
-		{Repository: "WindKube/mobile", Jobs: 96, CPUSeconds: 71200, MemGiBSecs: 156800},
-		{Repository: "WindKube/docs", Jobs: 143, CPUSeconds: 22800, MemGiBSecs: 41200},
-		{Repository: "WindKube/infra", Jobs: 61, CPUSeconds: 14100, MemGiBSecs: 29900},
+		{Repository: "WindKube/web-api", Jobs: 412, Seconds: 184320},
+		{Repository: "WindKube/payments", Jobs: 208, Seconds: 96400},
+		{Repository: "WindKube/mobile", Jobs: 96, Seconds: 71200},
+		{Repository: "WindKube/docs", Jobs: 143, Seconds: 22800},
+		{Repository: "WindKube/infra", Jobs: 61, Seconds: 14100},
 	}
 	if limit > 0 && len(all) > limit {
 		all = all[:limit]

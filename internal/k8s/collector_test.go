@@ -107,7 +107,7 @@ func TestSnapshotIsIsolatedFromTheCache(t *testing.T) {
 	t.Parallel()
 
 	c := testCollector(fake.NewClientset())
-	c.SetSource(fleet.Source{Name: fleet.SourceMetrics, Available: false, Reason: "not installed"})
+	c.SetSource(fleet.Source{Name: fleet.SourcePrometheus, Available: false, Reason: "not installed"})
 
 	first := c.Snapshot()
 	first.Sources = append(first.Sources, fleet.Source{Name: "injected"})
@@ -116,7 +116,7 @@ func TestSnapshotIsIsolatedFromTheCache(t *testing.T) {
 	for _, s := range second.Sources {
 		require.NotEqual(t, "injected", s.Name, "a caller's append leaked into the collector's cached snapshot")
 	}
-	src, ok := second.Source(fleet.SourceMetrics)
+	src, ok := second.Source(fleet.SourcePrometheus)
 	require.True(t, ok, "metrics source = %+v, want the unavailable one that was set", src)
 	require.False(t, src.Available, "metrics source = %+v, want the unavailable one that was set", src)
 }
@@ -483,7 +483,7 @@ func TestSortSourcesIsStable(t *testing.T) {
 	sources := []fleet.Source{
 		{Name: fleet.SourceStore},
 		{Name: "unknown-source"},
-		{Name: fleet.SourceMetrics},
+		{Name: fleet.SourcePrometheus},
 		{Name: fleet.SourceKubernetes},
 		{Name: fleet.SourceARCCRDs},
 	}
@@ -492,7 +492,7 @@ func TestSortSourcesIsStable(t *testing.T) {
 	want := []string{
 		fleet.SourceKubernetes,
 		fleet.SourceARCCRDs,
-		fleet.SourceMetrics,
+		fleet.SourcePrometheus,
 		fleet.SourceStore,
 		"unknown-source",
 	}
@@ -670,98 +670,4 @@ func TestRepeatingAnUnchangedSourceStaysQuiet(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "recovery was never announced")
 	}
-}
-
-// listenerPod is an AutoscalingListener pod as the ARC controller creates it:
-// the scale set's labels copied onto it, and a container port named "metrics"
-// that exists only when the controller was configured with a metrics address.
-func listenerPod(name, ip string, withMetricsPort bool) *corev1.Pod {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: "arc-systems",
-			Labels: map[string]string{
-				arcapi.LabelScaleSetName:      "linux-x64",
-				arcapi.LabelScaleSetNamespace: "arc-runners",
-			},
-		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{Name: "listener"}},
-		},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: ip},
-	}
-	if withMetricsPort {
-		pod.Spec.Containers[0].Ports = []corev1.ContainerPort{
-			{Name: "metrics", ContainerPort: 8080, Protocol: corev1.ProtocolTCP},
-		}
-	}
-	return pod
-}
-
-// One URL cannot cover a fleet: ARC runs one listener pod per scale set and each
-// serves only its own series, so a twenty-set install needs twenty scrapes. The
-// pod cache already carries what that takes.
-func TestListenerTargetsAreDiscoveredFromTheListenerPods(t *testing.T) {
-	t.Parallel()
-
-	c := testCollector(fake.NewClientset())
-
-	// The controller manager also lives here and also serves metrics, but its
-	// series are gha_controller_* and it carries no scale set labels.
-	manager := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "arc-gha-rs-controller-abc", Namespace: "arc-systems"},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name:  "manager",
-			Ports: []corev1.ContainerPort{{Name: "metrics", ContainerPort: 8080}},
-		}}},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.9"},
-	}
-
-	pending := listenerPod("linux-x64-pending-listener", "", true)
-	pending.Status.Phase = corev1.PodPending
-
-	c.mu.Lock()
-	c.ctrlPods = map[string]*corev1.Pod{
-		"arc-systems/ready":   listenerPod("linux-x64-abc-listener", "10.0.0.1", true),
-		"arc-systems/no-port": listenerPod("linux-x64-def-listener", "10.0.0.2", false),
-		"arc-systems/pending": pending,
-		"arc-systems/manager": manager,
-	}
-	c.mu.Unlock()
-
-	got := c.ListenerTargets()
-
-	require.Len(t, got, 1, "want only the listener that is running and exposes a metrics port, got %+v", got)
-	assert.Equal(t, "http://10.0.0.1:8080/metrics", got[0].URL, "url")
-	assert.Equal(t, "linux-x64", got[0].Set, "set")
-	assert.Equal(t, "arc-runners", got[0].Namespace, "namespace")
-	assert.Equal(t, "linux-x64-abc-listener", got[0].Pod, "pod")
-}
-
-// A pod IP is reused the moment the address is recycled, so targets have to be
-// rebuilt from the cache rather than remembered.
-func TestListenerTargetsFollowTheConfiguredMetricsPath(t *testing.T) {
-	t.Parallel()
-
-	c := NewCollector(
-		&Clients{Kube: fake.NewClientset()},
-		config.Config{
-			Namespaces:          []string{"arc-runners"},
-			ControllerNamespace: "arc-systems",
-			ListenerMetricsPath: "/internal/metrics",
-		},
-		zerolog.New(io.Discard),
-	)
-
-	c.mu.Lock()
-	c.ctrlPods = map[string]*corev1.Pod{
-		"arc-systems/ready": listenerPod("linux-x64-abc-listener", "10.0.0.1", true),
-	}
-	c.mu.Unlock()
-
-	got := c.ListenerTargets()
-
-	require.Len(t, got, 1, "want the one listener")
-	assert.Equal(t, "http://10.0.0.1:8080/internal/metrics", got[0].URL,
-		"ARC's listenerEndpoint is configurable and the pod does not advertise it")
 }

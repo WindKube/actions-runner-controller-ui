@@ -577,6 +577,14 @@ func Thousands(n int64) string { return humanize.Comma(n) }
 // Pct renders a fraction as a whole percentage.
 func Pct(f float64) string { return fmt.Sprintf("%.0f%%", f*100) }
 
+// RunnerTime renders runner seconds as minutes or hours.
+func RunnerTime(seconds float64) string {
+	if seconds < 3600 {
+		return fmt.Sprintf("%.0f runner-min", seconds/60)
+	}
+	return fmt.Sprintf("%.1f runner-h", seconds/3600)
+}
+
 // BarWidth is the inline width style for a micro-bar fill.
 func BarWidth(used, total float64) string {
 	return "width:" + chart.Percent(used, total) + "%"

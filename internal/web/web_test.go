@@ -75,7 +75,7 @@ func sampleSnapshot() fleet.Snapshot {
 		Sources: []fleet.Source{
 			{Name: fleet.SourceKubernetes, Available: true, CheckedAt: now},
 			{Name: fleet.SourceARCCRDs, Available: true, CheckedAt: now},
-			{Name: fleet.SourceMetrics, Available: false, Reason: "metrics-server not installed", CheckedAt: now},
+			{Name: fleet.SourceCAdvisor, Available: false, Reason: "no container_cpu_usage_seconds_total series", CheckedAt: now},
 		},
 	}
 }
@@ -169,9 +169,7 @@ func TestDegradedSourceIsNamedNotHidden(t *testing.T) {
 
 	html := renderOverview(t)
 
-	// The whole point of the health strip: an empty resource chart must be
-	// explained, not left looking like an idle fleet.
-	assert.Contains(t, html, "metrics-server not installed", "an unavailable source must be named in the health strip")
+	assert.Contains(t, html, "no container_cpu_usage_seconds_total series", "an unavailable source must be named in the health strip")
 }
 
 func TestEmptyHistoryRendersAnExplanation(t *testing.T) {
@@ -179,8 +177,43 @@ func TestEmptyHistoryRendersAnExplanation(t *testing.T) {
 
 	html := renderOverview(t)
 
-	assert.Contains(t, html, "no history yet", "an empty history chart should say why it is empty")
+	assert.Contains(t, html, "no data in this window", "an empty history chart should say why it is empty")
+	assert.NotContains(t, html, "data-unavailable", "an empty answer is not an outage")
 	assert.NotContains(t, html, "<polygon points=\"\"", "an empty chart emitted a degenerate polygon")
+}
+
+type downHistory struct{ NoHistory }
+
+var errDown = errors.New("prometheus: connection refused")
+
+func (downHistory) Scope(context.Context, Scope, Window) (ScopeSeries, error) {
+	return ScopeSeries{}, errDown
+}
+func (downHistory) Throughput(context.Context, Scope, Window) (Counts, error) {
+	return Counts{}, errDown
+}
+func (downHistory) Churn(context.Context, Scope, Window) (Counts, error)      { return Counts{}, errDown }
+func (downHistory) Repos(context.Context, Window, int) ([]RepoHistory, error) { return nil, errDown }
+
+func TestPrometheusOutageRendersUnavailableNotZeros(t *testing.T) {
+	t.Parallel()
+
+	b := testBuilder()
+	b.History = downHistory{}
+	o := b.Overview(context.Background(), Signals{}, now)
+
+	assert.True(t, o.History.Unavailable, "runner history")
+	assert.True(t, o.Util.Unavailable, "utilization")
+	assert.True(t, o.CPU.Unavailable, "cpu")
+	assert.True(t, o.Mem.Unavailable, "memory")
+	assert.True(t, o.Throughput.Unavailable, "throughput")
+	assert.True(t, o.Churn.Unavailable, "churn")
+	assert.True(t, o.ReposUnavailable, "repos")
+
+	html := renderOverviewWith(t, b)
+	assert.Equal(t, 7, strings.Count(html, "data-unavailable"), "every Prometheus panel must say it is unavailable")
+	assert.NotContains(t, html, "no data in this window", "an outage must not read as an empty window")
+	assert.Contains(t, html, "arc-arm64-xyz", "live tables still render from the informer cache")
 }
 
 // A grid rule has to span the width its geometry was computed for. The rules
@@ -1044,7 +1077,7 @@ func TestPartlyAvailableSourceIsReportedAsDegraded(t *testing.T) {
 
 	const reason = "17 of 20 listeners scraped; arc-arm64-listener: connection refused"
 
-	src := fleet.Source{Name: fleet.SourceListener, Available: true, Reason: reason, CheckedAt: now}
+	src := fleet.Source{Name: fleet.SourceARCMetrics, Available: true, Reason: reason, CheckedAt: now}
 	assert.Equal(t, reason, SourceValue(src, "ok"), "a degraded source must show why, not \"ok\"")
 	assert.Equal(t, ToneAttention, SourceTone(src), "a degraded source is neither success nor danger")
 

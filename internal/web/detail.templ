@@ -84,9 +84,8 @@ templ ResourcePair(cpu, mem LineChart) {
 	</div>
 }
 
-// SetChurn is runner creation against termination for one set.
 templ SetChurn(d SetDetail) {
-	@Card("churn", "runner churn", d.Range.Label()) {
+	@Card("churn", "jobs started / finished", d.Range.Label()) {
 		@ChurnChartView(d.Churn)
 	}
 }

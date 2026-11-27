@@ -25,9 +25,6 @@ const statsTTL = time.Minute
 // interface keeps the adapter testable without a database.
 type Queries interface {
 	Series(ctx context.Context, scope store.Scope, scopeID string, metrics []store.Metric, r store.Range) (map[store.Metric][]store.Point, error)
-	Churn(ctx context.Context, setName string, r store.Range) (created, terminated []store.Point, err error)
-	Throughput(ctx context.Context, setName string, r store.Range) (ok, failed []store.Point, err error)
-	RepoConsumption(ctx context.Context, r store.Range) ([]store.RepoTotal, error)
 	Failures(ctx context.Context, setName string, r store.Range, limit int) ([]store.FailureRecord, int64, error)
 	Jobs(ctx context.Context, f store.JobFilter, r store.Range) ([]store.JobRecord, int64, error)
 	WorkflowRuns(ctx context.Context, f store.JobFilter, r store.Range) ([]store.WorkflowRun, int64, error)
@@ -37,7 +34,8 @@ type Queries interface {
 	Stats(ctx context.Context) (store.Stats, error)
 }
 
-// Adapter satisfies web.History using the store.
+// Adapter answers the store-backed half of web.History; promql.History covers
+// the charts.
 type Adapter struct {
 	Q Queries
 
@@ -45,8 +43,6 @@ type Adapter struct {
 	// zero-valued Adapter does; New always supplies one.
 	stats *statsCache
 }
-
-var _ web.History = Adapter{}
 
 func New(q Queries) Adapter {
 	return Adapter{Q: q, stats: &statsCache{clock: time.Now}}
@@ -145,38 +141,6 @@ func (a Adapter) countStats(ctx context.Context) (web.StoreStats, error) {
 	}, nil
 }
 
-// scopeMetrics is everything the overview and set-detail charts read. They are
-// fetched in one call because the store answers them from a single scan.
-var scopeMetrics = []store.Metric{
-	store.MetricBusy, store.MetricIdle, store.MetricPending,
-	store.MetricCapacity,
-	store.MetricCPUUsed, store.MetricCPURequest,
-	store.MetricMemUsed, store.MetricMemRequest,
-}
-
-// Scope returns bucketed counts and resource series.
-func (a Adapter) Scope(ctx context.Context, scope web.Scope, w web.Window) (web.ScopeSeries, error) {
-	kind, id := storeScope(scope)
-
-	series, err := a.Q.Series(ctx, kind, id, scopeMetrics, rng(w))
-	if err != nil {
-		return web.ScopeSeries{}, err
-	}
-
-	axis := axisOf(series)
-	return web.ScopeSeries{
-		At:         axis,
-		Busy:       align(series[store.MetricBusy], axis),
-		Idle:       align(series[store.MetricIdle], axis),
-		Pending:    align(series[store.MetricPending], axis),
-		Capacity:   align(series[store.MetricCapacity], axis),
-		CPUUsed:    align(series[store.MetricCPUUsed], axis),
-		CPURequest: align(series[store.MetricCPURequest], axis),
-		MemUsed:    align(series[store.MetricMemUsed], axis),
-		MemRequest: align(series[store.MetricMemRequest], axis),
-	}, nil
-}
-
 // Runner returns raw per-runner samples.
 func (a Adapter) Runner(ctx context.Context, name string, w web.Window) (web.RunnerSeries, error) {
 	series, err := a.Q.Series(ctx, store.ScopeRunner, name,
@@ -193,48 +157,6 @@ func (a Adapter) Runner(ctx context.Context, name string, w web.Window) (web.Run
 	}
 	out.Peak.CPU = web.PeakOf(out.CPU)
 	out.Peak.Mem = web.PeakOf(out.Mem)
-	return out, nil
-}
-
-// Throughput returns jobs completed and failed per bucket.
-func (a Adapter) Throughput(ctx context.Context, scope web.Scope, w web.Window) (web.Counts, error) {
-	ok, failed, err := a.Q.Throughput(ctx, string(scope), rng(w))
-	if err != nil {
-		return web.Counts{}, err
-	}
-	return counts(ok, failed), nil
-}
-
-// Churn returns runners created and destroyed per bucket.
-func (a Adapter) Churn(ctx context.Context, scope web.Scope, w web.Window) (web.Counts, error) {
-	created, terminated, err := a.Q.Churn(ctx, string(scope), rng(w))
-	if err != nil {
-		return web.Counts{}, err
-	}
-	return counts(created, terminated), nil
-}
-
-// Repos returns per-repository consumption, busiest first.
-func (a Adapter) Repos(ctx context.Context, w web.Window, limit int) ([]web.RepoHistory, error) {
-	totals, err := a.Q.RepoConsumption(ctx, rng(w))
-	if err != nil {
-		return nil, err
-	}
-	if limit > 0 && len(totals) > limit {
-		totals = totals[:limit]
-	}
-
-	out := make([]web.RepoHistory, 0, len(totals))
-	for _, t := range totals {
-		out = append(out, web.RepoHistory{
-			Repository: t.Repository,
-			Jobs:       t.Jobs,
-			CPUSeconds: t.CPUSeconds,
-			// The store integrates byte-seconds; the panel shows GiB-seconds,
-			// because byte-seconds for a real fleet is a sixteen-digit number.
-			MemGiBSecs: t.MemByteSeconds / gib,
-		})
-	}
 	return out, nil
 }
 
@@ -373,14 +295,6 @@ func rng(w web.Window) store.Range {
 	return store.Range{From: w.From, To: w.To, Points: w.Points}
 }
 
-// storeScope maps the view's scope onto the store's scope-and-id pair.
-func storeScope(s web.Scope) (store.Scope, string) {
-	if s == web.FleetScope {
-		return store.ScopeFleet, ""
-	}
-	return store.ScopeSet, string(s)
-}
-
 // axisOf builds one time axis covering every metric returned.
 //
 // The metrics are returned as independent slices, and a metric with no rows for
@@ -419,14 +333,4 @@ func align(points []store.Point, axis []time.Time) []float64 {
 		out[i] = byTime[t.UnixNano()]
 	}
 	return out
-}
-
-// counts merges two event series onto a shared axis.
-func counts(up, down []store.Point) web.Counts {
-	axis := axisOf(map[store.Metric][]store.Point{"up": up, "down": down})
-	return web.Counts{
-		At:   axis,
-		Up:   align(up, axis),
-		Down: align(down, axis),
-	}
 }
