@@ -119,34 +119,6 @@ func TestProbeARCCRDs(t *testing.T) {
 	})
 }
 
-func TestProbeMetrics(t *testing.T) {
-	t.Parallel()
-
-	scope := namespaceScope{watch: []string{"arc-runners"}, controller: "arc-systems"}
-
-	t.Run("present and permitted", func(t *testing.T) {
-		t.Parallel()
-		src := probeMetrics(context.Background(), allowingClientset(nil), stubDiscovery{}, scope, testNow)
-		assert.True(t, src.Available, "source = %+v, want available", src)
-	})
-
-	t.Run("not installed", func(t *testing.T) {
-		t.Parallel()
-		notFound := apierrors.NewNotFound(schema.GroupResource{Group: "metrics.k8s.io", Resource: "pods"}, "")
-		src := probeMetrics(context.Background(), allowingClientset(nil), stubDiscovery{resourcesErr: notFound}, scope, testNow)
-		require.False(t, src.Available, "source = %+v, want unavailable", src)
-		assert.Contains(t, src.Reason, "not installed")
-	})
-
-	t.Run("installed but not permitted", func(t *testing.T) {
-		t.Parallel()
-		kube := allowingClientset(map[string]string{"pods": "list"})
-		src := probeMetrics(context.Background(), kube, stubDiscovery{}, scope, testNow)
-		require.False(t, src.Available, "source = %+v, want unavailable", src)
-		assert.Contains(t, src.Reason, "missing RBAC", "want an RBAC explanation")
-	})
-}
-
 func TestProbeKubernetesReportsUnreachableDistinctly(t *testing.T) {
 	t.Parallel()
 

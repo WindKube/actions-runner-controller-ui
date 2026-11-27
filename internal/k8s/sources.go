@@ -10,7 +10,6 @@ import (
 
 	"github.com/rs/zerolog"
 	authzv1 "k8s.io/api/authorization/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -21,46 +20,24 @@ import (
 	"arc-ui/internal/fleet"
 )
 
-// MetricsGroupVersion is the aggregated API metrics-server serves. It is
-// reached through the main API server, not from metrics-server directly.
-const MetricsGroupVersion = "metrics.k8s.io/v1beta1"
-
-// unreachablePrefix marks the one source failure that is fatal to boot: an API
-// server we cannot talk to at all, as opposed to one that merely refuses us.
+// unreachablePrefix marks the one fatal source failure: an API server we cannot
+// talk to at all.
 const unreachablePrefix = "api server unreachable"
 
-// Three different questions get asked with three different APIs, and mixing them
-// up produces confidently wrong answers:
-//
-//   - "does this aggregated API exist?" is discovery. metrics.k8s.io is an
-//     APIService, not a CRD, so the RESTMapper is the wrong instrument.
-//   - "is this CRD installed?" is the RESTMapper, because a dynamic informer on
-//     a missing resource does not fail, it retries forever.
-//   - "am I allowed?" is SelfSubjectAccessReview, which needs no permissions of
-//     its own, so it cannot be blocked by the RBAC it is checking.
-
-// probeKubernetes checks that the API server answers and that we may list and
-// watch the pods every view depends on.
+// probeKubernetes checks the API server answers and that we may list and watch
+// pods; an informer needs both verbs.
 func probeKubernetes(ctx context.Context, kube kubernetes.Interface, disc discovery.DiscoveryInterface, cfg namespaceScope, now time.Time) fleet.Source {
 	if _, err := disc.ServerVersion(); err != nil {
 		return unavailable(fleet.SourceKubernetes, fmt.Sprintf("%s: %v", unreachablePrefix, err), now)
 	}
 
 	checks := make([]accessCheck, 0, 2*len(cfg.watch)+2)
-	for _, ns := range cfg.watch {
+	for _, ns := range append(slices.Clone(cfg.watch), cfg.controller) {
 		checks = append(checks,
 			accessCheck{namespace: ns, resource: "pods", verb: "list"},
 			accessCheck{namespace: ns, resource: "pods", verb: "watch"},
 		)
 	}
-	// Both verbs here too. startPodInformers runs a real informer, and an informer
-	// watches as well as lists — probing only `list` lets a missing `watch` through,
-	// so boot reports Kubernetes as available and the gap surfaces later as a
-	// reflector error far from anything that names RBAC.
-	checks = append(checks,
-		accessCheck{namespace: cfg.controller, resource: "pods", verb: "list"},
-		accessCheck{namespace: cfg.controller, resource: "pods", verb: "watch"},
-	)
 
 	if denied := deniedChecks(ctx, kube, checks); len(denied) > 0 {
 		return unavailable(fleet.SourceKubernetes, "missing RBAC: "+strings.Join(denied, ", "), now)
@@ -68,32 +45,23 @@ func probeKubernetes(ctx context.Context, kube kubernetes.Interface, disc discov
 	return available(fleet.SourceKubernetes, now)
 }
 
-// probeARCCRDs reports whether the ARC custom resources are installed and
-// readable, and returns the per-resource verdict the informer wiring gates on.
-//
-// This check has to happen before any informer is created. A dynamic informer
-// pointed at an uninstalled CRD does not return an error from ForResource — it
-// spins on a 404 forever and hangs WaitForCacheSync until the boot timeout.
+// probeARCCRDs reports whether the ARC CRDs are installed and readable, and
+// which ones the informers may start on. It must run first: an informer on a
+// missing CRD spins on a 404 forever.
 func probeARCCRDs(ctx context.Context, kube kubernetes.Interface, mapper meta.RESTMapper, cfg namespaceScope, now time.Time) (fleet.Source, map[schema.GroupVersionResource]bool) {
 	usable := make(map[schema.GroupVersionResource]bool, len(arcapi.AllGVRs()))
 
-	// The deferred mapper caches negative discovery results, so a dashboard that
-	// started before the CRDs were installed would never notice them.
+	// The deferred mapper caches negative results.
 	if r, ok := mapper.(interface{ Reset() }); ok {
 		r.Reset()
 	}
 
-	var (
-		notInstalled []string
-		unreadable   []string
-	)
+	var notInstalled, unreadable []string
 	for _, gvr := range arcapi.AllGVRs() {
 		if _, err := mapper.KindFor(gvr); err != nil {
 			if meta.IsNoMatchError(err) {
 				notInstalled = append(notInstalled, gvr.Resource)
 			} else {
-				// Discovery itself failed, which is a different problem from a
-				// CRD that is genuinely absent and deserves a different message.
 				unreadable = append(unreadable, fmt.Sprintf("%s (%v)", gvr.Resource, err))
 			}
 			continue
@@ -108,15 +76,11 @@ func probeARCCRDs(ctx context.Context, kube kubernetes.Interface, mapper meta.RE
 		return unavailable(fleet.SourceARCCRDs, "actions.github.com CRDs are not installed", now), usable
 	}
 
-	// Permissions are checked per resource so a denial on one CRD cannot take
-	// the others down with it. Substring-matching resource names would: every
-	// ARC plural is a prefix of another ("ephemeralrunners" of
-	// "ephemeralrunnersets"), so one denied watch would blank two informers.
+	// Per resource, so one denial cannot blank the others.
 	var denied []string
 	for gvr := range usable {
 		namespaces := cfg.watch
 		if gvr == arcapi.AutoscalingListenerGVR {
-			// Listeners live with the controller, not with the runners.
 			namespaces = []string{cfg.controller}
 		}
 		checks := make([]accessCheck, 0, 2*len(namespaces))
@@ -136,11 +100,7 @@ func probeARCCRDs(ctx context.Context, kube kubernetes.Interface, mapper meta.RE
 		slices.Sort(denied)
 		return unavailable(fleet.SourceARCCRDs, "missing RBAC: "+strings.Join(denied, ", "), now), usable
 	}
-	// Built into a fresh slice rather than appended onto notInstalled: append would
-	// write through that slice's spare capacity, so the two would alias.
-	missing := make([]string, 0, len(notInstalled)+len(unreadable))
-	missing = append(missing, notInstalled...)
-	missing = append(missing, unreadable...)
+	missing := slices.Concat(notInstalled, unreadable)
 	if len(missing) > 0 {
 		slices.Sort(missing)
 		return unavailable(fleet.SourceARCCRDs, "unavailable: "+strings.Join(missing, ", "), now), usable
@@ -148,29 +108,6 @@ func probeARCCRDs(ctx context.Context, kube kubernetes.Interface, mapper meta.RE
 	return available(fleet.SourceARCCRDs, now), usable
 }
 
-// probeMetrics reports whether metrics-server's aggregated API is present and
-// readable. A cluster without it is entirely normal; usage columns render as
-// "—" rather than as zero.
-func probeMetrics(ctx context.Context, kube kubernetes.Interface, disc discovery.DiscoveryInterface, cfg namespaceScope, now time.Time) fleet.Source {
-	if _, err := disc.ServerResourcesForGroupVersion(MetricsGroupVersion); err != nil {
-		if apierrors.IsNotFound(err) {
-			return unavailable(fleet.SourceMetrics, "metrics-server is not installed", now)
-		}
-		// An aggregated API whose backend is down answers 503 through discovery.
-		return unavailable(fleet.SourceMetrics, fmt.Sprintf("%s unavailable: %v", MetricsGroupVersion, err), now)
-	}
-
-	checks := make([]accessCheck, 0, len(cfg.watch))
-	for _, ns := range cfg.watch {
-		checks = append(checks, accessCheck{namespace: ns, group: "metrics.k8s.io", resource: "pods", verb: "list"})
-	}
-	if denied := deniedChecks(ctx, kube, checks); len(denied) > 0 {
-		return unavailable(fleet.SourceMetrics, "missing RBAC: "+strings.Join(denied, ", "), now)
-	}
-	return available(fleet.SourceMetrics, now)
-}
-
-// accessCheck is one namespaced resource permission to verify.
 type accessCheck struct {
 	namespace string
 	group     string
@@ -190,13 +127,9 @@ func (a accessCheck) String() string {
 	return fmt.Sprintf("%s %s in %s", a.verb, res, ns)
 }
 
-// deniedChecks returns the human-readable names of the checks that came back
-// denied.
-//
-// A failure to run the review at all is deliberately NOT reported as a denial:
-// SelfSubjectAccessReview requires no permissions, so an error means the API
-// server is unhappy, and guessing "denied" would blank the dashboard for a reason
-// unrelated to RBAC.
+// deniedChecks names the denied checks. A review that fails to run is not a
+// denial: SelfSubjectAccessReview needs no permissions, so an error means the
+// API server is unhappy, not that RBAC said no.
 func deniedChecks(ctx context.Context, kube kubernetes.Interface, checks []accessCheck) []string {
 	var denied []string
 	for _, chk := range checks {
@@ -221,12 +154,9 @@ func deniedChecks(ctx context.Context, kube kubernetes.Interface, checks []acces
 	return denied
 }
 
-// namespaceScope is the set of namespaces a probe should ask about.
 type namespaceScope struct {
-	// watch is the runner namespaces, or a single empty string meaning
-	// cluster-wide.
-	watch []string
-	// controller holds the ARC controller and the listener pods.
+	// watch is the runner namespaces, or "" for cluster-wide.
+	watch      []string
 	controller string
 }
 
@@ -238,25 +168,24 @@ func unavailable(name, reason string, now time.Time) fleet.Source {
 	return fleet.Source{Name: name, Available: false, Reason: reason, CheckedAt: now}
 }
 
-// sourceOrder is the order the control-plane strip renders sources in: the
-// closer to the cluster, the further left.
+// sourceOrder: the closer to the cluster, the further left.
 var sourceOrder = map[string]int{
-	fleet.SourceKubernetes: 0,
-	fleet.SourceARCCRDs:    1,
-	fleet.SourceMetrics:    2,
-	fleet.SourceListener:   3,
-	fleet.SourceStore:      4,
+	fleet.SourceKubernetes:        0,
+	fleet.SourceARCCRDs:           1,
+	fleet.SourcePrometheus:        2,
+	fleet.SourceARCMetrics:        3,
+	fleet.SourceControllerMetrics: 4,
+	fleet.SourceCAdvisor:          5,
+	fleet.SourceKSM:               6,
+	fleet.SourceStore:             7,
 }
 
-// sortSources gives the strip a stable order regardless of which probe finished
-// first or which subsystem pushed an update last.
 func sortSources(sources []fleet.Source) {
 	slices.SortStableFunc(sources, func(a, b fleet.Source) int {
 		ra, oka := sourceOrder[a.Name]
 		rb, okb := sourceOrder[b.Name]
 		return cmp.Or(
-			// A source the strip does not know about sorts after every one it
-			// does, rather than into rank 0 alongside kubernetes.
+			// Unknown sources sort last, not into rank 0.
 			cmp.Compare(boolRank(!oka), boolRank(!okb)),
 			cmp.Compare(ra, rb),
 			cmp.Compare(a.Name, b.Name),
@@ -264,7 +193,6 @@ func sortSources(sources []fleet.Source) {
 	})
 }
 
-// logSource records a probe result once, at a level that matches its severity.
 func logSource(log zerolog.Logger, s fleet.Source) {
 	if s.Available {
 		log.Info().Str("source", s.Name).Msg("data source available")

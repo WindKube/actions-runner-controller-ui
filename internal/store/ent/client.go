@@ -11,11 +11,7 @@ import (
 
 	"arc-ui/internal/store/ent/migrate"
 
-	"arc-ui/internal/store/ent/churnevent"
-	"arc-ui/internal/store/ent/jobobservation"
-	"arc-ui/internal/store/ent/jobsample"
-	"arc-ui/internal/store/ent/runnerfailure"
-	"arc-ui/internal/store/ent/sample"
+	"arc-ui/internal/store/ent/job"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect"
@@ -27,16 +23,8 @@ type Client struct {
 	config
 	// Schema is the client for creating, migrating and dropping schema.
 	Schema *migrate.Schema
-	// ChurnEvent is the client for interacting with the ChurnEvent builders.
-	ChurnEvent *ChurnEventClient
-	// JobObservation is the client for interacting with the JobObservation builders.
-	JobObservation *JobObservationClient
-	// JobSample is the client for interacting with the JobSample builders.
-	JobSample *JobSampleClient
-	// RunnerFailure is the client for interacting with the RunnerFailure builders.
-	RunnerFailure *RunnerFailureClient
-	// Sample is the client for interacting with the Sample builders.
-	Sample *SampleClient
+	// Job is the client for interacting with the Job builders.
+	Job *JobClient
 }
 
 // NewClient creates a new client configured with the given options.
@@ -48,11 +36,7 @@ func NewClient(opts ...Option) *Client {
 
 func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
-	c.ChurnEvent = NewChurnEventClient(c.config)
-	c.JobObservation = NewJobObservationClient(c.config)
-	c.JobSample = NewJobSampleClient(c.config)
-	c.RunnerFailure = NewRunnerFailureClient(c.config)
-	c.Sample = NewSampleClient(c.config)
+	c.Job = NewJobClient(c.config)
 }
 
 type (
@@ -143,13 +127,9 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:            ctx,
-		config:         cfg,
-		ChurnEvent:     NewChurnEventClient(cfg),
-		JobObservation: NewJobObservationClient(cfg),
-		JobSample:      NewJobSampleClient(cfg),
-		RunnerFailure:  NewRunnerFailureClient(cfg),
-		Sample:         NewSampleClient(cfg),
+		ctx:    ctx,
+		config: cfg,
+		Job:    NewJobClient(cfg),
 	}, nil
 }
 
@@ -167,20 +147,16 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:            ctx,
-		config:         cfg,
-		ChurnEvent:     NewChurnEventClient(cfg),
-		JobObservation: NewJobObservationClient(cfg),
-		JobSample:      NewJobSampleClient(cfg),
-		RunnerFailure:  NewRunnerFailureClient(cfg),
-		Sample:         NewSampleClient(cfg),
+		ctx:    ctx,
+		config: cfg,
+		Job:    NewJobClient(cfg),
 	}, nil
 }
 
 // Debug returns a new debug-client. It's used to get verbose logging on specific operations.
 //
 //	client.Debug().
-//		ChurnEvent.
+//		Job.
 //		Query().
 //		Count(ctx)
 func (c *Client) Debug() *Client {
@@ -202,142 +178,126 @@ func (c *Client) Close() error {
 // Use adds the mutation hooks to all the entity clients.
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
-	c.ChurnEvent.Use(hooks...)
-	c.JobObservation.Use(hooks...)
-	c.JobSample.Use(hooks...)
-	c.RunnerFailure.Use(hooks...)
-	c.Sample.Use(hooks...)
+	c.Job.Use(hooks...)
 }
 
 // Intercept adds the query interceptors to all the entity clients.
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
-	c.ChurnEvent.Intercept(interceptors...)
-	c.JobObservation.Intercept(interceptors...)
-	c.JobSample.Intercept(interceptors...)
-	c.RunnerFailure.Intercept(interceptors...)
-	c.Sample.Intercept(interceptors...)
+	c.Job.Intercept(interceptors...)
 }
 
 // Mutate implements the ent.Mutator interface.
 func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 	switch m := m.(type) {
-	case *ChurnEventMutation:
-		return c.ChurnEvent.mutate(ctx, m)
-	case *JobObservationMutation:
-		return c.JobObservation.mutate(ctx, m)
-	case *JobSampleMutation:
-		return c.JobSample.mutate(ctx, m)
-	case *RunnerFailureMutation:
-		return c.RunnerFailure.mutate(ctx, m)
-	case *SampleMutation:
-		return c.Sample.mutate(ctx, m)
+	case *JobMutation:
+		return c.Job.mutate(ctx, m)
 	default:
 		return nil, fmt.Errorf("ent: unknown mutation type %T", m)
 	}
 }
 
-// ChurnEventClient is a client for the ChurnEvent schema.
-type ChurnEventClient struct {
+// JobClient is a client for the Job schema.
+type JobClient struct {
 	config
 }
 
-// NewChurnEventClient returns a client for the ChurnEvent from the given config.
-func NewChurnEventClient(c config) *ChurnEventClient {
-	return &ChurnEventClient{config: c}
+// NewJobClient returns a client for the Job from the given config.
+func NewJobClient(c config) *JobClient {
+	return &JobClient{config: c}
 }
 
 // Use adds a list of mutation hooks to the hooks stack.
-// A call to `Use(f, g, h)` equals to `churnevent.Hooks(f(g(h())))`.
-func (c *ChurnEventClient) Use(hooks ...Hook) {
-	c.hooks.ChurnEvent = append(c.hooks.ChurnEvent, hooks...)
+// A call to `Use(f, g, h)` equals to `job.Hooks(f(g(h())))`.
+func (c *JobClient) Use(hooks ...Hook) {
+	c.hooks.Job = append(c.hooks.Job, hooks...)
 }
 
 // Intercept adds a list of query interceptors to the interceptors stack.
-// A call to `Intercept(f, g, h)` equals to `churnevent.Intercept(f(g(h())))`.
-func (c *ChurnEventClient) Intercept(interceptors ...Interceptor) {
-	c.inters.ChurnEvent = append(c.inters.ChurnEvent, interceptors...)
+// A call to `Intercept(f, g, h)` equals to `job.Intercept(f(g(h())))`.
+func (c *JobClient) Intercept(interceptors ...Interceptor) {
+	c.inters.Job = append(c.inters.Job, interceptors...)
 }
 
-// Create returns a builder for creating a ChurnEvent entity.
-func (c *ChurnEventClient) Create() *ChurnEventCreate {
-	mutation := newChurnEventMutation(c.config, OpCreate)
-	return &ChurnEventCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+// Create returns a builder for creating a Job entity.
+func (c *JobClient) Create() *JobCreate {
+	mutation := newJobMutation(c.config, OpCreate)
+	return &JobCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
 }
 
-// CreateBulk returns a builder for creating a bulk of ChurnEvent entities.
-func (c *ChurnEventClient) CreateBulk(builders ...*ChurnEventCreate) *ChurnEventCreateBulk {
-	return &ChurnEventCreateBulk{config: c.config, builders: builders}
+// CreateBulk returns a builder for creating a bulk of Job entities.
+func (c *JobClient) CreateBulk(builders ...*JobCreate) *JobCreateBulk {
+	return &JobCreateBulk{config: c.config, builders: builders}
 }
 
 // MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
 // a builder and applies setFunc on it.
-func (c *ChurnEventClient) MapCreateBulk(slice any, setFunc func(*ChurnEventCreate, int)) *ChurnEventCreateBulk {
+func (c *JobClient) MapCreateBulk(slice any, setFunc func(*JobCreate, int)) *JobCreateBulk {
 	rv := reflect.ValueOf(slice)
 	if rv.Kind() != reflect.Slice {
-		return &ChurnEventCreateBulk{err: fmt.Errorf("calling to ChurnEventClient.MapCreateBulk with wrong type %T, need slice", slice)}
+		return &JobCreateBulk{err: fmt.Errorf("calling to JobClient.MapCreateBulk with wrong type %T, need slice", slice)}
 	}
-	builders := make([]*ChurnEventCreate, rv.Len())
+	builders := make([]*JobCreate, rv.Len())
 	for i := 0; i < rv.Len(); i++ {
 		builders[i] = c.Create()
 		setFunc(builders[i], i)
 	}
-	return &ChurnEventCreateBulk{config: c.config, builders: builders}
+	return &JobCreateBulk{config: c.config, builders: builders}
 }
 
-// Update returns an update builder for ChurnEvent.
-func (c *ChurnEventClient) Update() *ChurnEventUpdate {
-	mutation := newChurnEventMutation(c.config, OpUpdate)
-	return &ChurnEventUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+// Update returns an update builder for Job.
+func (c *JobClient) Update() *JobUpdate {
+	mutation := newJobMutation(c.config, OpUpdate)
+	return &JobUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
 }
 
 // UpdateOne returns an update builder for the given entity.
-func (c *ChurnEventClient) UpdateOne(_m *ChurnEvent) *ChurnEventUpdateOne {
-	mutation := newChurnEventMutation(c.config, OpUpdateOne, withChurnEvent(_m))
-	return &ChurnEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+func (c *JobClient) UpdateOne(_m *Job) *JobUpdateOne {
+	mutation := newJobMutation(c.config, OpUpdateOne, withJob(_m))
+	return &JobUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
 }
 
 // UpdateOneID returns an update builder for the given id.
-func (c *ChurnEventClient) UpdateOneID(id int) *ChurnEventUpdateOne {
-	mutation := newChurnEventMutation(c.config, OpUpdateOne, withChurnEventID(id))
-	return &ChurnEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+func (c *JobClient) UpdateOneID(id int) *JobUpdateOne {
+	mutation := newJobMutation(c.config, OpUpdateOne, withJobID(id))
+	return &JobUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
 }
 
-// Delete returns a delete builder for ChurnEvent.
-func (c *ChurnEventClient) Delete() *ChurnEventDelete {
-	mutation := newChurnEventMutation(c.config, OpDelete)
-	return &ChurnEventDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+// Delete returns a delete builder for Job.
+func (c *JobClient) Delete() *JobDelete {
+	mutation := newJobMutation(c.config, OpDelete)
+	return &JobDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
 }
 
 // DeleteOne returns a builder for deleting the given entity.
-func (c *ChurnEventClient) DeleteOne(_m *ChurnEvent) *ChurnEventDeleteOne {
+func (c *JobClient) DeleteOne(_m *Job) *JobDeleteOne {
 	return c.DeleteOneID(_m.ID)
 }
 
 // DeleteOneID returns a builder for deleting the given entity by its id.
-func (c *ChurnEventClient) DeleteOneID(id int) *ChurnEventDeleteOne {
-	builder := c.Delete().Where(churnevent.ID(id))
+func (c *JobClient) DeleteOneID(id int) *JobDeleteOne {
+	builder := c.Delete().Where(job.ID(id))
 	builder.mutation.id = &id
 	builder.mutation.op = OpDeleteOne
-	return &ChurnEventDeleteOne{builder}
+	return &JobDeleteOne{builder}
 }
 
-// Query returns a query builder for ChurnEvent.
-func (c *ChurnEventClient) Query() *ChurnEventQuery {
-	return &ChurnEventQuery{
+// Query returns a query builder for Job.
+func (c *JobClient) Query() *JobQuery {
+	return &JobQuery{
 		config: c.config,
-		ctx:    &QueryContext{Type: TypeChurnEvent},
+		ctx:    &QueryContext{Type: TypeJob},
 		inters: c.Interceptors(),
 	}
 }
 
-// Get returns a ChurnEvent entity by its id.
-func (c *ChurnEventClient) Get(ctx context.Context, id int) (*ChurnEvent, error) {
-	return c.Query().Where(churnevent.ID(id)).Only(ctx)
+// Get returns a Job entity by its id.
+func (c *JobClient) Get(ctx context.Context, id int) (*Job, error) {
+	return c.Query().Where(job.ID(id)).Only(ctx)
 }
 
 // GetX is like Get, but panics if an error occurs.
-func (c *ChurnEventClient) GetX(ctx context.Context, id int) *ChurnEvent {
+func (c *JobClient) GetX(ctx context.Context, id int) *Job {
 	obj, err := c.Get(ctx, id)
 	if err != nil {
 		panic(err)
@@ -346,568 +306,36 @@ func (c *ChurnEventClient) GetX(ctx context.Context, id int) *ChurnEvent {
 }
 
 // Hooks returns the client hooks.
-func (c *ChurnEventClient) Hooks() []Hook {
-	return c.hooks.ChurnEvent
+func (c *JobClient) Hooks() []Hook {
+	return c.hooks.Job
 }
 
 // Interceptors returns the client interceptors.
-func (c *ChurnEventClient) Interceptors() []Interceptor {
-	return c.inters.ChurnEvent
+func (c *JobClient) Interceptors() []Interceptor {
+	return c.inters.Job
 }
 
-func (c *ChurnEventClient) mutate(ctx context.Context, m *ChurnEventMutation) (Value, error) {
+func (c *JobClient) mutate(ctx context.Context, m *JobMutation) (Value, error) {
 	switch m.Op() {
 	case OpCreate:
-		return (&ChurnEventCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+		return (&JobCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
 	case OpUpdate:
-		return (&ChurnEventUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+		return (&JobUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
 	case OpUpdateOne:
-		return (&ChurnEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+		return (&JobUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
 	case OpDelete, OpDeleteOne:
-		return (&ChurnEventDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+		return (&JobDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
-		return nil, fmt.Errorf("ent: unknown ChurnEvent mutation op: %q", m.Op())
-	}
-}
-
-// JobObservationClient is a client for the JobObservation schema.
-type JobObservationClient struct {
-	config
-}
-
-// NewJobObservationClient returns a client for the JobObservation from the given config.
-func NewJobObservationClient(c config) *JobObservationClient {
-	return &JobObservationClient{config: c}
-}
-
-// Use adds a list of mutation hooks to the hooks stack.
-// A call to `Use(f, g, h)` equals to `jobobservation.Hooks(f(g(h())))`.
-func (c *JobObservationClient) Use(hooks ...Hook) {
-	c.hooks.JobObservation = append(c.hooks.JobObservation, hooks...)
-}
-
-// Intercept adds a list of query interceptors to the interceptors stack.
-// A call to `Intercept(f, g, h)` equals to `jobobservation.Intercept(f(g(h())))`.
-func (c *JobObservationClient) Intercept(interceptors ...Interceptor) {
-	c.inters.JobObservation = append(c.inters.JobObservation, interceptors...)
-}
-
-// Create returns a builder for creating a JobObservation entity.
-func (c *JobObservationClient) Create() *JobObservationCreate {
-	mutation := newJobObservationMutation(c.config, OpCreate)
-	return &JobObservationCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// CreateBulk returns a builder for creating a bulk of JobObservation entities.
-func (c *JobObservationClient) CreateBulk(builders ...*JobObservationCreate) *JobObservationCreateBulk {
-	return &JobObservationCreateBulk{config: c.config, builders: builders}
-}
-
-// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
-// a builder and applies setFunc on it.
-func (c *JobObservationClient) MapCreateBulk(slice any, setFunc func(*JobObservationCreate, int)) *JobObservationCreateBulk {
-	rv := reflect.ValueOf(slice)
-	if rv.Kind() != reflect.Slice {
-		return &JobObservationCreateBulk{err: fmt.Errorf("calling to JobObservationClient.MapCreateBulk with wrong type %T, need slice", slice)}
-	}
-	builders := make([]*JobObservationCreate, rv.Len())
-	for i := 0; i < rv.Len(); i++ {
-		builders[i] = c.Create()
-		setFunc(builders[i], i)
-	}
-	return &JobObservationCreateBulk{config: c.config, builders: builders}
-}
-
-// Update returns an update builder for JobObservation.
-func (c *JobObservationClient) Update() *JobObservationUpdate {
-	mutation := newJobObservationMutation(c.config, OpUpdate)
-	return &JobObservationUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// UpdateOne returns an update builder for the given entity.
-func (c *JobObservationClient) UpdateOne(_m *JobObservation) *JobObservationUpdateOne {
-	mutation := newJobObservationMutation(c.config, OpUpdateOne, withJobObservation(_m))
-	return &JobObservationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// UpdateOneID returns an update builder for the given id.
-func (c *JobObservationClient) UpdateOneID(id int) *JobObservationUpdateOne {
-	mutation := newJobObservationMutation(c.config, OpUpdateOne, withJobObservationID(id))
-	return &JobObservationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// Delete returns a delete builder for JobObservation.
-func (c *JobObservationClient) Delete() *JobObservationDelete {
-	mutation := newJobObservationMutation(c.config, OpDelete)
-	return &JobObservationDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// DeleteOne returns a builder for deleting the given entity.
-func (c *JobObservationClient) DeleteOne(_m *JobObservation) *JobObservationDeleteOne {
-	return c.DeleteOneID(_m.ID)
-}
-
-// DeleteOneID returns a builder for deleting the given entity by its id.
-func (c *JobObservationClient) DeleteOneID(id int) *JobObservationDeleteOne {
-	builder := c.Delete().Where(jobobservation.ID(id))
-	builder.mutation.id = &id
-	builder.mutation.op = OpDeleteOne
-	return &JobObservationDeleteOne{builder}
-}
-
-// Query returns a query builder for JobObservation.
-func (c *JobObservationClient) Query() *JobObservationQuery {
-	return &JobObservationQuery{
-		config: c.config,
-		ctx:    &QueryContext{Type: TypeJobObservation},
-		inters: c.Interceptors(),
-	}
-}
-
-// Get returns a JobObservation entity by its id.
-func (c *JobObservationClient) Get(ctx context.Context, id int) (*JobObservation, error) {
-	return c.Query().Where(jobobservation.ID(id)).Only(ctx)
-}
-
-// GetX is like Get, but panics if an error occurs.
-func (c *JobObservationClient) GetX(ctx context.Context, id int) *JobObservation {
-	obj, err := c.Get(ctx, id)
-	if err != nil {
-		panic(err)
-	}
-	return obj
-}
-
-// Hooks returns the client hooks.
-func (c *JobObservationClient) Hooks() []Hook {
-	return c.hooks.JobObservation
-}
-
-// Interceptors returns the client interceptors.
-func (c *JobObservationClient) Interceptors() []Interceptor {
-	return c.inters.JobObservation
-}
-
-func (c *JobObservationClient) mutate(ctx context.Context, m *JobObservationMutation) (Value, error) {
-	switch m.Op() {
-	case OpCreate:
-		return (&JobObservationCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpUpdate:
-		return (&JobObservationUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpUpdateOne:
-		return (&JobObservationUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpDelete, OpDeleteOne:
-		return (&JobObservationDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
-	default:
-		return nil, fmt.Errorf("ent: unknown JobObservation mutation op: %q", m.Op())
-	}
-}
-
-// JobSampleClient is a client for the JobSample schema.
-type JobSampleClient struct {
-	config
-}
-
-// NewJobSampleClient returns a client for the JobSample from the given config.
-func NewJobSampleClient(c config) *JobSampleClient {
-	return &JobSampleClient{config: c}
-}
-
-// Use adds a list of mutation hooks to the hooks stack.
-// A call to `Use(f, g, h)` equals to `jobsample.Hooks(f(g(h())))`.
-func (c *JobSampleClient) Use(hooks ...Hook) {
-	c.hooks.JobSample = append(c.hooks.JobSample, hooks...)
-}
-
-// Intercept adds a list of query interceptors to the interceptors stack.
-// A call to `Intercept(f, g, h)` equals to `jobsample.Intercept(f(g(h())))`.
-func (c *JobSampleClient) Intercept(interceptors ...Interceptor) {
-	c.inters.JobSample = append(c.inters.JobSample, interceptors...)
-}
-
-// Create returns a builder for creating a JobSample entity.
-func (c *JobSampleClient) Create() *JobSampleCreate {
-	mutation := newJobSampleMutation(c.config, OpCreate)
-	return &JobSampleCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// CreateBulk returns a builder for creating a bulk of JobSample entities.
-func (c *JobSampleClient) CreateBulk(builders ...*JobSampleCreate) *JobSampleCreateBulk {
-	return &JobSampleCreateBulk{config: c.config, builders: builders}
-}
-
-// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
-// a builder and applies setFunc on it.
-func (c *JobSampleClient) MapCreateBulk(slice any, setFunc func(*JobSampleCreate, int)) *JobSampleCreateBulk {
-	rv := reflect.ValueOf(slice)
-	if rv.Kind() != reflect.Slice {
-		return &JobSampleCreateBulk{err: fmt.Errorf("calling to JobSampleClient.MapCreateBulk with wrong type %T, need slice", slice)}
-	}
-	builders := make([]*JobSampleCreate, rv.Len())
-	for i := 0; i < rv.Len(); i++ {
-		builders[i] = c.Create()
-		setFunc(builders[i], i)
-	}
-	return &JobSampleCreateBulk{config: c.config, builders: builders}
-}
-
-// Update returns an update builder for JobSample.
-func (c *JobSampleClient) Update() *JobSampleUpdate {
-	mutation := newJobSampleMutation(c.config, OpUpdate)
-	return &JobSampleUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// UpdateOne returns an update builder for the given entity.
-func (c *JobSampleClient) UpdateOne(_m *JobSample) *JobSampleUpdateOne {
-	mutation := newJobSampleMutation(c.config, OpUpdateOne, withJobSample(_m))
-	return &JobSampleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// UpdateOneID returns an update builder for the given id.
-func (c *JobSampleClient) UpdateOneID(id int) *JobSampleUpdateOne {
-	mutation := newJobSampleMutation(c.config, OpUpdateOne, withJobSampleID(id))
-	return &JobSampleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// Delete returns a delete builder for JobSample.
-func (c *JobSampleClient) Delete() *JobSampleDelete {
-	mutation := newJobSampleMutation(c.config, OpDelete)
-	return &JobSampleDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// DeleteOne returns a builder for deleting the given entity.
-func (c *JobSampleClient) DeleteOne(_m *JobSample) *JobSampleDeleteOne {
-	return c.DeleteOneID(_m.ID)
-}
-
-// DeleteOneID returns a builder for deleting the given entity by its id.
-func (c *JobSampleClient) DeleteOneID(id int) *JobSampleDeleteOne {
-	builder := c.Delete().Where(jobsample.ID(id))
-	builder.mutation.id = &id
-	builder.mutation.op = OpDeleteOne
-	return &JobSampleDeleteOne{builder}
-}
-
-// Query returns a query builder for JobSample.
-func (c *JobSampleClient) Query() *JobSampleQuery {
-	return &JobSampleQuery{
-		config: c.config,
-		ctx:    &QueryContext{Type: TypeJobSample},
-		inters: c.Interceptors(),
-	}
-}
-
-// Get returns a JobSample entity by its id.
-func (c *JobSampleClient) Get(ctx context.Context, id int) (*JobSample, error) {
-	return c.Query().Where(jobsample.ID(id)).Only(ctx)
-}
-
-// GetX is like Get, but panics if an error occurs.
-func (c *JobSampleClient) GetX(ctx context.Context, id int) *JobSample {
-	obj, err := c.Get(ctx, id)
-	if err != nil {
-		panic(err)
-	}
-	return obj
-}
-
-// Hooks returns the client hooks.
-func (c *JobSampleClient) Hooks() []Hook {
-	return c.hooks.JobSample
-}
-
-// Interceptors returns the client interceptors.
-func (c *JobSampleClient) Interceptors() []Interceptor {
-	return c.inters.JobSample
-}
-
-func (c *JobSampleClient) mutate(ctx context.Context, m *JobSampleMutation) (Value, error) {
-	switch m.Op() {
-	case OpCreate:
-		return (&JobSampleCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpUpdate:
-		return (&JobSampleUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpUpdateOne:
-		return (&JobSampleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpDelete, OpDeleteOne:
-		return (&JobSampleDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
-	default:
-		return nil, fmt.Errorf("ent: unknown JobSample mutation op: %q", m.Op())
-	}
-}
-
-// RunnerFailureClient is a client for the RunnerFailure schema.
-type RunnerFailureClient struct {
-	config
-}
-
-// NewRunnerFailureClient returns a client for the RunnerFailure from the given config.
-func NewRunnerFailureClient(c config) *RunnerFailureClient {
-	return &RunnerFailureClient{config: c}
-}
-
-// Use adds a list of mutation hooks to the hooks stack.
-// A call to `Use(f, g, h)` equals to `runnerfailure.Hooks(f(g(h())))`.
-func (c *RunnerFailureClient) Use(hooks ...Hook) {
-	c.hooks.RunnerFailure = append(c.hooks.RunnerFailure, hooks...)
-}
-
-// Intercept adds a list of query interceptors to the interceptors stack.
-// A call to `Intercept(f, g, h)` equals to `runnerfailure.Intercept(f(g(h())))`.
-func (c *RunnerFailureClient) Intercept(interceptors ...Interceptor) {
-	c.inters.RunnerFailure = append(c.inters.RunnerFailure, interceptors...)
-}
-
-// Create returns a builder for creating a RunnerFailure entity.
-func (c *RunnerFailureClient) Create() *RunnerFailureCreate {
-	mutation := newRunnerFailureMutation(c.config, OpCreate)
-	return &RunnerFailureCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// CreateBulk returns a builder for creating a bulk of RunnerFailure entities.
-func (c *RunnerFailureClient) CreateBulk(builders ...*RunnerFailureCreate) *RunnerFailureCreateBulk {
-	return &RunnerFailureCreateBulk{config: c.config, builders: builders}
-}
-
-// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
-// a builder and applies setFunc on it.
-func (c *RunnerFailureClient) MapCreateBulk(slice any, setFunc func(*RunnerFailureCreate, int)) *RunnerFailureCreateBulk {
-	rv := reflect.ValueOf(slice)
-	if rv.Kind() != reflect.Slice {
-		return &RunnerFailureCreateBulk{err: fmt.Errorf("calling to RunnerFailureClient.MapCreateBulk with wrong type %T, need slice", slice)}
-	}
-	builders := make([]*RunnerFailureCreate, rv.Len())
-	for i := 0; i < rv.Len(); i++ {
-		builders[i] = c.Create()
-		setFunc(builders[i], i)
-	}
-	return &RunnerFailureCreateBulk{config: c.config, builders: builders}
-}
-
-// Update returns an update builder for RunnerFailure.
-func (c *RunnerFailureClient) Update() *RunnerFailureUpdate {
-	mutation := newRunnerFailureMutation(c.config, OpUpdate)
-	return &RunnerFailureUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// UpdateOne returns an update builder for the given entity.
-func (c *RunnerFailureClient) UpdateOne(_m *RunnerFailure) *RunnerFailureUpdateOne {
-	mutation := newRunnerFailureMutation(c.config, OpUpdateOne, withRunnerFailure(_m))
-	return &RunnerFailureUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// UpdateOneID returns an update builder for the given id.
-func (c *RunnerFailureClient) UpdateOneID(id int) *RunnerFailureUpdateOne {
-	mutation := newRunnerFailureMutation(c.config, OpUpdateOne, withRunnerFailureID(id))
-	return &RunnerFailureUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// Delete returns a delete builder for RunnerFailure.
-func (c *RunnerFailureClient) Delete() *RunnerFailureDelete {
-	mutation := newRunnerFailureMutation(c.config, OpDelete)
-	return &RunnerFailureDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// DeleteOne returns a builder for deleting the given entity.
-func (c *RunnerFailureClient) DeleteOne(_m *RunnerFailure) *RunnerFailureDeleteOne {
-	return c.DeleteOneID(_m.ID)
-}
-
-// DeleteOneID returns a builder for deleting the given entity by its id.
-func (c *RunnerFailureClient) DeleteOneID(id int) *RunnerFailureDeleteOne {
-	builder := c.Delete().Where(runnerfailure.ID(id))
-	builder.mutation.id = &id
-	builder.mutation.op = OpDeleteOne
-	return &RunnerFailureDeleteOne{builder}
-}
-
-// Query returns a query builder for RunnerFailure.
-func (c *RunnerFailureClient) Query() *RunnerFailureQuery {
-	return &RunnerFailureQuery{
-		config: c.config,
-		ctx:    &QueryContext{Type: TypeRunnerFailure},
-		inters: c.Interceptors(),
-	}
-}
-
-// Get returns a RunnerFailure entity by its id.
-func (c *RunnerFailureClient) Get(ctx context.Context, id int) (*RunnerFailure, error) {
-	return c.Query().Where(runnerfailure.ID(id)).Only(ctx)
-}
-
-// GetX is like Get, but panics if an error occurs.
-func (c *RunnerFailureClient) GetX(ctx context.Context, id int) *RunnerFailure {
-	obj, err := c.Get(ctx, id)
-	if err != nil {
-		panic(err)
-	}
-	return obj
-}
-
-// Hooks returns the client hooks.
-func (c *RunnerFailureClient) Hooks() []Hook {
-	return c.hooks.RunnerFailure
-}
-
-// Interceptors returns the client interceptors.
-func (c *RunnerFailureClient) Interceptors() []Interceptor {
-	return c.inters.RunnerFailure
-}
-
-func (c *RunnerFailureClient) mutate(ctx context.Context, m *RunnerFailureMutation) (Value, error) {
-	switch m.Op() {
-	case OpCreate:
-		return (&RunnerFailureCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpUpdate:
-		return (&RunnerFailureUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpUpdateOne:
-		return (&RunnerFailureUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpDelete, OpDeleteOne:
-		return (&RunnerFailureDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
-	default:
-		return nil, fmt.Errorf("ent: unknown RunnerFailure mutation op: %q", m.Op())
-	}
-}
-
-// SampleClient is a client for the Sample schema.
-type SampleClient struct {
-	config
-}
-
-// NewSampleClient returns a client for the Sample from the given config.
-func NewSampleClient(c config) *SampleClient {
-	return &SampleClient{config: c}
-}
-
-// Use adds a list of mutation hooks to the hooks stack.
-// A call to `Use(f, g, h)` equals to `sample.Hooks(f(g(h())))`.
-func (c *SampleClient) Use(hooks ...Hook) {
-	c.hooks.Sample = append(c.hooks.Sample, hooks...)
-}
-
-// Intercept adds a list of query interceptors to the interceptors stack.
-// A call to `Intercept(f, g, h)` equals to `sample.Intercept(f(g(h())))`.
-func (c *SampleClient) Intercept(interceptors ...Interceptor) {
-	c.inters.Sample = append(c.inters.Sample, interceptors...)
-}
-
-// Create returns a builder for creating a Sample entity.
-func (c *SampleClient) Create() *SampleCreate {
-	mutation := newSampleMutation(c.config, OpCreate)
-	return &SampleCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// CreateBulk returns a builder for creating a bulk of Sample entities.
-func (c *SampleClient) CreateBulk(builders ...*SampleCreate) *SampleCreateBulk {
-	return &SampleCreateBulk{config: c.config, builders: builders}
-}
-
-// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
-// a builder and applies setFunc on it.
-func (c *SampleClient) MapCreateBulk(slice any, setFunc func(*SampleCreate, int)) *SampleCreateBulk {
-	rv := reflect.ValueOf(slice)
-	if rv.Kind() != reflect.Slice {
-		return &SampleCreateBulk{err: fmt.Errorf("calling to SampleClient.MapCreateBulk with wrong type %T, need slice", slice)}
-	}
-	builders := make([]*SampleCreate, rv.Len())
-	for i := 0; i < rv.Len(); i++ {
-		builders[i] = c.Create()
-		setFunc(builders[i], i)
-	}
-	return &SampleCreateBulk{config: c.config, builders: builders}
-}
-
-// Update returns an update builder for Sample.
-func (c *SampleClient) Update() *SampleUpdate {
-	mutation := newSampleMutation(c.config, OpUpdate)
-	return &SampleUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// UpdateOne returns an update builder for the given entity.
-func (c *SampleClient) UpdateOne(_m *Sample) *SampleUpdateOne {
-	mutation := newSampleMutation(c.config, OpUpdateOne, withSample(_m))
-	return &SampleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// UpdateOneID returns an update builder for the given id.
-func (c *SampleClient) UpdateOneID(id int) *SampleUpdateOne {
-	mutation := newSampleMutation(c.config, OpUpdateOne, withSampleID(id))
-	return &SampleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// Delete returns a delete builder for Sample.
-func (c *SampleClient) Delete() *SampleDelete {
-	mutation := newSampleMutation(c.config, OpDelete)
-	return &SampleDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
-}
-
-// DeleteOne returns a builder for deleting the given entity.
-func (c *SampleClient) DeleteOne(_m *Sample) *SampleDeleteOne {
-	return c.DeleteOneID(_m.ID)
-}
-
-// DeleteOneID returns a builder for deleting the given entity by its id.
-func (c *SampleClient) DeleteOneID(id int) *SampleDeleteOne {
-	builder := c.Delete().Where(sample.ID(id))
-	builder.mutation.id = &id
-	builder.mutation.op = OpDeleteOne
-	return &SampleDeleteOne{builder}
-}
-
-// Query returns a query builder for Sample.
-func (c *SampleClient) Query() *SampleQuery {
-	return &SampleQuery{
-		config: c.config,
-		ctx:    &QueryContext{Type: TypeSample},
-		inters: c.Interceptors(),
-	}
-}
-
-// Get returns a Sample entity by its id.
-func (c *SampleClient) Get(ctx context.Context, id int) (*Sample, error) {
-	return c.Query().Where(sample.ID(id)).Only(ctx)
-}
-
-// GetX is like Get, but panics if an error occurs.
-func (c *SampleClient) GetX(ctx context.Context, id int) *Sample {
-	obj, err := c.Get(ctx, id)
-	if err != nil {
-		panic(err)
-	}
-	return obj
-}
-
-// Hooks returns the client hooks.
-func (c *SampleClient) Hooks() []Hook {
-	return c.hooks.Sample
-}
-
-// Interceptors returns the client interceptors.
-func (c *SampleClient) Interceptors() []Interceptor {
-	return c.inters.Sample
-}
-
-func (c *SampleClient) mutate(ctx context.Context, m *SampleMutation) (Value, error) {
-	switch m.Op() {
-	case OpCreate:
-		return (&SampleCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpUpdate:
-		return (&SampleUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpUpdateOne:
-		return (&SampleUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
-	case OpDelete, OpDeleteOne:
-		return (&SampleDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
-	default:
-		return nil, fmt.Errorf("ent: unknown Sample mutation op: %q", m.Op())
+		return nil, fmt.Errorf("ent: unknown Job mutation op: %q", m.Op())
 	}
 }
 
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		ChurnEvent, JobObservation, JobSample, RunnerFailure, Sample []ent.Hook
+		Job []ent.Hook
 	}
 	inters struct {
-		ChurnEvent, JobObservation, JobSample, RunnerFailure, Sample []ent.Interceptor
+		Job []ent.Interceptor
 	}
 )

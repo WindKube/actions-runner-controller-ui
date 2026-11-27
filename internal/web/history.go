@@ -122,9 +122,7 @@ func PeakOf(series ...[]float64) float64 {
 	return peak
 }
 
-// RunnerSeries is the raw per-runner history behind the runner detail charts.
-// This is the only place raw per-runner samples are read, which is why they
-// are retained for minutes rather than days.
+// RunnerSeries is one runner pod's usage behind the runner detail charts.
 type RunnerSeries struct {
 	At   []time.Time
 	CPU  []float64 // cores
@@ -161,16 +159,13 @@ func (c Counts) Sum() (up, down float64) {
 	return up, down
 }
 
-// RepoHistory is one repository's consumption over the selected window.
-//
-// Distinct from fleet.RepoUsage, which is the same panel's live fallback: this one
-// is integrated over time (core-seconds), that one is a snapshot of what is
-// running right now.
+// RepoHistory is one repository's runner time over the selected window;
+// fleet.RepoUsage is the live fallback.
 type RepoHistory struct {
 	Repository string
 	Jobs       int
-	CPUSeconds float64
-	MemGiBSecs float64
+	// Seconds is runner time spent executing the repository's jobs.
+	Seconds float64
 }
 
 // JobOutcome is how a job ended, as the Jobs tab filters and colours it.
@@ -199,28 +194,30 @@ type JobFilter struct {
 }
 
 // Job is one row of the Jobs tab, and the subject of the job detail view.
+// RunnerFailed is the runner's outcome; GitHub's conclusion is not visible
+// from the cluster.
 type Job struct {
-	ID         int
-	Runner     string
-	Set        string
-	Repository string
-	Workflow   string
-	Name       string
-	RunID      int64
-	StartedAt  time.Time
+	ID          int
+	JobID       string
+	Runner      string
+	Namespace   string
+	Set         string
+	Repository  string
+	WorkflowRef string
+	Workflow    string
+	Name        string
+	RunID       int64
+	StartedAt   time.Time
 	// FinishedAt is zero while the job is still running.
-	FinishedAt time.Time
-	Succeeded  bool
+	FinishedAt    time.Time
+	RunnerFailed  bool
+	FailureReason string
 
-	// CPUSeconds and MemGiBSecs are integrated over the job's life. They are
-	// lower bounds: a job that died between two scrapes contributes nothing.
-	CPUSeconds float64
-	MemGiBSecs float64
+	// CPUSeconds and MemPeakBytes come from cAdvisor when the job closes;
+	// zero means no sample was found.
+	CPUSeconds   float64
+	MemPeakBytes float64
 
-	// What the runner pod reserved, in cores and bytes, which is what the
-	// detail chart draws its reference lines from. Unlike the totals above
-	// these stay in bytes: they are plotted against the usage series, not
-	// summarised. Zero means there is no line to draw.
 	CPURequest float64
 	CPULimit   float64
 	MemRequest float64
@@ -257,8 +254,8 @@ type WorkflowRun struct {
 	// FinishedAt is zero while any of the run's jobs is still going.
 	FinishedAt time.Time
 
-	CPUSeconds float64
-	MemGiBSecs float64
+	CPUSeconds   float64
+	MemPeakBytes float64
 }
 
 // Duration is how long the run has taken, measured to now while it is going.
@@ -288,11 +285,9 @@ type WorkflowList struct {
 	Total int64
 }
 
-// JobSeries is one job's resource usage over its own lifetime.
-//
-// Empty is the normal state for a job that ran before per-job sampling was
-// switched on, or while metrics-server was unavailable. The view says so
-// rather than drawing a flat zero.
+// JobSeries is one job's runner pod usage over the job's lifetime. Empty means
+// cAdvisor had no samples for the pod, which the view says rather than drawing
+// a flat zero.
 type JobSeries struct {
 	At  []time.Time
 	CPU []float64 // cores
@@ -310,54 +305,24 @@ type JobFacets struct {
 	Sets         []string
 }
 
-// History is everything the views need from the time-series store.
-//
-// It is declared here, at the consumer, rather than exported from the store: the
-// views define what a chart needs, and the store's job is to satisfy that. It also
-// means the whole web layer can be tested against a hand-written series.
-//
-// Every method may return an error, and every view renders an empty-state panel
-// rather than failing the page when one does.
+// History is everything the views ask of Prometheus and the job store. It is
+// declared at the consumer so the web layer tests against hand-written data.
+// Every method may fail; views render an unavailable or empty panel instead.
 type History interface {
-	// Scope returns bucketed counts and resource series for the fleet or one
-	// runner set.
 	Scope(ctx context.Context, scope Scope, w Window) (ScopeSeries, error)
-
-	// Runner returns raw samples for a single runner.
 	Runner(ctx context.Context, name string, w Window) (RunnerSeries, error)
-
-	// Throughput returns jobs completed (Up) and failed (Down) per bucket.
+	// Throughput is jobs succeeded (Up) and otherwise (Down) per bucket.
 	Throughput(ctx context.Context, scope Scope, w Window) (Counts, error)
-
-	// Churn returns runners created (Up) and destroyed (Down) per bucket.
+	// Churn is jobs started (Up) and finished (Down) per bucket.
 	Churn(ctx context.Context, scope Scope, w Window) (Counts, error)
-
-	// Repos returns per-repository consumption over the window, busiest first.
 	Repos(ctx context.Context, w Window, limit int) ([]RepoHistory, error)
-
-	// Failures returns the newest failures in the window, capped at limit.
 	Failures(ctx context.Context, scope Scope, w Window, limit int) (FailureWindow, error)
-
-	// Jobs returns the jobs overlapping the window, newest first.
 	Jobs(ctx context.Context, f JobFilter, w Window) (JobList, error)
-
-	// Workflows returns the workflow runs overlapping the window, newest
-	// first.
 	Workflows(ctx context.Context, f JobFilter, w Window) (WorkflowList, error)
-
-	// Job returns one job by id. The bool is false when there is no such row,
-	// which the handler turns into a 404.
+	// Job reports false when there is no such row; the handler 404s.
 	Job(ctx context.Context, id int) (Job, bool, error)
-
-	// JobSeries returns one job's resource usage over the window.
-	JobSeries(ctx context.Context, id int, w Window) (JobSeries, error)
-
-	// Facets returns the distinct values the window contains, for the filter
-	// dropdowns.
+	JobSeries(ctx context.Context, j Job, w Window) (JobSeries, error)
 	Facets(ctx context.Context, w Window) (JobFacets, error)
-
-	// Stats reports what the history is costing on disk. It is the only
-	// question here that is not about a time window.
 	Stats(ctx context.Context) (StoreStats, error)
 }
 
@@ -369,31 +334,14 @@ type FailureWindow struct {
 	Total    int
 }
 
-// StoreStats is what the SQLite footer reports.
-//
-// The file it describes is the one moving part of this dashboard nobody else
-// monitors: it grows on a volume sized once at install time, and the first symptom
-// of that volume filling is the history quietly stopping.
+// StoreStats is what the job store footer reports. Enabled false means there
+// is no store, which must not read as an empty one.
 type StoreStats struct {
-	// Enabled is false when the dashboard is running without a history store.
-	// That is a supported configuration, so the panel has to distinguish it
-	// from a store that exists and happens to be empty — zeros would read as
-	// the latter.
-	Enabled bool
-
+	Enabled   bool
 	Path      string
 	SizeBytes int64
-
-	Samples     int64
-	Jobs        int64
-	JobSamples  int64
-	ChurnEvents int64
-	Failures    int64
-	Rows        int64
-
-	// Oldest is the timestamp of the oldest surviving sample, which is the
-	// honest answer to "how far back can I look".
-	Oldest time.Time
+	Jobs      int64
+	Oldest    time.Time
 }
 
 // NoHistory satisfies History with empty results. It is what the dashboard
@@ -426,7 +374,7 @@ func (NoHistory) Workflows(context.Context, JobFilter, Window) (WorkflowList, er
 
 func (NoHistory) Job(context.Context, int) (Job, bool, error) { return Job{}, false, nil }
 
-func (NoHistory) JobSeries(context.Context, int, Window) (JobSeries, error) {
+func (NoHistory) JobSeries(context.Context, Job, Window) (JobSeries, error) {
 	return JobSeries{}, nil
 }
 

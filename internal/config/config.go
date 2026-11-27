@@ -1,10 +1,11 @@
 // Package config loads and validates the process configuration from the
-// environment. Everything is a single flat struct so the full surface is
-// visible in one place.
+// environment, as one flat struct.
 package config
 
 import (
+	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -12,8 +13,6 @@ import (
 	"github.com/samber/lo"
 )
 
-// Config is the complete runtime configuration. Every field is settable from
-// the environment; only the defaults below are assumed.
 type Config struct {
 	HTTPAddr  string `env:"ARC_UI_HTTP_ADDR" envDefault:"0.0.0.0:8080"`
 	LogLevel  string `env:"ARC_UI_LOG_LEVEL" envDefault:"info"`
@@ -23,85 +22,64 @@ type Config struct {
 	SentryEnvironment string  `env:"ARC_UI_SENTRY_ENVIRONMENT" envDefault:"production"`
 	SentrySampleRate  float64 `env:"ARC_UI_SENTRY_SAMPLE_RATE" envDefault:"1.0"`
 
-	// KubeAPIURL overrides the API server address from the kubeconfig. Empty
-	// means "in-cluster if possible, else kubeconfig".
-	//
-	// metrics.k8s.io is an aggregated API served *through* the API server, so
-	// this one URL covers custom resources, pods, events and pod metrics alike.
-	// MetricsServerURL is a deprecated alias; Load() folds it in and warns.
-	KubeAPIURL       string `env:"KUBE_API_URL"`
-	MetricsServerURL string `env:"METRICS_SERVER_URL"`
-
+	// KubeAPIURL overrides the API server address; empty means in-cluster,
+	// then kubeconfig.
+	KubeAPIURL  string  `env:"KUBE_API_URL"`
 	Kubeconfig  string  `env:"ARC_UI_KUBECONFIG"`
 	KubeContext string  `env:"ARC_UI_KUBE_CONTEXT"`
 	KubeQPS     float32 `env:"ARC_UI_KUBE_QPS" envDefault:"50"`
 	KubeBurst   int     `env:"ARC_UI_KUBE_BURST" envDefault:"100"`
 
-	// Namespaces holding AutoscalingRunnerSets and their runners. Empty means
-	// all namespaces.
-	Namespaces []string `env:"ARC_UI_NAMESPACES" envSeparator:"," envDefault:"arc-runners"`
-	// ControllerNamespace holds the ARC controller and the AutoscalingListener
-	// pods, which live apart from the runners and carry the listener health.
-	ControllerNamespace string `env:"ARC_UI_CONTROLLER_NAMESPACE" envDefault:"arc-systems"`
+	// Namespaces holding AutoscalingRunnerSets and runners; empty means all.
+	Namespaces          []string `env:"ARC_UI_NAMESPACES" envSeparator:"," envDefault:"arc-runners"`
+	ControllerNamespace string   `env:"ARC_UI_CONTROLLER_NAMESPACE" envDefault:"arc-systems"`
 
-	// ScrapeInterval is how often pod metrics are polled. metrics-server's
-	// own default resolution is 15s, so polling faster returns byte-identical
-	// data and only burns API server quota.
-	ScrapeInterval time.Duration `env:"ARC_UI_SCRAPE_INTERVAL" envDefault:"15s"`
-	// ListenerMetricsURL is one ARC listener metrics endpoint, or an aggregator
-	// in front of several. Setting it disables discovery. Left empty, listener
-	// pods are discovered from the controller namespace instead: ARC runs one
-	// listener per scale set and each serves only its own series, so a single
-	// URL covers one scale set out of however many there are.
-	ListenerMetricsURL string `env:"ARC_UI_LISTENER_METRICS_URL"`
-	// ListenerMetricsPath is the path discovered listeners serve metrics on. It
-	// mirrors the controller chart's metrics.listenerEndpoint, which is
-	// configurable and which the pod does not advertise anywhere.
-	ListenerMetricsPath string `env:"ARC_UI_LISTENER_METRICS_PATH" envDefault:"/metrics"`
+	PrometheusURL                string            `env:"ARC_UI_PROMETHEUS_URL"`
+	PrometheusBearerToken        string            `env:"ARC_UI_PROMETHEUS_BEARER_TOKEN"`
+	PrometheusBearerTokenFile    string            `env:"ARC_UI_PROMETHEUS_BEARER_TOKEN_FILE"`
+	PrometheusUsername           string            `env:"ARC_UI_PROMETHEUS_USERNAME"`
+	PrometheusPassword           string            `env:"ARC_UI_PROMETHEUS_PASSWORD"`
+	PrometheusHeaders            map[string]string `env:"ARC_UI_PROMETHEUS_HEADERS" envSeparator:"," envKeyValSeparator:"="`
+	PrometheusCAFile             string            `env:"ARC_UI_PROMETHEUS_CA_FILE"`
+	PrometheusInsecureSkipVerify bool              `env:"ARC_UI_PROMETHEUS_INSECURE_SKIP_VERIFY"`
+	PrometheusTimeout            time.Duration     `env:"ARC_UI_PROMETHEUS_TIMEOUT" envDefault:"10s"`
+	PrometheusScaleSetLabel      string            `env:"ARC_UI_PROMETHEUS_SCALE_SET_LABEL" envDefault:"name"`
+	PrometheusKSMScaleSetLabel   string            `env:"ARC_UI_PROMETHEUS_KSM_SCALE_SET_LABEL" envDefault:"label_actions_github_com_scale_set_name"`
+	PrometheusProbeInterval      time.Duration     `env:"ARC_UI_PROMETHEUS_PROBE_INTERVAL" envDefault:"1m"`
 
-	DBPath string `env:"ARC_UI_DB_PATH" envDefault:"/data/arc-ui.db"`
+	// RefreshInterval is how often the UI re-queries Prometheus, and how long a
+	// query answer is shared between browsers.
+	RefreshInterval time.Duration `env:"ARC_UI_REFRESH_INTERVAL" envDefault:"15s"`
 
-	// Retention windows per storage tier. Runner-level samples are kept only
-	// as long as the runner detail view actually renders them.
-	RetentionRunnerRaw time.Duration `env:"ARC_UI_RETENTION_RUNNER_RAW" envDefault:"15m"`
-	RetentionScopeRaw  time.Duration `env:"ARC_UI_RETENTION_SCOPE_RAW" envDefault:"6h"`
-	RetentionScope1m   time.Duration `env:"ARC_UI_RETENTION_SCOPE_1M" envDefault:"168h"`
-	RetentionScope5m   time.Duration `env:"ARC_UI_RETENTION_SCOPE_5M" envDefault:"720h"`
-	RetentionScope1h   time.Duration `env:"ARC_UI_RETENTION_SCOPE_1H" envDefault:"9600h"`
+	DBPath       string        `env:"ARC_UI_DB_PATH" envDefault:"/data/arc-ui.db"`
+	JobRetention time.Duration `env:"ARC_UI_JOB_RETENTION" envDefault:"720h"`
 
-	// RetentionJobSamples is how long per-job resource usage is kept. It
-	// defaults to the job observations' own window, because a job row whose
-	// usage chart is empty is the one thing the job detail view cannot explain
-	// away.
-	RetentionJobSamples time.Duration `env:"ARC_UI_RETENTION_JOB_SAMPLES" envDefault:"720h"`
-
-	// JobSampleResolution is the bucket width per-job usage is averaged into.
-	//
-	// This is the knob that decides what the feature costs on disk: the row
-	// count is (busy runners × job minutes) ÷ this. At the 15s default scrape
-	// a one-minute bucket folds four readings into one row, and storing at
-	// scrape resolution instead would be four times the volume for detail no
-	// chart of a multi-minute job can render. The price is that a job shorter
-	// than one bucket is a single reading.
-	JobSampleResolution time.Duration `env:"ARC_UI_JOB_SAMPLE_RESOLUTION" envDefault:"1m"`
-
-	// GitHubOrg labels the breadcrumb. Empty means "derive it from the
-	// AutoscalingRunnerSet's githubConfigUrl".
+	// GitHubOrg labels the breadcrumb; empty derives it from githubConfigUrl.
 	GitHubOrg string `env:"ARC_UI_GITHUB_ORG"`
+	GitHubURL string `env:"ARC_UI_GITHUB_URL" envDefault:"https://github.com"`
+
+	GrafanaURL        string `env:"ARC_UI_GRAFANA_URL"`
+	GrafanaDatasource string `env:"ARC_UI_GRAFANA_DATASOURCE"`
+
+	AlertQueuedAtMaxFor      time.Duration `env:"ARC_UI_ALERT_QUEUED_AT_MAX_FOR" envDefault:"15m"`
+	AlertListenerDownFor     time.Duration `env:"ARC_UI_ALERT_LISTENER_DOWN_FOR" envDefault:"2m"`
+	AlertOOMWindow           time.Duration `env:"ARC_UI_ALERT_OOM_WINDOW" envDefault:"1h"`
+	AlertFailedRunnersRise   int           `env:"ARC_UI_ALERT_FAILED_RUNNERS_RISE" envDefault:"3"`
+	AlertFailedRunnersWindow time.Duration `env:"ARC_UI_ALERT_FAILED_RUNNERS_WINDOW" envDefault:"15m"`
+	AlertStartupP95          time.Duration `env:"ARC_UI_ALERT_STARTUP_P95" envDefault:"2m"`
+	AlertStartupWindow       time.Duration `env:"ARC_UI_ALERT_STARTUP_WINDOW" envDefault:"30m"`
 
 	ShutdownTimeout time.Duration `env:"ARC_UI_SHUTDOWN_TIMEOUT" envDefault:"20s"`
-	// PreStopDelay keeps the process serving after readiness flips, so load
-	// balancers stop sending traffic before the listener goes away. Must be at
-	// least twice the readiness probe period or clients see 502s.
+	// PreStopDelay keeps serving after readiness flips; it must cover two
+	// readiness periods or clients see 502s.
 	PreStopDelay time.Duration `env:"ARC_UI_PRESTOP_DELAY" envDefault:"8s"`
 }
 
-// Warning is a non-fatal configuration problem. Load returns these instead of
-// logging directly so the caller controls where they go.
+// Warning is a non-fatal configuration problem for the caller to log.
 type Warning string
 
-// Load parses the environment and validates it. The returned warnings are
-// advisory; a non-nil error means the process must not start.
+// Load parses and validates the environment. A non-nil error means the process
+// must not start.
 func Load() (Config, []Warning, error) {
 	cfg, err := env.ParseAs[Config]()
 	if err != nil {
@@ -110,53 +88,45 @@ func Load() (Config, []Warning, error) {
 
 	var warns []Warning
 
-	if cfg.KubeAPIURL == "" && cfg.MetricsServerURL != "" {
-		cfg.KubeAPIURL = cfg.MetricsServerURL
-		warns = append(warns, "METRICS_SERVER_URL is deprecated and was used as KUBE_API_URL; "+
-			"metrics.k8s.io is an aggregated API reached through the Kubernetes API server, "+
-			"not from metrics-server directly")
-	}
-
 	if cfg.LogFormat != "json" && cfg.LogFormat != "console" {
 		return Config{}, warns, fmt.Errorf("ARC_UI_LOG_FORMAT=%q must be json or console", cfg.LogFormat)
 	}
-	if cfg.ScrapeInterval < time.Second {
-		return Config{}, warns, fmt.Errorf("ARC_UI_SCRAPE_INTERVAL=%s must be at least 1s", cfg.ScrapeInterval)
-	}
-	if cfg.ScrapeInterval < 15*time.Second {
-		warns = append(warns, Warning(fmt.Sprintf(
-			"ARC_UI_SCRAPE_INTERVAL=%s is below metrics-server's default 15s resolution; "+
-				"extra polls return identical data", cfg.ScrapeInterval)))
-	}
 	if cfg.DBPath == "" {
-		return Config{}, warns, fmt.Errorf("ARC_UI_DB_PATH must not be empty")
+		return Config{}, warns, errors.New("ARC_UI_DB_PATH must not be empty")
 	}
-	// A non-positive bucket width would be divided by when flooring a
-	// timestamp. Unlike the retention windows, zero here is not a meaningful
-	// "keep forever" escape hatch — it is a panic.
-	if cfg.JobSampleResolution < time.Second {
-		return Config{}, warns, fmt.Errorf(
-			"ARC_UI_JOB_SAMPLE_RESOLUTION=%s must be at least 1s", cfg.JobSampleResolution)
+	if cfg.JobRetention < time.Hour {
+		return Config{}, warns, fmt.Errorf("ARC_UI_JOB_RETENTION=%s must be at least 1h", cfg.JobRetention)
 	}
-	if cfg.JobSampleResolution < cfg.ScrapeInterval {
-		warns = append(warns, Warning(fmt.Sprintf(
-			"ARC_UI_JOB_SAMPLE_RESOLUTION=%s is finer than ARC_UI_SCRAPE_INTERVAL=%s; "+
-				"most buckets will hold a single reading and the rest none",
-			cfg.JobSampleResolution, cfg.ScrapeInterval)))
+	if err := absoluteURL("ARC_UI_GITHUB_URL", cfg.GitHubURL); err != nil {
+		return Config{}, warns, err
+	}
+	if cfg.GrafanaURL != "" {
+		if err := absoluteURL("ARC_UI_GRAFANA_URL", cfg.GrafanaURL); err != nil {
+			return Config{}, warns, err
+		}
+	}
+	if err := validateAlerts(cfg); err != nil {
+		return Config{}, warns, err
 	}
 	if cfg.KubeQPS <= 0 || cfg.KubeBurst <= 0 {
-		return Config{}, warns, fmt.Errorf("ARC_UI_KUBE_QPS and ARC_UI_KUBE_BURST must be positive")
-	}
-	if cfg.ListenerMetricsPath != "" && !strings.HasPrefix(cfg.ListenerMetricsPath, "/") {
-		return Config{}, warns, fmt.Errorf("ARC_UI_LISTENER_METRICS_PATH=%q must begin with /", cfg.ListenerMetricsPath)
+		return Config{}, warns, errors.New("ARC_UI_KUBE_QPS and ARC_UI_KUBE_BURST must be positive")
 	}
 
-	// time.After and context.WithTimeout both accept negative durations and
-	// just fire immediately. Unchecked, ARC_UI_PRESTOP_DELAY=-1s skips the
-	// window that keeps the pod serving while endpoints controllers stop
-	// routing to it, and a non-positive ARC_UI_SHUTDOWN_TIMEOUT cuts in-flight
-	// requests at once and leaves the store no time to checkpoint. Both look
-	// like a clean shutdown in the logs.
+	if cfg.PrometheusURL == "" {
+		return Config{}, warns, errors.New("ARC_UI_PROMETHEUS_URL is required: every chart and usage figure is a Prometheus query")
+	}
+	if err := absoluteURL("ARC_UI_PROMETHEUS_URL", cfg.PrometheusURL); err != nil {
+		return Config{}, warns, err
+	}
+	if cfg.PrometheusBearerToken != "" && cfg.PrometheusBearerTokenFile != "" {
+		return Config{}, warns, errors.New("set ARC_UI_PROMETHEUS_BEARER_TOKEN or ARC_UI_PROMETHEUS_BEARER_TOKEN_FILE, not both")
+	}
+	if cfg.PrometheusTimeout <= 0 || cfg.RefreshInterval < time.Second || cfg.PrometheusProbeInterval < time.Second {
+		return Config{}, warns, errors.New("ARC_UI_PROMETHEUS_TIMEOUT must be positive and ARC_UI_REFRESH_INTERVAL and ARC_UI_PROMETHEUS_PROBE_INTERVAL at least 1s")
+	}
+
+	// Negative durations are accepted by time.After and fire at once, which
+	// would look like a clean shutdown while skipping the drain.
 	if cfg.PreStopDelay < 0 {
 		return Config{}, warns, fmt.Errorf("ARC_UI_PRESTOP_DELAY=%s must not be negative", cfg.PreStopDelay)
 	}
@@ -169,8 +139,42 @@ func Load() (Config, []Warning, error) {
 	return cfg, warns, nil
 }
 
-// normalizeNamespaces drops blanks and de-duplicates. A single empty entry is
-// the documented way to say "all namespaces", and survives as an empty slice.
+func absoluteURL(name, v string) error {
+	if u, err := url.Parse(v); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("%s=%q must be an absolute http(s) URL", name, v)
+	}
+	return nil
+}
+
+func validateAlerts(cfg Config) error {
+	for name, d := range map[string]time.Duration{
+		"ARC_UI_ALERT_QUEUED_AT_MAX_FOR": cfg.AlertQueuedAtMaxFor,
+		"ARC_UI_ALERT_LISTENER_DOWN_FOR": cfg.AlertListenerDownFor,
+	} {
+		if d < 0 {
+			return fmt.Errorf("%s=%s must not be negative", name, d)
+		}
+	}
+	for name, d := range map[string]time.Duration{
+		"ARC_UI_ALERT_OOM_WINDOW":            cfg.AlertOOMWindow,
+		"ARC_UI_ALERT_FAILED_RUNNERS_WINDOW": cfg.AlertFailedRunnersWindow,
+		"ARC_UI_ALERT_STARTUP_WINDOW":        cfg.AlertStartupWindow,
+	} {
+		if d < time.Minute {
+			return fmt.Errorf("%s=%s must be at least 1m", name, d)
+		}
+	}
+	if cfg.AlertFailedRunnersRise < 1 {
+		return fmt.Errorf("ARC_UI_ALERT_FAILED_RUNNERS_RISE=%d must be at least 1", cfg.AlertFailedRunnersRise)
+	}
+	if cfg.AlertStartupP95 <= 0 {
+		return fmt.Errorf("ARC_UI_ALERT_STARTUP_P95=%s must be positive", cfg.AlertStartupP95)
+	}
+	return nil
+}
+
+// normalizeNamespaces drops blanks and duplicates; a single empty entry means
+// all namespaces and survives as an empty slice.
 func normalizeNamespaces(in []string) []string {
 	trimmed := lo.Map(in, func(ns string, _ int) string { return strings.TrimSpace(ns) })
 	return lo.Uniq(lo.Compact(trimmed))

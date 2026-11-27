@@ -1,0 +1,72 @@
+{{- $vm := index .Values "victoria-metrics-single" }}
+{{- if $vm.enabled }}
+{{- $c := .Values.collection }}
+{{- $scrape := include "arc-ui.vmScrapes" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $vm.server.scrape.configMap }}
+  labels:
+    {{- include "arc-ui.labels" . | nindent 4 }}
+data:
+  scrape.yml: |
+    global:
+      scrape_interval: {{ $c.interval }}
+      scrape_timeout: {{ $c.interval }}
+    {{- if not $scrape }}
+    scrape_configs: []
+    {{- else }}
+    scrape_configs:
+      - job_name: arc
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [{{ include "arc-ui.controllerNamespace" . | quote }}]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            regex: controller-manager|runner-scale-set-listener
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            regex: metrics
+            action: keep
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_actions_github_com_(.+)
+            replacement: actions_github_com_$1
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+      - job_name: kubelet-cadvisor
+        scheme: https
+        metrics_path: /metrics/cadvisor
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: {{ $c.kubeletInsecureSkipVerify }}
+        kubernetes_sd_configs:
+          - role: node
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: container_cpu_usage_seconds_total|container_memory_working_set_bytes
+            action: keep
+          - source_labels: [namespace]
+            regex: {{ include "arc-ui.runnerNamespaceRegex" . | quote }}
+            action: keep
+      - job_name: kube-state-metrics
+        honor_labels: true
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            regex: {{ $c.kubeStateMetrics.name | regexQuoteMeta | quote }}
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            regex: {{ $c.kubeStateMetrics.port | regexQuoteMeta | quote }}
+            action: keep
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: kube_pod_labels|kube_pod_container_resource_requests|kube_pod_container_resource_limits
+            action: keep
+          - source_labels: [namespace]
+            regex: {{ include "arc-ui.runnerNamespaceRegex" . | quote }}
+            action: keep
+    {{- end }}
+{{- end }}

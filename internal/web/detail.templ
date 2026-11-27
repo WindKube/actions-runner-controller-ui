@@ -84,9 +84,8 @@ templ ResourcePair(cpu, mem LineChart) {
 	</div>
 }
 
-// SetChurn is runner creation against termination for one set.
 templ SetChurn(d SetDetail) {
-	@Card("churn", "runner churn", d.Range.Label()) {
+	@Card("churn", "jobs started / finished", d.Range.Label()) {
 		@ChurnChartView(d.Churn)
 	}
 }
@@ -157,12 +156,8 @@ templ RunnerPage(d RunnerDetail) {
 	</div>
 }
 
-// RunnerResources is the raw per-runner usage over the last few minutes. The
-// window is fixed rather than following the page's range selector: raw per-runner
-// samples are retained for minutes, so a 30-day range would render a handful of
-// points crammed against the right edge.
 templ RunnerResources(d RunnerDetail) {
-	@Card("resources", "resource usage", "last 4 minutes") {
+	@Card("resources", "resource usage", d.Window) {
 		@ResourcePair(d.CPU, d.Mem)
 	}
 }

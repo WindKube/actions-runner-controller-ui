@@ -1,0 +1,253 @@
+suite: bundled store and collector
+templates:
+  - deployment.yaml
+  - vm-scrape-configmap.yaml
+  - collector-configmap.yaml
+  - scrape-rbac.yaml
+tests:
+  - it: renders none of it by default
+    set:
+      prometheus.url: http://prometheus:9090
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: vm-scrape-configmap.yaml
+      - hasDocuments:
+          count: 0
+        template: collector-configmap.yaml
+      - hasDocuments:
+          count: 0
+        template: scrape-rbac.yaml
+
+  - it: points the app at the bundled store
+    set:
+      victoria-metrics-single.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_PROMETHEUS_URL
+            value: http://arc-ui-vm.NAMESPACE.svc:8428
+        template: deployment.yaml
+
+  - it: keeps an explicit prometheus.url over the bundled store
+    set:
+      prometheus.url: http://mimir/prometheus
+      victoria-metrics-single.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_PROMETHEUS_URL
+            value: http://mimir/prometheus
+        template: deployment.yaml
+
+  - it: scrapes ARC, cAdvisor and kube-state-metrics into the store
+    set:
+      victoria-metrics-single.enabled: true
+      env.ARC_UI_NAMESPACES: "arc-runners, gpu.runners"
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: arc-ui-vm-scrape
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "job_name: arc\\n"
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "regex: controller-manager\\|runner-scale-set-listener"
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "replacement: actions_github_com_\\$1"
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "metrics_path: /metrics/cadvisor"
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: 'regex: "arc-runners\|gpu\\\\.runners"'
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "names: \\[\"arc-systems\"\\]"
+
+  - it: grants the store's scraper nodes/metrics and never nodes/proxy
+    set:
+      victoria-metrics-single.enabled: true
+    template: scrape-rbac.yaml
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: [nodes, pods]
+              verbs: [get, list, watch]
+            - apiGroups: [""]
+              resources: [nodes/metrics]
+              verbs: [get]
+        documentIndex: 0
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: arc-ui-vm
+              namespace: NAMESPACE
+        documentIndex: 1
+
+  - it: lets the collector feed the store instead of the store scraping twice
+    set:
+      victoria-metrics-single.enabled: true
+      collector.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "scrape_configs: \\[\\]"
+        template: vm-scrape-configmap.yaml
+      - matchRegex:
+          path: data["config.alloy"]
+          pattern: 'url = "http://arc-ui-vm.NAMESPACE.svc:8428/api/v1/write"'
+        template: collector-configmap.yaml
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: arc-ui-collector
+              namespace: NAMESPACE
+        documentIndex: 1
+        template: scrape-rbac.yaml
+
+  - it: writes to an external store with its headers
+    set:
+      prometheus.url: http://mimir/prometheus
+      collector.enabled: true
+      collection.remoteWrite.url: http://mimir/api/v1/push
+      collection.remoteWrite.headers:
+        X-Scope-OrgID: team-a
+    template: collector-configmap.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: arc-ui-collector-config
+      - matchRegex:
+          path: data["config.alloy"]
+          pattern: 'url = "http://mimir/api/v1/push"'
+      - matchRegex:
+          path: data["config.alloy"]
+          pattern: '"X-Scope-OrgID" = "team-a",'
+      - matchRegex:
+          path: data["config.alloy"]
+          pattern: 'metrics_path      = "/metrics/cadvisor"'
+      - matchRegex:
+          path: data["config.alloy"]
+          pattern: 'regex         = "controller-manager\|runner-scale-set-listener"'
+      - notMatchRegex:
+          path: data["config.alloy"]
+          pattern: "nodes/proxy"
+
+  - it: never lets a scrape timeout exceed a short interval
+    set:
+      victoria-metrics-single.enabled: true
+      collector.enabled: true
+      collection.interval: 5s
+      collection.remoteWrite.url: http://mimir/api/v1/push
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "scrape_timeout: 5s"
+        template: vm-scrape-configmap.yaml
+      - matchRegex:
+          path: data["config.alloy"]
+          pattern: 'scrape_timeout += "5s"'
+        template: collector-configmap.yaml
+
+  - it: treats an explicit URL of the bundled store as writing into it
+    set:
+      victoria-metrics-single.enabled: true
+      collector.enabled: true
+      collection.remoteWrite.url: http://arc-ui-vm.NAMESPACE.svc:8428/api/v1/write
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "scrape_configs: \\[\\]"
+        template: vm-scrape-configmap.yaml
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: arc-ui-collector
+              namespace: NAMESPACE
+        documentIndex: 1
+        template: scrape-rbac.yaml
+
+  - it: still scrapes when the collector writes to a same-named store in another namespace
+    set:
+      victoria-metrics-single.enabled: true
+      collector.enabled: true
+      collection.remoteWrite.url: http://arc-ui-vm.other.svc:8428/api/v1/write
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "job_name: kubelet-cadvisor"
+
+  - it: treats the short service name as the store
+    set:
+      victoria-metrics-single.enabled: true
+      collector.enabled: true
+      collection.remoteWrite.url: http://arc-ui-vm:8428/api/v1/write
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "scrape_configs: \\[\\]"
+
+  - it: matches the store's fully qualified cluster name too
+    set:
+      victoria-metrics-single.enabled: true
+      collector.enabled: true
+      collection.remoteWrite.url: http://arc-ui-vm.NAMESPACE.svc.cluster.local:8428/api/v1/write
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "scrape_configs: \\[\\]"
+
+  - it: follows the store's http port override
+    set:
+      victoria-metrics-single.enabled: true
+      victoria-metrics-single.server.service.portOverrides.http.port: 9000
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_PROMETHEUS_URL
+            value: http://arc-ui-vm.NAMESPACE.svc:9000
+        template: deployment.yaml
+
+  - it: filters to the app's default namespace when ARC_UI_NAMESPACES is unset
+    set:
+      victoria-metrics-single.enabled: true
+      env.ARC_UI_NAMESPACES: null
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: 'regex: "arc-runners"'
+
+  - it: keeps every namespace when ARC_UI_NAMESPACES is empty
+    set:
+      victoria-metrics-single.enabled: true
+      env.ARC_UI_NAMESPACES: ""
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: 'regex: "\.\+"'
+
+  - it: refuses a collector with nowhere to write
+    set:
+      prometheus.url: http://prometheus:9090
+      collector.enabled: true
+    template: deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "collector.enabled needs collection.remoteWrite.url"

@@ -115,6 +115,14 @@ templ Empty(reason string) {
 	</div>
 }
 
+// Unavailable stands in for a chart whose source did not answer, so an outage
+// never draws as zeros.
+templ Unavailable() {
+	<div class="flex items-center justify-center h-[120px] rounded-sm border border-dashed border-attention/40 text-[11.5px] text-attention" data-unavailable>
+		metrics unavailable — Prometheus did not answer
+	</div>
+}
+
 // Legend is the row of swatches beneath a chart.
 templ Legend(items []LegendItem) {
 	if len(items) > 0 {

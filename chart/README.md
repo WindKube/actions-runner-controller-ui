@@ -4,14 +4,78 @@ Read-only dashboard for GitHub Actions Runner Controller. One replica, one PVC, 
 ClusterRole with `get`/`list`/`watch` and nothing else.
 
 ```bash
+# Once per checkout: the subcharts are pinned in Chart.lock but not committed,
+# and helm refuses to install without them even when they are disabled.
+helm repo add vm https://victoriametrics.github.io/helm-charts
+helm repo add grafana https://grafana.github.io/helm-charts
+helm dependency build chart/        # or: task helm:deps
+
 helm install arc-ui ./chart \
   --namespace arc-systems --create-namespace \
+  --set prometheus.url=http://prometheus-operated.monitoring:9090 \
   --set env.ARC_UI_NAMESPACES=arc-runners \
   --set env.ARC_UI_CONTROLLER_NAMESPACE=arc-systems
 ```
 
-`values.yaml` is commented in full; this file covers only the parts that will
-otherwise bite you.
+Every install from source needs the dependency build first; `--dependency-update`
+alone is not enough, because helm still needs the two repos added.
+`prometheus.url` is required unless the bundled store is on. This file covers
+only the parts that will otherwise bite you.
+
+## What the Prometheus needs
+
+- **ARC metrics.** Enable the `metrics:` block in the
+  `gha-runner-scale-set-controller` values, then scrape the controller and every
+  listener on their `metrics` port. `podMonitors.arc.enabled=true` renders two
+  PodMonitors for that, scraping `rbac.controllerNamespace`, with a `labelmap`
+  that turns `actions.github.com/*` pod labels into `actions_github_com_*`. They
+  are created there too, unless `podMonitors.arc.namespace` names the namespace
+  your Prometheus selects monitors from.
+- **cAdvisor.** The kubelet's `/metrics/cadvisor`, for runner pod CPU and memory.
+- **kube-state-metrics with the scale set label allowlisted.** It drops pod
+  labels unless told otherwise:
+
+  ```text
+  --metric-labels-allowlist=pods=[actions.github.com/scale-set-name]
+  ```
+
+  In kube-prometheus-stack: `kube-state-metrics.metricLabelsAllowlist`.
+
+## No Prometheus: the bundled store and collector
+
+Two opt-in subcharts, both off by default, pinned in `Chart.lock`:
+
+| Subchart | Values key | Renders | Use it when |
+| --- | --- | --- | --- |
+| VictoriaMetrics single 0.52.0 | `victoria-metrics-single` | StatefulSet + Service `arc-ui-vm:8428`, 30d retention, 16Gi PVC | there is no Prometheus to point at |
+| Alloy 1.16.0 | `collector` | one-replica Deployment `arc-ui-collector` | there is a store, but nothing scrapes ARC into it |
+
+```bash
+helm install arc-ui ./chart -n arc-systems --set victoria-metrics-single.enabled=true
+```
+
+- With the store on and no `prometheus.url`, the app is pointed at it.
+- Only the store: VictoriaMetrics scrapes the ARC pods, cAdvisor and
+  kube-state-metrics itself, from the `arc-ui-vm-scrape` ConfigMap.
+- Store and collector: Alloy scrapes and remote-writes into the store, and the
+  store's own scrape list is emptied so nothing is counted twice.
+- Only the collector: set `collection.remoteWrite.url` (and `headers`, e.g.
+  `X-Scope-OrgID`) to an existing store; the render fails without it.
+
+Both scrape configs are rendered by this chart, not the subcharts, and are
+covered by `tests/collection_test.yaml`. `tests/subchart_names_test.yaml` pins the
+service, ServiceAccount and ConfigMap names they are wired to, so a subchart
+upgrade that renames one fails the tests.
+
+kube-state-metrics is **not** bundled. It must already run, with the allowlist
+above, matched by `collection.kubeStateMetrics.name` and `.port`.
+
+The scraper's ClusterRole `<release>-scrape` is `get`/`list`/`watch` on nodes and
+pods plus `get` on `nodes/metrics`, which is what the kubelet checks for
+`/metrics/cadvisor`. `nodes/proxy` is never granted: it also opens exec through
+the kubelet. `collection.kubeletInsecureSkipVerify` defaults to `true`, as in
+kube-prometheus-stack, because most kubelet serving certs are self-signed; turn
+it off where kubelet certs are signed by the cluster CA.
 
 ## Why a Deployment with an explicit PVC
 
@@ -49,9 +113,9 @@ annotations:
   helm.sh/resource-policy: keep
 ```
 
-The dashboard's value is its history. Months of samples cannot be re-derived from
-anywhere, because nothing else keeps them; a fat-fingered `helm uninstall` must
-not delete that.
+The job table, which links each GitHub job to the runner pod that ran it, cannot
+be re-derived from Prometheus; a fat-fingered `helm uninstall` must not delete
+it.
 
 The cost shows up on **reinstall under the same release name**:
 
@@ -90,35 +154,20 @@ To actually drop the history, delete the PVC explicitly after uninstalling.
 
 ## RBAC
 
-`get`, `list`, `watch`. That is the whole verb set. Deliberately withheld:
-`secrets` (ARC keeps the GitHub App credentials there), `pods/exec` and
-`pods/attach` (remote code execution in a runner), `pods/log` (job logs regularly
-contain masked-but-recoverable values), and every write verb.
+`get`, `list`, `watch` on the four ARC resources, pods and events. Deliberately
+withheld: `secrets` (ARC keeps the GitHub App credentials there), `pods/exec`
+and `pods/attach` (remote code execution in a runner), `pods/log` (job logs
+regularly contain masked-but-recoverable values), every write verb, and nodes
+and `metrics.k8s.io`, since usage comes from Prometheus. The only node access in
+the chart belongs to the bundled scraper, not the app (see above).
 
-Two things about scope:
+Runners live in `ARC_UI_NAMESPACES` (default `arc-runners`); the controller and
+the AutoscalingListeners live in `ARC_UI_CONTROLLER_NAMESPACE` (default
+`arc-systems`). Bind only the runner namespace and every listener shows as
+unknown.
 
-**Both namespaces.** Runners live in `ARC_UI_NAMESPACES` (default `arc-runners`);
-the controller and the **AutoscalingListener pods** live in
-`ARC_UI_CONTROLLER_NAMESPACE` (default `arc-systems`). The listener carries queue
-depth and listener health. Bind only the runner namespace and the fleet renders
-perfectly while the listener panel stays blank forever.
-
-**`metrics.k8s.io` resources are `pods` and `nodes`.** Not `podmetrics`, not
-`nodemetrics`, not `pods/metrics`. The Go kinds are `PodMetrics`/`NodeMetrics`,
-which is where the wrong guess comes from — and the wrong name is accepted
-silently by the apiserver, matches nothing, and yields a 403 on every scrape that
-is **indistinguishable from metrics-server not being installed**. If usage columns
-are empty, check this rule before you check metrics-server:
-
-```bash
-kubectl auth can-i list pods.metrics.k8s.io \
-  --as=system:serviceaccount:arc-systems:arc-ui
-```
-
-Set `rbac.clusterWide=false` for RoleBindings into named namespaces instead of a
-ClusterRoleBinding. Tighter, but nodes and node metrics are cluster-scoped and
-will be denied — the dashboard reports them as unavailable sources rather than
-failing, which is the intended degradation.
+`rbac.clusterWide=false` binds the ClusterRole with RoleBindings into
+`rbac.namespaces` and `rbac.controllerNamespace` instead.
 
 ## Probes
 
@@ -154,7 +203,7 @@ container even begins, repeated on every single restart.
 
 ```
 terminationGracePeriodSeconds (45)
-  >= preStopDelay (8)  +  shutdownTimeout (20)  +  slack (5)
+  >= preStopDelay (10)  +  shutdownTimeout (20)  +  slack (5)
 ```
 
 `preStopDelay` keeps the process serving *after* readiness flips false, so
@@ -203,11 +252,19 @@ scraped, and the reason is invisible in the diff. Set
 | --- | --- | --- |
 | `replicaCount` | `1` | anything else fails the render |
 | `image.repository` / `image.tag` | `ghcr.io/windkube/actions-runner-controller-ui` / chart appVersion | |
-| `env.*` | see values.yaml | every `ARC_UI_*` variable; `null` drops it, `""` is emitted |
-| `extraEnv` | `[]` | for `valueFrom` (put the Sentry DSN here) |
-| `persistence.size` | `4Gi` | resizable if the StorageClass allows expansion |
+| `prometheus.url` | — | **required** unless `victoria-metrics-single.enabled` |
+| `victoria-metrics-single.enabled` | `false` | bundled store, see above |
+| `collector.enabled` | `false` | bundled Alloy collector, see above |
+| `collection.remoteWrite.url` | `""` | the collector's target; defaults to the bundled store |
+| `prometheus.headers` | `{}` | e.g. `X-Scope-OrgID` for Mimir |
+| `prometheus.scaleSetLabel` | `name` | the scale set label on `gha_*` series |
+| `prometheus.ksmScaleSetLabel` | `label_actions_github_com_scale_set_name` | needs the kube-state-metrics allowlist above |
+| `env.*` | see values.yaml | `ARC_UI_*` passthrough; `null` drops it, `""` is emitted |
+| `extraEnv` | `[]` | for `valueFrom`: the Sentry DSN, Prometheus token or password |
+| `persistence.size` | `1Gi` | the job table only; time series live in Prometheus |
 | `persistence.existingClaim` | `""` | bind a kept PVC without adopting it |
 | `rbac.clusterWide` | `true` | required when `ARC_UI_NAMESPACES` is empty |
-| `gracePeriod.*` | `8` / `20` | rendered into the env vars *and* validated |
-| `serviceMonitor.enabled` | `false` | |
+| `gracePeriod.*` | `10` / `20` | rendered into the env vars *and* validated |
+| `serviceMonitor.enabled` | `false` | scrapes arc-ui's own `/metrics` |
+| `podMonitors.arc.enabled` | `false` | scrapes the ARC controller and listeners |
 | `ingress.enabled` | `false` | |

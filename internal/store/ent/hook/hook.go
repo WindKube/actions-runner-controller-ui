@@ -8,64 +8,16 @@ import (
 	"fmt"
 )
 
-// The ChurnEventFunc type is an adapter to allow the use of ordinary
-// function as ChurnEvent mutator.
-type ChurnEventFunc func(context.Context, *ent.ChurnEventMutation) (ent.Value, error)
+// The JobFunc type is an adapter to allow the use of ordinary
+// function as Job mutator.
+type JobFunc func(context.Context, *ent.JobMutation) (ent.Value, error)
 
 // Mutate calls f(ctx, m).
-func (f ChurnEventFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
-	if mv, ok := m.(*ent.ChurnEventMutation); ok {
+func (f JobFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.JobMutation); ok {
 		return f(ctx, mv)
 	}
-	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ChurnEventMutation", m)
-}
-
-// The JobObservationFunc type is an adapter to allow the use of ordinary
-// function as JobObservation mutator.
-type JobObservationFunc func(context.Context, *ent.JobObservationMutation) (ent.Value, error)
-
-// Mutate calls f(ctx, m).
-func (f JobObservationFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
-	if mv, ok := m.(*ent.JobObservationMutation); ok {
-		return f(ctx, mv)
-	}
-	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.JobObservationMutation", m)
-}
-
-// The JobSampleFunc type is an adapter to allow the use of ordinary
-// function as JobSample mutator.
-type JobSampleFunc func(context.Context, *ent.JobSampleMutation) (ent.Value, error)
-
-// Mutate calls f(ctx, m).
-func (f JobSampleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
-	if mv, ok := m.(*ent.JobSampleMutation); ok {
-		return f(ctx, mv)
-	}
-	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.JobSampleMutation", m)
-}
-
-// The RunnerFailureFunc type is an adapter to allow the use of ordinary
-// function as RunnerFailure mutator.
-type RunnerFailureFunc func(context.Context, *ent.RunnerFailureMutation) (ent.Value, error)
-
-// Mutate calls f(ctx, m).
-func (f RunnerFailureFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
-	if mv, ok := m.(*ent.RunnerFailureMutation); ok {
-		return f(ctx, mv)
-	}
-	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.RunnerFailureMutation", m)
-}
-
-// The SampleFunc type is an adapter to allow the use of ordinary
-// function as Sample mutator.
-type SampleFunc func(context.Context, *ent.SampleMutation) (ent.Value, error)
-
-// Mutate calls f(ctx, m).
-func (f SampleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
-	if mv, ok := m.(*ent.SampleMutation); ok {
-		return f(ctx, mv)
-	}
-	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SampleMutation", m)
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.JobMutation", m)
 }
 
 // Condition is a hook condition function.

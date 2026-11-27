@@ -1,11 +1,9 @@
-// Package history adapts the time-series store to the contract the views declare,
-// so that neither side has to know about the other. Without it the views would
-// import ent transitively, or the store would grow presentation types.
+// Package history adapts the job store to the half of web.History it answers,
+// so the views never import ent and the store never grows presentation types.
 package history
 
 import (
 	"context"
-	"slices"
 	"sync"
 	"time"
 
@@ -14,79 +12,54 @@ import (
 	"arc-ui/internal/web"
 )
 
-// statsTTL bounds how stale the store footer may be.
-//
-// COUNT(*) over samples scans an index — millions of rows once the hourly tier
-// has a year in it — and the SSE stream re-renders every panel on every snapshot
-// change, for every connected browser.
+// statsTTL bounds the footer's staleness; every SSE render asks for it.
 const statsTTL = time.Minute
 
-// Queries is the slice of the store this adapter uses. Declaring it as an
-// interface keeps the adapter testable without a database.
+// Queries is the slice of the store the adapter uses.
 type Queries interface {
-	Series(ctx context.Context, scope store.Scope, scopeID string, metrics []store.Metric, r store.Range) (map[store.Metric][]store.Point, error)
-	Churn(ctx context.Context, setName string, r store.Range) (created, terminated []store.Point, err error)
-	Throughput(ctx context.Context, setName string, r store.Range) (ok, failed []store.Point, err error)
-	RepoConsumption(ctx context.Context, r store.Range) ([]store.RepoTotal, error)
-	Failures(ctx context.Context, setName string, r store.Range, limit int) ([]store.FailureRecord, int64, error)
-	Jobs(ctx context.Context, f store.JobFilter, r store.Range) ([]store.JobRecord, int64, error)
-	WorkflowRuns(ctx context.Context, f store.JobFilter, r store.Range) ([]store.WorkflowRun, int64, error)
+	Failures(ctx context.Context, set string, from, to time.Time, limit int) ([]store.JobRecord, int64, error)
+	Jobs(ctx context.Context, f store.JobFilter, from, to time.Time) ([]store.JobRecord, int64, error)
+	WorkflowRuns(ctx context.Context, f store.JobFilter, from, to time.Time) ([]store.WorkflowRun, int64, error)
 	Job(ctx context.Context, id int) (store.JobRecord, bool, error)
-	JobSeries(ctx context.Context, id int, r store.Range) ([]store.JobPoint, error)
-	JobFacets(ctx context.Context, r store.Range) (store.JobFacets, error)
+	Facets(ctx context.Context, from, to time.Time) (store.JobFacets, error)
 	Stats(ctx context.Context) (store.Stats, error)
 }
 
-// Adapter satisfies web.History using the store.
 type Adapter struct {
-	Q Queries
-
-	// stats memoises Q.Stats. A nil cache counts on every call, which is what a
-	// zero-valued Adapter does; New always supplies one.
+	Q     Queries
 	stats *statsCache
 }
-
-var _ web.History = Adapter{}
 
 func New(q Queries) Adapter {
 	return Adapter{Q: q, stats: &statsCache{clock: time.Now}}
 }
 
-// statsCache holds one memoised store.Stats answer.
 type statsCache struct {
 	mu    sync.Mutex
 	clock func() time.Time
-
-	at  time.Time
-	val web.StoreStats
+	at    time.Time
+	val   web.StoreStats
 }
 
-// Failures returns the newest failures in the window plus the window's total.
-func (a Adapter) Failures(
-	ctx context.Context, scope web.Scope, w web.Window, limit int,
-) (web.FailureWindow, error) {
-	rows, total, err := a.Q.Failures(ctx, string(scope), rng(w), limit)
+// Failures lists jobs whose runner failed in the window.
+func (a Adapter) Failures(ctx context.Context, scope web.Scope, w web.Window, limit int) (web.FailureWindow, error) {
+	rows, total, err := a.Q.Failures(ctx, string(scope), w.From, w.To, limit)
 	if err != nil {
 		return web.FailureWindow{}, err
 	}
-
-	out := web.FailureWindow{
-		Failures: make([]fleet.Failure, 0, len(rows)),
-		Total:    int(total),
-	}
-	for _, f := range rows {
+	out := web.FailureWindow{Failures: make([]fleet.Failure, 0, len(rows)), Total: int(total)}
+	for _, j := range rows {
+		reason := j.FailureReason
+		if reason == "" {
+			reason = "runner failed"
+		}
 		out.Failures = append(out.Failures, fleet.Failure{
-			Runner: f.Runner,
-			Set:    f.Set,
-			Reason: f.Reason,
-			At:     f.At,
-			Severe: f.Severe,
+			Runner: j.Runner, Set: j.Set, Reason: reason, At: j.FinishedAt, Severe: true,
 		})
 	}
 	return out, nil
 }
 
-// Stats reports what the history is costing on disk, memoised for statsTTL.
 func (a Adapter) Stats(ctx context.Context) (web.StoreStats, error) {
 	if a.stats == nil {
 		return a.countStats(ctx)
@@ -94,170 +67,37 @@ func (a Adapter) Stats(ctx context.Context) (web.StoreStats, error) {
 	return a.stats.get(ctx, a.countStats)
 }
 
-// get returns the memoised value, or counts and stores a fresh one.
-//
-// The lock is held across the count rather than only around the fields. Every
-// connected browser renders the footer on the same tick, so releasing it first
-// would let a cold cache launch one COUNT(*) per stream.
-func (c *statsCache) get(
-	ctx context.Context,
-	count func(context.Context) (web.StoreStats, error),
-) (web.StoreStats, error) {
+func (c *statsCache) get(ctx context.Context, fetch func(context.Context) (web.StoreStats, error)) (web.StoreStats, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	now := c.clock()
 	if !c.at.IsZero() && now.Sub(c.at) < statsTTL {
 		return c.val, nil
 	}
-
-	val, err := count(ctx)
+	v, err := fetch(ctx)
 	if err != nil {
-		// Deliberately not cached: a failed count is usually a database busy for
-		// milliseconds, and memoising that would keep the footer broken for a minute
-		// after the store recovered.
-		return web.StoreStats{}, err
+		return v, err
 	}
-
-	c.val, c.at = val, now
-	return val, nil
+	c.at, c.val = now, v
+	return v, nil
 }
 
-// countStats asks the store and maps its answer onto the view contract.
 func (a Adapter) countStats(ctx context.Context) (web.StoreStats, error) {
 	st, err := a.Q.Stats(ctx)
 	if err != nil {
 		return web.StoreStats{}, err
 	}
-	return web.StoreStats{
-		// Anything the store answered proves the store is there. The zero value
-		// means the opposite, and the footer renders the two differently.
-		Enabled:     true,
-		Path:        st.Path,
-		SizeBytes:   st.SizeBytes,
-		Samples:     st.Samples,
-		Jobs:        st.Jobs,
-		JobSamples:  st.JobSamples,
-		ChurnEvents: st.ChurnEvents,
-		Failures:    st.Failures,
-		Rows:        st.Rows,
-		Oldest:      st.Oldest,
-	}, nil
+	return web.StoreStats{Enabled: true, Path: st.Path, SizeBytes: st.SizeBytes, Jobs: st.Jobs, Oldest: st.Oldest}, nil
 }
 
-// scopeMetrics is everything the overview and set-detail charts read. They are
-// fetched in one call because the store answers them from a single scan.
-var scopeMetrics = []store.Metric{
-	store.MetricBusy, store.MetricIdle, store.MetricPending,
-	store.MetricCapacity,
-	store.MetricCPUUsed, store.MetricCPURequest,
-	store.MetricMemUsed, store.MetricMemRequest,
-}
-
-// Scope returns bucketed counts and resource series.
-func (a Adapter) Scope(ctx context.Context, scope web.Scope, w web.Window) (web.ScopeSeries, error) {
-	kind, id := storeScope(scope)
-
-	series, err := a.Q.Series(ctx, kind, id, scopeMetrics, rng(w))
-	if err != nil {
-		return web.ScopeSeries{}, err
-	}
-
-	axis := axisOf(series)
-	return web.ScopeSeries{
-		At:         axis,
-		Busy:       align(series[store.MetricBusy], axis),
-		Idle:       align(series[store.MetricIdle], axis),
-		Pending:    align(series[store.MetricPending], axis),
-		Capacity:   align(series[store.MetricCapacity], axis),
-		CPUUsed:    align(series[store.MetricCPUUsed], axis),
-		CPURequest: align(series[store.MetricCPURequest], axis),
-		MemUsed:    align(series[store.MetricMemUsed], axis),
-		MemRequest: align(series[store.MetricMemRequest], axis),
-	}, nil
-}
-
-// Runner returns raw per-runner samples.
-func (a Adapter) Runner(ctx context.Context, name string, w web.Window) (web.RunnerSeries, error) {
-	series, err := a.Q.Series(ctx, store.ScopeRunner, name,
-		[]store.Metric{store.MetricCPUUsed, store.MetricMemUsed}, rng(w))
-	if err != nil {
-		return web.RunnerSeries{}, err
-	}
-
-	axis := axisOf(series)
-	out := web.RunnerSeries{
-		At:  axis,
-		CPU: align(series[store.MetricCPUUsed], axis),
-		Mem: align(series[store.MetricMemUsed], axis),
-	}
-	out.Peak.CPU = web.PeakOf(out.CPU)
-	out.Peak.Mem = web.PeakOf(out.Mem)
-	return out, nil
-}
-
-// Throughput returns jobs completed and failed per bucket.
-func (a Adapter) Throughput(ctx context.Context, scope web.Scope, w web.Window) (web.Counts, error) {
-	ok, failed, err := a.Q.Throughput(ctx, string(scope), rng(w))
-	if err != nil {
-		return web.Counts{}, err
-	}
-	return counts(ok, failed), nil
-}
-
-// Churn returns runners created and destroyed per bucket.
-func (a Adapter) Churn(ctx context.Context, scope web.Scope, w web.Window) (web.Counts, error) {
-	created, terminated, err := a.Q.Churn(ctx, string(scope), rng(w))
-	if err != nil {
-		return web.Counts{}, err
-	}
-	return counts(created, terminated), nil
-}
-
-// Repos returns per-repository consumption, busiest first.
-func (a Adapter) Repos(ctx context.Context, w web.Window, limit int) ([]web.RepoHistory, error) {
-	totals, err := a.Q.RepoConsumption(ctx, rng(w))
-	if err != nil {
-		return nil, err
-	}
-	if limit > 0 && len(totals) > limit {
-		totals = totals[:limit]
-	}
-
-	out := make([]web.RepoHistory, 0, len(totals))
-	for _, t := range totals {
-		out = append(out, web.RepoHistory{
-			Repository: t.Repository,
-			Jobs:       t.Jobs,
-			CPUSeconds: t.CPUSeconds,
-			// The store integrates byte-seconds; the panel shows GiB-seconds,
-			// because byte-seconds for a real fleet is a sixteen-digit number.
-			MemGiBSecs: t.MemByteSeconds / gib,
-		})
-	}
-	return out, nil
-}
-
-const gib = 1024 * 1024 * 1024
-
-// jobFilter maps the view's filter onto the store's.
-//
-// The outcome vocabularies are declared separately at both ends — the view
-// owns what a dropdown offers, the store owns what a WHERE clause accepts —
-// and an unrecognised value falls through to "any" rather than matching
-// nothing, so a hand-edited URL widens the list instead of emptying it.
 func jobFilter(f web.JobFilter) store.JobFilter {
 	out := store.JobFilter{
-		Repository: f.Repository,
-		Workflow:   f.Workflow,
-		Set:        f.Set,
-		RunID:      f.RunID,
-		Search:     f.Search,
-		Limit:      f.Limit,
+		Repository: f.Repository, Workflow: f.Workflow, Set: f.Set,
+		RunID: f.RunID, Search: f.Search, Limit: f.Limit,
 	}
 	switch f.Outcome {
 	case web.JobOK:
-		out.Outcome = store.OutcomeOK
+		out.Outcome = store.OutcomeSucceeded
 	case web.JobFailed:
 		out.Outcome = store.OutcomeFailed
 	case web.JobRunning:
@@ -267,166 +107,58 @@ func jobFilter(f web.JobFilter) store.JobFilter {
 	return out
 }
 
-// job maps one stored job onto the view's.
 func job(j store.JobRecord) web.Job {
 	return web.Job{
-		ID:         j.ID,
-		Runner:     j.Runner,
-		Set:        j.Set,
-		Repository: j.Repository,
-		Workflow:   j.Workflow,
-		Name:       j.Job,
-		RunID:      j.RunID,
-		StartedAt:  j.StartedAt,
-		FinishedAt: j.FinishedAt,
-		Succeeded:  j.Succeeded,
-		CPUSeconds: j.CPUSeconds,
-		// The store integrates byte-seconds; the views show GiB-seconds,
-		// because byte-seconds for a real job is a fourteen-digit number.
-		MemGiBSecs: j.MemByteSeconds / gib,
-		CPURequest: j.CPURequest,
-		CPULimit:   j.CPULimit,
-		MemRequest: j.MemRequest,
-		MemLimit:   j.MemLimit,
+		ID: j.ID, JobID: j.JobID, Runner: j.Runner, Namespace: j.Namespace, Set: j.Set,
+		Repository: j.Repository, WorkflowRef: j.WorkflowRef, Workflow: j.Workflow, Name: j.Name, RunID: j.RunID,
+		StartedAt: j.StartedAt, FinishedAt: j.FinishedAt,
+		RunnerFailed: j.Outcome == store.OutcomeFailed, FailureReason: j.FailureReason,
+		CPUSeconds: j.CPUSeconds, MemPeakBytes: j.MemPeakBytes,
+		CPURequest: j.CPURequest, CPULimit: j.CPULimit, MemRequest: j.MemRequest, MemLimit: j.MemLimit,
 	}
 }
 
-// Jobs returns the jobs overlapping the window, newest first.
 func (a Adapter) Jobs(ctx context.Context, f web.JobFilter, w web.Window) (web.JobList, error) {
-	rows, total, err := a.Q.Jobs(ctx, jobFilter(f), rng(w))
+	rows, total, err := a.Q.Jobs(ctx, jobFilter(f), w.From, w.To)
 	if err != nil {
 		return web.JobList{}, err
 	}
 	out := web.JobList{Jobs: make([]web.Job, 0, len(rows)), Total: total}
-	for _, r := range rows {
-		out.Jobs = append(out.Jobs, job(r))
+	for _, j := range rows {
+		out.Jobs = append(out.Jobs, job(j))
 	}
 	return out, nil
 }
 
-// Workflows returns the workflow runs overlapping the window, newest first.
 func (a Adapter) Workflows(ctx context.Context, f web.JobFilter, w web.Window) (web.WorkflowList, error) {
-	rows, total, err := a.Q.WorkflowRuns(ctx, jobFilter(f), rng(w))
+	rows, total, err := a.Q.WorkflowRuns(ctx, jobFilter(f), w.From, w.To)
 	if err != nil {
 		return web.WorkflowList{}, err
 	}
 	out := web.WorkflowList{Runs: make([]web.WorkflowRun, 0, len(rows)), Total: total}
 	for _, r := range rows {
 		out.Runs = append(out.Runs, web.WorkflowRun{
-			Repository: r.Repository,
-			Workflow:   r.Workflow,
-			RunID:      r.RunID,
-			Jobs:       r.Jobs,
-			Running:    r.Running,
-			Failed:     r.Failed,
-			StartedAt:  r.StartedAt,
-			FinishedAt: r.FinishedAt,
-			CPUSeconds: r.CPUSeconds,
-			MemGiBSecs: r.MemByteSeconds / gib,
+			Repository: r.Repository, Workflow: r.Workflow, RunID: r.RunID,
+			Jobs: r.Jobs, Running: r.Running, Failed: r.Failed,
+			StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
+			CPUSeconds: r.CPUSeconds, MemPeakBytes: r.MemPeakBytes,
 		})
 	}
 	return out, nil
 }
 
-// Job returns one job by id.
 func (a Adapter) Job(ctx context.Context, id int) (web.Job, bool, error) {
-	r, ok, err := a.Q.Job(ctx, id)
+	j, ok, err := a.Q.Job(ctx, id)
 	if err != nil || !ok {
-		return web.Job{}, false, err
+		return web.Job{}, ok, err
 	}
-	return job(r), true, nil
+	return job(j), true, nil
 }
 
-// JobSeries returns one job's resource usage over the window.
-func (a Adapter) JobSeries(ctx context.Context, id int, w web.Window) (web.JobSeries, error) {
-	points, err := a.Q.JobSeries(ctx, id, rng(w))
-	if err != nil {
-		return web.JobSeries{}, err
-	}
-	out := web.JobSeries{
-		At:  make([]time.Time, 0, len(points)),
-		CPU: make([]float64, 0, len(points)),
-		Mem: make([]float64, 0, len(points)),
-	}
-	for _, p := range points {
-		out.At = append(out.At, p.At)
-		out.CPU = append(out.CPU, p.CPU)
-		out.Mem = append(out.Mem, p.Mem)
-	}
-	return out, nil
-}
-
-// Facets returns the distinct values the window contains.
 func (a Adapter) Facets(ctx context.Context, w web.Window) (web.JobFacets, error) {
-	f, err := a.Q.JobFacets(ctx, rng(w))
+	f, err := a.Q.Facets(ctx, w.From, w.To)
 	if err != nil {
 		return web.JobFacets{}, err
 	}
-	return web.JobFacets{
-		Repositories: f.Repositories,
-		Workflows:    f.Workflows,
-		Sets:         f.Sets,
-	}, nil
-}
-
-func rng(w web.Window) store.Range {
-	return store.Range{From: w.From, To: w.To, Points: w.Points}
-}
-
-// storeScope maps the view's scope onto the store's scope-and-id pair.
-func storeScope(s web.Scope) (store.Scope, string) {
-	if s == web.FleetScope {
-		return store.ScopeFleet, ""
-	}
-	return store.ScopeSet, string(s)
-}
-
-// axisOf builds one time axis covering every metric returned.
-//
-// The metrics are returned as independent slices, and a metric with no rows for
-// a bucket is simply absent. Deriving the axis from the union means a partially
-// populated result leaves a gap in one series rather than shifting every later
-// point of it leftwards against the others.
-func axisOf(series map[store.Metric][]store.Point) []time.Time {
-	seen := make(map[int64]struct{})
-	var axis []time.Time
-	for _, points := range series {
-		for _, p := range points {
-			k := p.At.UnixNano()
-			if _, dup := seen[k]; dup {
-				continue
-			}
-			seen[k] = struct{}{}
-			axis = append(axis, p.At)
-		}
-	}
-	slices.SortFunc(axis, time.Time.Compare)
-	return axis
-}
-
-// align projects points onto the axis, leaving zero where a bucket has no
-// sample.
-func align(points []store.Point, axis []time.Time) []float64 {
-	if len(points) == 0 {
-		return nil
-	}
-	byTime := make(map[int64]float64, len(points))
-	for _, p := range points {
-		byTime[p.At.UnixNano()] = p.Value
-	}
-	out := make([]float64, len(axis))
-	for i, t := range axis {
-		out[i] = byTime[t.UnixNano()]
-	}
-	return out
-}
-
-// counts merges two event series onto a shared axis.
-func counts(up, down []store.Point) web.Counts {
-	axis := axisOf(map[store.Metric][]store.Point{"up": up, "down": down})
-	return web.Counts{
-		At:   axis,
-		Up:   align(up, axis),
-		Down: align(down, axis),
-	}
+	return web.JobFacets{Repositories: f.Repositories, Workflows: f.Workflows, Sets: f.Sets}, nil
 }

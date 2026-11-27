@@ -1,16 +1,7 @@
-// Package k8s is the dashboard's read-only Kubernetes access layer: one bundle of
-// clients derived from a single rest.Config, a set of informers over the ARC
-// custom resources and runner pods, and the builder that turns those caches into
-// a fleet.Snapshot.
-//
-// Nothing is mandatory. A cluster with no metrics-server, no ARC CRDs installed
-// and RBAC that grants us half of what we ask for must still let the process boot
-// and serve. Every such gap becomes a fleet.Source marked unavailable, never an
-// error at startup and never a page of plausible zeros.
-//
-// The ARC semantics that are easy to get subtly wrong — busy is a job id and not
-// a pod phase, counts live on the EphemeralRunnerSet, a nil maxRunners is
-// unbounded — all live in BuildSnapshot, a pure function over typed objects.
+// Package k8s is the read-only Kubernetes access layer: clients, informers over
+// the ARC custom resources and runner pods, and the pure builder that turns
+// those caches into a fleet.Snapshot. A missing CRD or RBAC rule becomes an
+// unavailable fleet.Source, never a boot failure or a page of zeros.
 package k8s
 
 import (
@@ -27,44 +18,31 @@ import (
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/flowcontrol"
-	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 
 	"arc-ui/internal/config"
 )
 
-// Clients bundles everything derived from one *rest.Config. All four clientsets
-// share a single rate limiter; see NewClients for why that is not the default.
 type Clients struct {
 	Kube      kubernetes.Interface
 	Dynamic   dynamic.Interface
-	Metrics   metricsclient.Interface
 	Discovery discovery.DiscoveryInterface
 	Mapper    meta.RESTMapper
 	Config    *rest.Config
 }
 
-// NewClients resolves a cluster connection and builds every client from it.
-//
-// It returns an error only when no connection can be established at all. Whether
-// any particular API is present or permitted is a question for the source probes.
+// NewClients fails only when no connection can be configured at all.
 func NewClients(cfg config.Config, log zerolog.Logger, userAgent string) (*Clients, error) {
 	base, err := resolveRESTConfig(cfg, log)
 	if err != nil {
 		return nil, err
 	}
 
-	// QPS, Burst and UserAgent have to be set BEFORE any client is built: the
-	// throttle and the user-agent string are baked into the transport at
-	// construction time, so mutating the config afterwards changes nothing.
 	base = rest.CopyConfig(base)
 	base.QPS = cfg.KubeQPS
 	base.Burst = cfg.KubeBurst
 	base.UserAgent = userAgent
-
-	// Every clientset built from a config with a nil RateLimiter constructs its OWN
-	// token bucket from QPS/Burst. Four clientsets at QPS=50 therefore mean 200 QPS
-	// against the API server. Handing them one shared limiter makes the configured
-	// budget the real budget.
+	// Each clientset would otherwise build its own token bucket, multiplying
+	// the configured QPS by the number of clientsets.
 	base.RateLimiter = flowcontrol.NewTokenBucketRateLimiter(cfg.KubeQPS, cfg.KubeBurst)
 
 	kube, err := kubernetes.NewForConfig(rest.CopyConfig(base))
@@ -75,18 +53,11 @@ func NewClients(cfg config.Config, log zerolog.Logger, userAgent string) (*Clien
 	if err != nil {
 		return nil, fmt.Errorf("build dynamic client: %w", err)
 	}
-	mc, err := metricsclient.NewForConfig(rest.CopyConfig(base))
-	if err != nil {
-		return nil, fmt.Errorf("build metrics client: %w", err)
-	}
 	disc, err := discovery.NewDiscoveryClientForConfig(rest.CopyConfig(base))
 	if err != nil {
 		return nil, fmt.Errorf("build discovery client: %w", err)
 	}
 
-	// A deferred mapper backed by a memory cache so the CRD presence check costs
-	// one discovery round trip at boot rather than one per lookup. It caches
-	// negative results too, which is why the check calls Reset first.
 	mapper := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disc))
 
 	log.Info().
@@ -98,20 +69,16 @@ func NewClients(cfg config.Config, log zerolog.Logger, userAgent string) (*Clien
 	return &Clients{
 		Kube:      kube,
 		Dynamic:   dyn,
-		Metrics:   mc,
 		Discovery: disc,
 		Mapper:    mapper,
 		Config:    base,
 	}, nil
 }
 
-// resolveRESTConfig picks a cluster connection: an explicit API URL wins, then
-// in-cluster credentials, then a kubeconfig.
+// resolveRESTConfig: an explicit API URL wins, then in-cluster, then kubeconfig.
 func resolveRESTConfig(cfg config.Config, log zerolog.Logger) (*rest.Config, error) {
 	if cfg.KubeAPIURL != "" {
-		// Deliberately bare: an explicit URL is how you point the dashboard at
-		// `kubectl proxy` or an envtest apiserver, neither of which wants the
-		// ambient credentials. Anything needing auth should use a kubeconfig.
+		// Bare on purpose: this is how you point at `kubectl proxy`.
 		log.Info().Str("host", cfg.KubeAPIURL).Msg("using explicit KUBE_API_URL with no credentials")
 		return &rest.Config{Host: cfg.KubeAPIURL}, nil
 	}
@@ -122,14 +89,9 @@ func resolveRESTConfig(cfg config.Config, log zerolog.Logger) (*rest.Config, err
 		log.Info().Msg("using in-cluster credentials")
 		return inCluster, nil
 	case !errors.Is(err, rest.ErrNotInCluster):
-		// A broken service account is a real failure. Only "we are not running
-		// in a pod" is a reason to fall through to the kubeconfig.
 		return nil, fmt.Errorf("load in-cluster config: %w", err)
 	}
 
-	// NewNonInteractiveDeferredLoadingClientConfig, not BuildConfigFromFlags:
-	// only the former can select a context by name, which is the whole point of
-	// ARC_UI_KUBE_CONTEXT.
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	rules.ExplicitPath = cfg.Kubeconfig
 	overrides := &clientcmd.ConfigOverrides{CurrentContext: cfg.KubeContext}

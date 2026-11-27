@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -75,7 +76,7 @@ func sampleSnapshot() fleet.Snapshot {
 		Sources: []fleet.Source{
 			{Name: fleet.SourceKubernetes, Available: true, CheckedAt: now},
 			{Name: fleet.SourceARCCRDs, Available: true, CheckedAt: now},
-			{Name: fleet.SourceMetrics, Available: false, Reason: "metrics-server not installed", CheckedAt: now},
+			{Name: fleet.SourceCAdvisor, Available: false, Reason: "no container_cpu_usage_seconds_total series", CheckedAt: now},
 		},
 	}
 }
@@ -169,9 +170,7 @@ func TestDegradedSourceIsNamedNotHidden(t *testing.T) {
 
 	html := renderOverview(t)
 
-	// The whole point of the health strip: an empty resource chart must be
-	// explained, not left looking like an idle fleet.
-	assert.Contains(t, html, "metrics-server not installed", "an unavailable source must be named in the health strip")
+	assert.Contains(t, html, "no container_cpu_usage_seconds_total series", "an unavailable source must be named in the health strip")
 }
 
 func TestEmptyHistoryRendersAnExplanation(t *testing.T) {
@@ -179,8 +178,43 @@ func TestEmptyHistoryRendersAnExplanation(t *testing.T) {
 
 	html := renderOverview(t)
 
-	assert.Contains(t, html, "no history yet", "an empty history chart should say why it is empty")
+	assert.Contains(t, html, "no data in this window", "an empty history chart should say why it is empty")
+	assert.NotContains(t, html, "data-unavailable", "an empty answer is not an outage")
 	assert.NotContains(t, html, "<polygon points=\"\"", "an empty chart emitted a degenerate polygon")
+}
+
+type downHistory struct{ NoHistory }
+
+var errDown = errors.New("prometheus: connection refused")
+
+func (downHistory) Scope(context.Context, Scope, Window) (ScopeSeries, error) {
+	return ScopeSeries{}, errDown
+}
+func (downHistory) Throughput(context.Context, Scope, Window) (Counts, error) {
+	return Counts{}, errDown
+}
+func (downHistory) Churn(context.Context, Scope, Window) (Counts, error)      { return Counts{}, errDown }
+func (downHistory) Repos(context.Context, Window, int) ([]RepoHistory, error) { return nil, errDown }
+
+func TestPrometheusOutageRendersUnavailableNotZeros(t *testing.T) {
+	t.Parallel()
+
+	b := testBuilder()
+	b.History = downHistory{}
+	o := b.Overview(context.Background(), Signals{}, now)
+
+	assert.True(t, o.History.Unavailable, "runner history")
+	assert.True(t, o.Util.Unavailable, "utilization")
+	assert.True(t, o.CPU.Unavailable, "cpu")
+	assert.True(t, o.Mem.Unavailable, "memory")
+	assert.True(t, o.Throughput.Unavailable, "throughput")
+	assert.True(t, o.Churn.Unavailable, "churn")
+	assert.True(t, o.ReposUnavailable, "repos")
+
+	html := renderOverviewWith(t, b)
+	assert.Equal(t, 7, strings.Count(html, "data-unavailable"), "every Prometheus panel must say it is unavailable")
+	assert.NotContains(t, html, "no data in this window", "an outage must not read as an empty window")
+	assert.Contains(t, html, "arc-arm64-xyz", "live tables still render from the informer cache")
 }
 
 // A grid rule has to span the width its geometry was computed for. The rules
@@ -353,19 +387,65 @@ func TestQueryOmitsDefaults(t *testing.T) {
 	assert.Empty(t, (Signals{}).Normalize().Query().Encode(), "defaults leaked into the URL")
 }
 
-func TestRunnerDetailUsesAFixedShortWindow(t *testing.T) {
+func TestRunnerDetailWindowFollowsTheRunnerNotThePageRange(t *testing.T) {
 	t.Parallel()
 
-	// The runner charts must ignore the page range: raw per-runner samples are
-	// retained for minutes, so honouring "30d" would render four points at the
-	// far right of an empty chart.
 	var got Window
 	b := testBuilder()
 	b.History = windowSpy{got: &got}
 
 	_, ok := b.Runner(context.Background(), "arc-ubuntu-abc", Signals{Range: "30d"}, now, nil)
 	require.True(t, ok, "runner not found")
-	assert.Equal(t, 4*time.Minute, got.To.Sub(got.From), "want a 4m runner window regardless of the page range")
+	assert.LessOrEqual(t, got.To.Sub(got.From), maxRunnerWindow, "a 30d page range must not reach the runner charts")
+
+	young := runnerWindow(fleet.Runner{CreatedAt: now.Add(-2 * time.Minute)}, now)
+	assert.Equal(t, 15*time.Minute, young.To.Sub(young.From), "a new runner still gets a readable window")
+	assert.Equal(t, "last 15m", runnerWindowLabel(fleet.Runner{CreatedAt: now.Add(-2 * time.Minute)}, young))
+
+	midRunner := fleet.Runner{CreatedAt: now.Add(-40 * time.Minute)}
+	mid := runnerWindow(midRunner, now)
+	assert.Equal(t, 40*time.Minute, mid.To.Sub(mid.From), "the window starts at the runner's creation")
+	assert.Equal(t, "since the pod started", runnerWindowLabel(midRunner, mid))
+
+	oldRunner := fleet.Runner{CreatedAt: now.Add(-72 * time.Hour)}
+	old := runnerWindow(oldRunner, now)
+	assert.Equal(t, maxRunnerWindow, old.To.Sub(old.From))
+	assert.Equal(t, "last 6h", runnerWindowLabel(oldRunner, old))
+
+	assert.Equal(t, []string{"-40m", "-30m", "-20m", "-10m", "now"}, spanTicks(40*time.Minute))
+	assert.Equal(t, []string{"-6h", "-4.5h", "-3h", "-1.5h", "now"}, spanTicks(6*time.Hour))
+}
+
+func TestRunnerLineIgnoresBucketsWithoutSamples(t *testing.T) {
+	t.Parallel()
+
+	nan := math.NaN()
+	c := runnerLine("CPU", []float64{nan, nan, 0.5, 1.5, 0.25, nan}, fleet.Resources{}, nil,
+		strokeCPU, fillCPU, ToneCPU, fleet.FormatCores)
+	require.False(t, c.Empty)
+	assert.Equal(t, fleet.FormatCores(0.25), c.Legend[0].Value, "used is the last sample, not a zero after the pod ended")
+	assert.Equal(t, fleet.FormatCores(1.5), c.Legend[1].Value)
+	assert.NotContains(t, c.Line.Points, "NaN")
+
+	assert.True(t, runnerLine("CPU", []float64{nan, nan}, fleet.Resources{}, nil, strokeCPU, fillCPU, ToneCPU, fleet.FormatCores).Empty)
+}
+
+func TestRunnerFactsCarryTheControllerStatus(t *testing.T) {
+	t.Parallel()
+
+	r := fleet.Runner{
+		State: fleet.StateFailed, FailureReason: "OOMKilled",
+		ControllerStatus: "Failed: Pod has failed to start more than 5 times", PodFailures: 5,
+	}
+	facts := runnerFacts(r, now)
+
+	values := map[string]string{}
+	for _, f := range facts {
+		values[f.Label] = f.Value
+	}
+	assert.Equal(t, "OOMKilled", values["failure"])
+	assert.Equal(t, "Failed: Pod has failed to start more than 5 times", values["arc status"])
+	assert.Equal(t, "5 replaced by ARC", values["failed pods"])
 }
 
 // windowSpy records the window a runner query was made with.
@@ -898,28 +978,20 @@ func TestStoreFooterReportsSizeAndRowCounts(t *testing.T) {
 
 	b := testBuilder()
 	b.History = statsHistory{stats: StoreStats{
-		Enabled:     true,
-		Path:        "/data/arc-ui.db",
-		SizeBytes:   12 * 1024 * 1024,
-		Samples:     1234567,
-		Jobs:        42,
-		ChurnEvents: 99,
-		Failures:    8317,
-		Rows:        1243032,
-		Oldest:      now.Add(-72 * time.Hour),
+		Enabled:   true,
+		Path:      "/data/arc-ui.db",
+		SizeBytes: 12 * 1024 * 1024,
+		Jobs:      1234567,
+		Oldest:    now.Add(-72 * time.Hour),
 	}}
 
 	html := renderOverviewWith(t, b)
 
 	assert.Contains(t, html, `id="store"`, "the footer must be a patchable region")
 	assert.Contains(t, html, "12.0 MiB", "want the size on disk")
-	assert.Contains(t, html, "1,234,567", "want the sample count, separated")
+	assert.Contains(t, html, "1,234,567", "want the job count, separated")
 	assert.Contains(t, html, "/data/arc-ui.db", "want the file the numbers describe")
-	// Every table the retention sweep owns has to be here, or the components
-	// stop adding up to the total the same panel prints and the panel becomes
-	// unreadable as the retention readout it is meant to be. Failures were the
-	// one counted into Rows but missing from the rows on screen.
-	assert.Contains(t, html, "8,317", "want the persisted failure count")
+	assert.Contains(t, html, "oldest job")
 }
 
 // Running without a writable volume is a supported configuration, and the
@@ -1044,7 +1116,7 @@ func TestPartlyAvailableSourceIsReportedAsDegraded(t *testing.T) {
 
 	const reason = "17 of 20 listeners scraped; arc-arm64-listener: connection refused"
 
-	src := fleet.Source{Name: fleet.SourceListener, Available: true, Reason: reason, CheckedAt: now}
+	src := fleet.Source{Name: fleet.SourceARCMetrics, Available: true, Reason: reason, CheckedAt: now}
 	assert.Equal(t, reason, SourceValue(src, "ok"), "a degraded source must show why, not \"ok\"")
 	assert.Equal(t, ToneAttention, SourceTone(src), "a degraded source is neither success nor danger")
 
@@ -1093,7 +1165,7 @@ func (h *stubHistory) Job(context.Context, int) (Job, bool, error) {
 	return h.job, h.jobFound, nil
 }
 
-func (h *stubHistory) JobSeries(_ context.Context, _ int, w Window) (JobSeries, error) {
+func (h *stubHistory) JobSeries(_ context.Context, _ Job, w Window) (JobSeries, error) {
 	h.gotWindow = w
 	return h.series, nil
 }
@@ -1110,15 +1182,14 @@ func builderWith(h History) *Builder {
 	return b
 }
 
-// sampleJob is a finished job with enough cost recorded to exercise the tiles.
+// sampleJob is a finished job with usage recorded; no CPU limit, the usual ARC
+// configuration.
 func sampleJob() Job {
 	return Job{
-		ID: 7, Runner: "arc-ubuntu-2xl-r7k2p", Set: "arc-ubuntu-2xl",
+		ID: 7, JobID: "j-7", Runner: "arc-ubuntu-2xl-r7k2p", Namespace: "arc-runners", Set: "arc-ubuntu-2xl",
 		Repository: "WindKube/platform", Workflow: "ci.yml", Name: "build",
 		RunID: 991, StartedAt: now.Add(-10 * time.Minute), FinishedAt: now.Add(-4 * time.Minute),
-		Succeeded: true, CPUSeconds: 720, MemGiBSecs: 1440,
-		// No CPU limit, which is the usual ARC configuration and the case the
-		// chart has to draw nothing for.
+		CPUSeconds: 720, MemPeakBytes: 4 * fleet.GiB,
 		CPURequest: 4, MemRequest: 8 * fleet.GiB, MemLimit: 8 * fleet.GiB,
 	}
 }
@@ -1152,7 +1223,8 @@ func TestJobsTabRendersRowsAndTotal(t *testing.T) {
 	require.Len(t, v.Rows, 1, "one job")
 	row := v.Rows[0]
 	assert.Equal(t, "/jobs/7", row.Href, "the row links to the job's detail page")
-	assert.Equal(t, "ok", row.Badge)
+	assert.Equal(t, "runner ok", row.Badge, "the badge names the runner outcome, not GitHub's conclusion")
+	assert.Equal(t, "4Gi peak", row.Mem)
 	assert.Equal(t, "6m 0s", row.Duration, "duration runs start to finish")
 	assert.Contains(t, v.Summary, "4,312", "the window's total belongs beside the page")
 	assert.Contains(t, v.Summary, "1 of", "and so does how much of it is shown")
@@ -1242,7 +1314,8 @@ func TestJobWithNoSamplesSaysSoRatherThanDrawingZero(t *testing.T) {
 	assert.True(t, v.Mem.Empty, "and so does memory")
 
 	html := renderComponent(t, v.Page, JobPage(v))
-	assert.Contains(t, html, "no resource samples recorded for this job")
+	assert.Contains(t, html, "cAdvisor has no samples for this runner pod")
+	assert.Contains(t, html, "GitHub run ↗")
 }
 
 func TestJobWithSamplesDrawsThem(t *testing.T) {
@@ -1340,21 +1413,63 @@ func TestMissingJobIsNotFoundNotAnError(t *testing.T) {
 	assert.False(t, ok, "an unrecorded job should report not found")
 }
 
-// The averages are derived from the integrated cost rather than the samples,
-// because cost is a column on the job row and survives the samples being swept.
-func TestJobTilesDeriveAveragesFromCost(t *testing.T) {
+func TestJobTilesDeriveAveragesFromUsage(t *testing.T) {
 	t.Parallel()
 
 	j := sampleJob() // 720 core-seconds over 6 minutes = 2 cores.
-	tiles := jobTiles(j, now)
-
 	byLabel := map[string]Tile{}
-	for _, t := range tiles {
+	for _, t := range jobTiles(j, now) {
 		byLabel[t.Label] = t
 	}
 	assert.Equal(t, "2.0", byLabel["avg cpu"].Value, "720 core-s over 6m is 2 cores")
-	assert.Equal(t, "4Gi", byLabel["avg memory"].Value, "1440 GiB-s over 6m is 4 GiB")
-	assert.Equal(t, "ok", byLabel["outcome"].Value)
+	assert.Equal(t, "4Gi", byLabel["peak memory"].Value)
+	assert.Equal(t, "runner ok", byLabel["runner outcome"].Value)
+
+	running := sampleJob()
+	running.FinishedAt, running.CPUSeconds, running.MemPeakBytes = time.Time{}, 0, 0
+	for _, tile := range jobTiles(running, now) {
+		if tile.Label == "avg cpu" || tile.Label == "peak memory" || tile.Label == "cpu used" {
+			assert.Equal(t, "—", tile.Value, tile.Label)
+			assert.Equal(t, "read when the job ends", tile.Sub, "a running job has samples, just not read yet")
+		}
+	}
+
+	j.RunnerFailed, j.FailureReason = true, "OOMKilled"
+	facts := map[string]string{}
+	for _, kv := range jobFacts(j, now) {
+		facts[kv.Label] = kv.Value
+	}
+	assert.Equal(t, "runner failed", facts["runner outcome"])
+	assert.Equal(t, "OOMKilled", facts["failure"])
+	assert.Equal(t, "j-7", facts["job id"])
+}
+
+func TestJobLinksGoToTheGitHubRunAndGrafanaExplore(t *testing.T) {
+	t.Parallel()
+
+	j := sampleJob()
+	b := testBuilder()
+	links := b.jobLinks(j, j.FinishedAt)
+	require.Len(t, links, 1, "no Grafana link without ARC_UI_GRAFANA_URL")
+	assert.Equal(t, "https://github.com/WindKube/platform/actions/runs/991", links[0].Href)
+
+	b.GitHubURL = "https://ghe.example.com/"
+	b.GrafanaURL, b.GrafanaDatasource = "https://grafana.example.com", "prom-uid"
+	links = b.jobLinks(j, j.FinishedAt)
+	require.Len(t, links, 2)
+	assert.Equal(t, "https://ghe.example.com/WindKube/platform/actions/runs/991", links[0].Href)
+
+	u, err := url.Parse(links[1].Href)
+	require.NoError(t, err)
+	assert.Equal(t, "/explore", u.Path)
+	panes := u.Query().Get("panes")
+	assert.Contains(t, panes, `pod=\"arc-ubuntu-2xl-r7k2p\"`)
+	assert.Contains(t, panes, `namespace=\"arc-runners\"`)
+	assert.Contains(t, panes, `"uid":"prom-uid"`)
+	assert.Contains(t, panes, strconv.FormatInt(j.StartedAt.Add(-time.Minute).UnixMilli(), 10))
+
+	j.RunID = 0
+	assert.Len(t, b.jobLinks(j, j.FinishedAt), 1, "no run id, no GitHub link")
 }
 
 func TestJobFilterSignalsRoundTrip(t *testing.T) {
@@ -1507,8 +1622,8 @@ func TestCostFormattingPromotesToHours(t *testing.T) {
 	assert.Equal(t, "—", CoreSeconds(0), "no cost recorded is not zero cost")
 	assert.Equal(t, "90 core-s", CoreSeconds(90))
 	assert.Equal(t, "2.0 core-h", CoreSeconds(7200))
-	assert.Equal(t, "—", GiBSeconds(0))
-	assert.Equal(t, "1.5 GiB-h", GiBSeconds(5400))
+	assert.Equal(t, "—", PeakBytes(0))
+	assert.Equal(t, "3Gi peak", PeakBytes(3*fleet.GiB))
 }
 
 func TestRunLabelSpellsOutAMissingRunID(t *testing.T) {

@@ -1,19 +1,7 @@
 {{- include "arc-ui.validate" . }}
-# A Deployment, not a StatefulSet, even though this pod owns a disk.
-#
-# A StatefulSet would carry the PVC in volumeClaimTemplates, and that has three
-# problems here: the templates are immutable, so growing the disk means deleting
-# and recreating the StatefulSet; the generated PVCs are invisible to Helm, so
-# `helm uninstall` silently leaves them behind; and the stable network identity a
-# StatefulSet exists to provide is worth nothing to a single replica behind a
-# ClusterIP Service.
-#
-# The price is that a Deployment defaults to RollingUpdate, which DEADLOCKS on a
-# ReadWriteOnce volume: the new pod cannot attach the volume while the old pod
-# holds it, and the old pod is not removed until the new one is Ready. The rollout
-# sits in ContainerCreating with "Multi-Attach error" until someone deletes the
-# old pod by hand. `strategy: Recreate` below is what avoids it, and is why
-# replicaCount is validated to be exactly 1.
+# A Deployment with a Helm-owned PVC rather than a StatefulSet, so the volume
+# can grow and uninstall can reason about it. Recreate, because RollingUpdate
+# deadlocks on a ReadWriteOnce volume.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,9 +38,6 @@ spec:
       {{- end }}
       serviceAccountName: {{ include "arc-ui.serviceAccountName" . }}
       automountServiceAccountToken: true
-      # See the arithmetic in the "arc-ui.validate" helper: this must outlast
-      # preStopDelay + drain + store close, or the kubelet SIGKILLs the process
-      # in the middle of a SQLite checkpoint.
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
@@ -75,24 +60,26 @@ spec:
               containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
           env:
-            # The listen address has to agree with containerPort, so it is derived
-            # rather than exposed as yet another knob to get out of sync.
             - name: ARC_UI_HTTP_ADDR
               value: "0.0.0.0:{{ .Values.service.targetPort }}"
-            # Single source of truth for the shutdown arithmetic: these two are
-            # rendered from gracePeriod.*, which terminationGracePeriodSeconds is
-            # validated against.
             - name: ARC_UI_PRESTOP_DELAY
               value: "{{ .Values.gracePeriod.preStopDelaySeconds }}s"
             - name: ARC_UI_SHUTDOWN_TIMEOUT
               value: "{{ .Values.gracePeriod.shutdownTimeoutSeconds }}s"
-            {{- /*
-            An entry set to null is dropped so the binary's own default applies.
-            An entry set to "" is EMITTED as an empty value, which is not the same
-            thing: ARC_UI_NAMESPACES="" is the documented way to say "every
-            namespace", and caarlos0/env only falls back to envDefault when the
-            variable is absent, not when it is present and empty.
-            */}}
+            - name: ARC_UI_PROMETHEUS_URL
+              value: {{ include "arc-ui.prometheusURL" . | quote }}
+            {{- with .Values.prometheus.headers }}
+            - name: ARC_UI_PROMETHEUS_HEADERS
+              value: {{ include "arc-ui.headers" . | quote }}
+            {{- end }}
+            - name: ARC_UI_PROMETHEUS_TIMEOUT
+              value: {{ .Values.prometheus.timeout | quote }}
+            - name: ARC_UI_PROMETHEUS_INSECURE_SKIP_VERIFY
+              value: {{ .Values.prometheus.insecureSkipVerify | quote }}
+            - name: ARC_UI_PROMETHEUS_SCALE_SET_LABEL
+              value: {{ .Values.prometheus.scaleSetLabel | quote }}
+            - name: ARC_UI_PROMETHEUS_KSM_SCALE_SET_LABEL
+              value: {{ .Values.prometheus.ksmScaleSetLabel | quote }}
             {{- range $name, $value := .Values.env }}
             {{- if not (kindIs "invalid" $value) }}
             - name: {{ $name }}
@@ -106,15 +93,8 @@ spec:
           envFrom:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          # /livez is process-local: it answers as long as the HTTP server is
-          # alive, and knows nothing about the cluster connection.
-          #
-          # NEVER point liveness at /readyz. Readiness folds in the Kubernetes
-          # informers and the API server reachability, so an apiserver blip or a
-          # rolled RBAC would restart this pod — throwing away every warm informer
-          # cache and forcing a full re-LIST of every runner the moment the API
-          # server is already struggling. That makes recovery strictly slower and
-          # can turn one blip into a CrashLoopBackOff.
+          # Liveness stays on /livez: /readyz folds in the API server, and a
+          # restart on an apiserver blip forces a full re-LIST at the worst time.
           startupProbe:
             httpGet:
               path: /livez
@@ -122,8 +102,6 @@ spec:
             initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.startup.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
-            # failureThreshold * periodSeconds is the whole budget for opening the
-            # SQLite file and migrating it; a large history file is not instant.
             failureThreshold: {{ .Values.probes.startup.failureThreshold }}
           livenessProbe:
             httpGet:
@@ -132,9 +110,6 @@ spec:
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
             failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
-          # /readyz reports informer sync and store reachability, so traffic is
-          # held back until the dashboard would render real data instead of an
-          # empty fleet.
           readinessProbe:
             httpGet:
               path: /readyz
@@ -147,11 +122,7 @@ spec:
           volumeMounts:
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
-            # readOnlyRootFilesystem leaves SQLite with nowhere to put its
-            # temporary files (sorter spills, and the journal fallback when a
-            # rollback cannot be done in memory). Without a writable /tmp the
-            # first non-trivial query fails with SQLITE_CANTOPEN and the history
-            # panels break in a way that looks like data loss.
+            # SQLite needs a writable /tmp under readOnlyRootFilesystem.
             - name: tmp
               mountPath: /tmp
             {{- with .Values.extraVolumeMounts }}
@@ -163,8 +134,6 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "arc-ui.pvcName" . }}
           {{- else }}
-          # No PVC: history lives only as long as the pod. The dashboard still
-          # works — every chart just starts empty after a restart.
           emptyDir: {}
           {{- end }}
         - name: tmp

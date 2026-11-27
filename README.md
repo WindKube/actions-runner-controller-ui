@@ -3,15 +3,15 @@
 # Actions Runner Controller UI
 
 **A read-only dashboard for [GitHub Actions Runner Controller][arc] — what every
-runner in the fleet is doing right now, what it cost, and what happened an hour
+runner in the fleet is doing right now, what it used, and what happened an hour
 ago.**
 
-[![CI](https://github.com/WindKube/actions-runners-controller-ui/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WindKube/actions-runners-controller-ui/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/WindKube/actions-runners-controller-ui?sort=semver&color=3fb950)](https://github.com/WindKube/actions-runners-controller-ui/releases/latest)
-[![Container image](https://img.shields.io/badge/ghcr.io-actions--runner--controller--ui-2496ed?logo=docker&logoColor=white)](https://github.com/WindKube/actions-runners-controller-ui/pkgs/container/actions-runner-controller-ui)
-[![Go](https://img.shields.io/github/go-mod/go-version/WindKube/actions-runners-controller-ui?logo=go&logoColor=white)](go.mod)
+[![CI](https://github.com/WindKube/actions-runner-controller-ui/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WindKube/actions-runner-controller-ui/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/WindKube/actions-runner-controller-ui?sort=semver&color=3fb950)](https://github.com/WindKube/actions-runner-controller-ui/releases/latest)
+[![Container image](https://img.shields.io/badge/ghcr.io-actions--runner--controller--ui-2496ed?logo=docker&logoColor=white)](https://github.com/WindKube/actions-runner-controller-ui/pkgs/container/actions-runner-controller-ui)
+[![Go](https://img.shields.io/github/go-mod/go-version/WindKube/actions-runner-controller-ui?logo=go&logoColor=white)](go.mod)
 [![Cluster access](https://img.shields.io/badge/cluster%20access-read--only-8957e5)](#rbac)
-[![License](https://img.shields.io/github/license/WindKube/actions-runners-controller-ui?color=blue)](LICENSE)
+[![License](https://img.shields.io/github/license/WindKube/actions-runner-controller-ui?color=blue)](LICENSE)
 
 </div>
 
@@ -22,6 +22,7 @@ ago.**
 - [Why](#why)
 - [Screenshots](#screenshots)
 - [Workflows and Jobs](#workflows-and-jobs)
+- [Alerts](#alerts)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
@@ -45,7 +46,7 @@ shipped ClusterRole holds `get`, `list` and `watch` and nothing else — see
 [RBAC](#rbac) for what is deliberately withheld and why.
 
 **Every data source is optional.** The dashboard boots and serves with
-metrics-server absent, with the ARC CRDs not installed, and with RBAC missing.
+Prometheus unreachable, with the ARC CRDs not installed, and with RBAC missing.
 Each failure is reported as a named unavailable source in the footer, never as a
 page of confident zeros — a dashboard that renders 0% CPU because it cannot read
 metrics is worse than one that says so.
@@ -62,17 +63,18 @@ off it simply does not leave a connection behind.
 
 ## Screenshots
 
-Six views, each answering a different question. Three are about the fleet right
-now; three are about what it already did.
+Seven views, each answering a different question. Three are about the fleet
+right now, three are about what it already did, and one says what needs a look.
 
 | View | Answers |
 | --- | --- |
 | **Fleet overview** | how many runners are busy / idle / pending / failed, per scale set, against each set's ceiling — and how much work is still queued |
-| **RunnerSet detail** | one scale set over time: capacity, churn, job starts, the listener's queue |
-| **Runner detail** | one ephemeral runner: phase history, CPU and memory against requests and limits, the events that explain a stuck pod |
-| **Workflows** | which workflow runs went through the fleet, what they cost, and which of them failed |
+| **RunnerSet detail** | one scale set over time: capacity, jobs started vs finished, the listener's queue |
+| **Runner detail** | one ephemeral runner: CPU and memory since its pod started against requests and limits, the events that explain a stuck pod |
+| **Workflows** | which workflow runs went through the fleet, their duration, CPU and memory, and which of their runners failed |
 | **Jobs** | every job the dashboard watched, filterable by repository, searchable by name |
-| **Job detail** | one job's own CPU and memory over its lifetime against what its runner reserved, and what it cost |
+| **Job detail** | one job's own CPU and memory over its lifetime against what its runner reserved |
+| **Alerts** | what is firing, which rules are unavailable because their source is down, and what resolved |
 
 The fleet overview is the screenshot at the top of this page.
 
@@ -90,6 +92,34 @@ The fleet overview is the screenshot at the top of this page.
 
 </details>
 
+<details>
+<summary><b>Workflows</b> — runs that went through the fleet</summary>
+
+![Workflows](docs/screenshots/workflows.png)
+
+</details>
+
+<details>
+<summary><b>Jobs</b> — every observed job, with its runner outcome</summary>
+
+![Jobs](docs/screenshots/jobs.png)
+
+</details>
+
+<details>
+<summary><b>Job detail</b> — one job's usage against its runner's requests</summary>
+
+![Job detail](docs/screenshots/job.png)
+
+</details>
+
+<details>
+<summary><b>Alerts</b> — firing, rules, recently resolved</summary>
+
+![Alerts](docs/screenshots/alerts.png)
+
+</details>
+
 These are generated from fixture data, not a live cluster, so they are
 reproducible — see [Regenerating the screenshots](#regenerating-the-screenshots).
 
@@ -104,51 +134,47 @@ A **Workflows** row is one workflow run — `(repository, workflow file, run id)
 — aggregated from the jobs observed for it. A run with any failed job is a
 failed run. Clicking one opens **Jobs** narrowed to that run.
 
-A **Jobs** row is one job. Clicking one opens its detail view: what it cost in
-core-seconds and GiB-seconds, the averages those imply over its duration, and
-its CPU and memory as a chart, drawn against the requests and limits its runner
-pod held.
+A **Jobs** row is one job. Clicking one opens its detail view: the runner pod's
+CPU and memory from cAdvisor over the job's lifetime, drawn against the requests
+and limits it held, plus links to the GitHub run and (with `ARC_UI_GRAFANA_URL`)
+Grafana Explore.
 
-### What the job chart is, and what it is not
+### What a job row is, and what it is not
 
-Everything here is inferred from the runner that carried the job. The dashboard
-never talks to the GitHub API, so a job is only as visible as the pod that ran
-it.
+The store holds one row per job, written by watching EphemeralRunners: job id,
+workflow run id, repository, workflow ref, display name, runner, set, start, end
+and **runner outcome**. The dashboard never talks to the GitHub API, so the
+outcome is the runner's ("runner ok" / "runner failed"), not the job's
+conclusion: a failing test on a healthy runner is "runner ok". Throughput charts
+use `job_result` from the ARC listener metrics instead.
 
-Per-job usage is sampled into its own table while a runner holds a job, at
-`ARC_UI_JOB_SAMPLE_RESOLUTION` (default one minute) and kept for
-`ARC_UI_RETENTION_JOB_SAMPLES` (default 30 days, matching the job rows). That
-has three consequences worth knowing before reading a chart:
+A job's CPU core-seconds and peak memory are read from cAdvisor once, when the
+job closes. Rows left open across a restart are closed at the time they were
+last seen. Rows are kept for `ARC_UI_JOB_RETENTION` (30 days); at a few hundred
+bytes a row the file stays small even for busy fleets.
 
-- **A job shorter than one bucket is a single reading.** It is drawn as one
-  point, and the panel says how many samples it has.
-- **Peak usage is not recoverable.** Each row is already an average over its
-  bucket. The tiles report averages derived from integrated cost, which is the
-  figure that survives.
-- **Jobs recorded before this was switched on have no chart**, and say so.
-  "No resource samples recorded for this job" is a different statement from a
-  job that used nothing, and the panel never renders the second when it means
-  the first.
+## Alerts
 
-The dashed request and limit lines are what the runner pod held, copied onto the
-job row while it ran — the pod is long gone by the time you open the chart, so
-they are stored rather than looked up. A reservation the dashboard never managed
-to read is not drawn at all: no line is honest where a line at zero would not be,
-and no CPU limit is the usual ARC configuration.
+The dashboard evaluates a few rules every refresh and shows what fires as a
+toast and on the **alerts** tab:
 
-### What it costs on disk
-
-This is the one table whose size follows how *busy* the fleet is rather than how
-big it is — roughly `(busy runners × job minutes) ÷ resolution`, at about 70
-bytes a row:
-
-| concurrently busy runners | rows over 30 days | on disk |
+| Rule | Source | Fires when |
 | --- | --- | --- |
-| 100 | ~4.3M | ~300 MB |
-| 500 | ~21M | ~1.5 GB |
+| jobs queued at max runners | listener queue depth, ARC CRDs | a set has queued jobs while at `maxRunners` for `ARC_UI_ALERT_QUEUED_AT_MAX_FOR` |
+| listener down | AutoscalingListener and its pod | a set's listener is not running for `ARC_UI_ALERT_LISTENER_DOWN_FOR` |
+| runners OOMKilled | live runners and the job store | any runner was OOMKilled in `ARC_UI_ALERT_OOM_WINDOW` |
+| failed runners rising | `gha_controller_failed_ephemeral_runners` | a set's failed runners grew by `ARC_UI_ALERT_FAILED_RUNNERS_RISE` in the window |
+| slow job startup | `gha_job_startup_duration_seconds` | a set's p95 startup is above `ARC_UI_ALERT_STARTUP_P95` |
 
-Both knobs turn it down, and the store footer at the foot of the overview
-reports the real number for your fleet rather than this estimate.
+A rule whose source is down shows as **unavailable** and holds its alerts as
+they were; an outage is never reported as a recovery. State is in memory, so a
+restart forgets pending holds and the resolved list. These are not pages: for
+paging, write alerting rules in your own Prometheus.
+
+`/metrics` exposes the app itself: `arc_ui_prometheus_query_duration_seconds`,
+`arc_ui_prometheus_query_errors_total`, `arc_ui_sse_clients`,
+`arc_ui_alerts_firing` and `arc_ui_alert_rule_unavailable`, plus Go and process
+metrics.
 
 ## Requirements
 
@@ -156,15 +182,23 @@ reports the real number for your fleet rather than this estimate.
   `actions.github.com` scale-set CRDs, not the legacy `actions.summerwind.net`
   ones).
 - Read access to the runner namespaces and to the controller namespace.
-- Optional: `metrics-server`, for CPU and memory. Optional: ARC's listener
-  metrics, for queue depth ([how to turn them on](#queue-depth)). Both absent is
-  a supported configuration.
+- A Prometheus-compatible query API holding ARC's metrics, the kubelet's
+  cAdvisor series and kube-state-metrics; see
+  [what it needs to hold](#what-prometheus-needs-to-hold). A missing group shows
+  as unavailable, not as zeros.
 
 ## Quick start
 
 ```bash
+# Once per checkout: fetch the subcharts pinned in chart/Chart.lock. helm
+# refuses to install without them, even with both disabled.
+helm repo add vm https://victoriametrics.github.io/helm-charts
+helm repo add grafana https://grafana.github.io/helm-charts
+helm dependency build chart/        # or: task helm:deps
+
 helm install arc-ui ./chart \
   --namespace arc-systems --create-namespace \
+  --set prometheus.url=http://prometheus-operated.monitoring:9090 \
   --set env.ARC_UI_NAMESPACES=arc-runners \
   --set env.ARC_UI_CONTROLLER_NAMESPACE=arc-systems
 
@@ -195,17 +229,28 @@ authority; this table is it in prose.
 | `ARC_UI_LOG_FORMAT` | `json` | `json` or `console`; anything else refuses to start |
 | `ARC_UI_NAMESPACES` | `arc-runners` | comma-separated namespaces holding the AutoscalingRunnerSets and runner pods. **Empty means every namespace** (needs cluster-wide RBAC) |
 | `ARC_UI_CONTROLLER_NAMESPACE` | `arc-systems` | where the ARC controller and the AutoscalingListener pods live. Not the runner namespace |
-| `ARC_UI_SCRAPE_INTERVAL` | `15s` | pod/node metrics poll period. Below 15s re-fetches identical data (metrics-server's own resolution) and only burns API quota; below 1s is rejected |
-| `ARC_UI_LISTENER_METRICS_URL` | — | scrape **one** endpoint instead of discovering the listeners — for something that aggregates them, such as a Prometheus `/federate` URL. See [Queue depth](#queue-depth) |
-| `ARC_UI_LISTENER_METRICS_PATH` | `/metrics` | the path discovered listeners serve metrics on; mirrors the controller chart's `metrics.listenerEndpoint` |
+| `ARC_UI_PROMETHEUS_URL` | — | **required**. Prometheus-compatible query API base URL; every chart, usage figure and queue depth is a query against it |
+| `ARC_UI_PROMETHEUS_BEARER_TOKEN` / `_BEARER_TOKEN_FILE` | — | bearer auth; the file is re-read on every request so a rotated token is picked up |
+| `ARC_UI_PROMETHEUS_USERNAME` / `_PASSWORD` | — | basic auth |
+| `ARC_UI_PROMETHEUS_HEADERS` | — | extra headers, `k=v,k2=v2` (e.g. `X-Scope-OrgID=tenant`) |
+| `ARC_UI_PROMETHEUS_CA_FILE` / `_INSECURE_SKIP_VERIFY` | — | TLS trust |
+| `ARC_UI_PROMETHEUS_TIMEOUT` | `10s` | per-query timeout |
+| `ARC_UI_PROMETHEUS_SCALE_SET_LABEL` | `name` | the label holding the scale set name on `gha_*` listener series; the listener exports it as `name` |
+| `ARC_UI_PROMETHEUS_KSM_SCALE_SET_LABEL` | `label_actions_github_com_scale_set_name` | the same label on `kube_pod_labels` (needs the kube-state-metrics label allowlist) |
+| `ARC_UI_PROMETHEUS_PROBE_INTERVAL` | `1m` | how often the expected series are re-checked for the health strip |
+| `ARC_UI_REFRESH_INTERVAL` | `15s` | live readings refresh and query cache lifetime |
 | `ARC_UI_DB_PATH` | `/data/arc-ui.db` | SQLite history file |
-| `ARC_UI_RETENTION_RUNNER_RAW` | `15m` | raw per-runner samples — only the runner detail view reads them |
-| `ARC_UI_RETENTION_SCOPE_RAW` | `6h` | raw per-scale-set samples |
-| `ARC_UI_RETENTION_SCOPE_1M` | `168h` | 1-minute rollups (7 days) |
-| `ARC_UI_RETENTION_SCOPE_5M` | `720h` | 5-minute rollups (30 days) |
-| `ARC_UI_RETENTION_SCOPE_1H` | `9600h` | 1-hour rollups (~13 months) |
-| `ARC_UI_RETENTION_JOB_SAMPLES` | `720h` | per-job CPU and memory, behind the [Jobs tab](#workflows-and-jobs)'s usage chart. Defaults to the job rows' own window so a listed job always has a chart |
-| `ARC_UI_JOB_SAMPLE_RESOLUTION` | `1m` | bucket width per-job usage is averaged into. This is the knob that decides what per-job history costs on disk — see [Workflows and Jobs](#workflows-and-jobs) |
+| `ARC_UI_JOB_RETENTION` | `720h` | how long finished job rows are kept (30 days). The store holds only job identity and runner outcome; every time series is in Prometheus |
+| `ARC_UI_GITHUB_URL` | `https://github.com` | base for the job page's GitHub run link (set it for GHES) |
+| `ARC_UI_GRAFANA_URL` | — | Grafana base URL; when set, job pages link to Explore on the runner pod's cAdvisor series |
+| `ARC_UI_GRAFANA_DATASOURCE` | — | Prometheus datasource UID for that link; empty uses Grafana's default |
+| `ARC_UI_ALERT_QUEUED_AT_MAX_FOR` | `15m` | how long a set must have queued jobs at its max runners before the alert fires |
+| `ARC_UI_ALERT_LISTENER_DOWN_FOR` | `2m` | how long a listener must be down before the alert fires |
+| `ARC_UI_ALERT_OOM_WINDOW` | `1h` | an OOMKilled runner in this window fires the alert |
+| `ARC_UI_ALERT_FAILED_RUNNERS_RISE` | `3` | fire when a set's failed EphemeralRunners grow by at least this many… |
+| `ARC_UI_ALERT_FAILED_RUNNERS_WINDOW` | `15m` | …within this window |
+| `ARC_UI_ALERT_STARTUP_P95` | `2m` | fire when a set's p95 job startup is above this… |
+| `ARC_UI_ALERT_STARTUP_WINDOW` | `30m` | …over this window |
 | `ARC_UI_GITHUB_ORG` | — | breadcrumb label. Empty derives it from the AutoscalingRunnerSet's `githubConfigUrl` |
 | `ARC_UI_KUBECONFIG` | — | kubeconfig path. Unset means in-cluster if possible, else the default lookup |
 | `ARC_UI_KUBE_CONTEXT` | — | context to select from that kubeconfig |
@@ -216,18 +261,23 @@ authority; this table is it in prose.
 | `ARC_UI_SENTRY_DSN` | — | Sentry off when empty |
 | `ARC_UI_SENTRY_ENVIRONMENT` | `production` | |
 | `ARC_UI_SENTRY_SAMPLE_RATE` | `1.0` | |
-| `KUBE_API_URL` | — | override the API server address. **Unprefixed on purpose**: it names shared infrastructure, not this app's own setting. `metrics.k8s.io` is an aggregated API served *through* the API server, so this one URL covers custom resources, pods, events and metrics alike |
-| `METRICS_SERVER_URL` | — | deprecated alias for `KUBE_API_URL`, folded in with a warning. It was always a misunderstanding: nothing talks to metrics-server directly |
+| `KUBE_API_URL` | — | override the API server address. **Unprefixed on purpose**: it names shared infrastructure, not this app's own setting |
 
-## Queue depth
+## What Prometheus needs to hold
 
-Queue depth — jobs GitHub has assigned to a scale set that have no runner yet —
-is the one number the cluster cannot tell you. It exists only on GitHub's side of
-the listener's connection, so it comes from the ARC listeners' Prometheus
-endpoints, and **ARC ships those disabled**. Everything else on the dashboard
-works without them.
+Every series is read from `ARC_UI_PROMETHEUS_URL`. Four groups of it, each
+reported separately in the footer:
 
-To turn them on, uncomment the `metrics:` block in the
+| Source | Series | Needed for |
+| --- | --- | --- |
+| ARC listeners | `gha_assigned_jobs`, `gha_running_jobs`, `gha_*_jobs_total`, `gha_job_*_duration_seconds` | queue depth, throughput, churn, runner time by repository, startup alert |
+| ARC controller | `gha_controller_*_ephemeral_runners` | pending runners, failed-runners alert |
+| cAdvisor (kubelet) | `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes` | CPU and memory of runner pods and jobs |
+| kube-state-metrics | `kube_pod_labels`, `kube_pod_container_resource_requests` | attributing usage and requests to a scale set |
+
+### ARC metrics
+
+ARC ships its metrics off. Uncomment the `metrics:` block in the
 `gha-runner-scale-set-controller` chart values:
 
 ```yaml
@@ -255,51 +305,47 @@ kubectl -n arc-systems get pods \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].ports}{"\n"}{end}'
 ```
 
-Nothing else is needed: **the dashboard discovers the listeners itself**. It finds
-the AutoscalingListener pods in `ARC_UI_CONTROLLER_NAMESPACE`, reads each pod's IP
-and its port named `metrics`, and scrapes all of them, merging the answers per
-scale set. That matters because ARC runs **one listener per scale set** and each
-serves only its own series — so a fleet of twenty scale sets has twenty endpoints,
-and no single URL covers it.
+Then scrape the controller and every listener on that port. With the
+Prometheus Operator, `podMonitors.arc.enabled=true` in this chart renders the two
+PodMonitors. ARC runs one listener per scale set, so scrape the pods, not a
+Service in front of them.
 
-Which is also why `ARC_UI_LISTENER_METRICS_URL` is not the way to do this. It
-scrapes exactly one endpoint, and:
+### kube-state-metrics label allowlist
 
-- pointed at one listener, you get queue depth for that one scale set;
-- pointed at a Service in front of all of them, you get **one** of them — a
-  Service load-balances per connection and the scraper's keep-alive pins it to
-  whichever pod answered first, then silently jumps to another when the
-  connection is recycled.
-
-Set it only when something genuinely aggregates the listeners while preserving
-their `name` and `namespace` labels — a Prometheus federation endpoint, for
-instance, in which case scrape the listeners with a PodMonitor using
-`honorLabels: true` and point the dashboard at:
+kube-state-metrics drops pod labels unless they are allowlisted, and without
+`actions.github.com/scale-set-name` on `kube_pod_labels` the dashboard cannot
+tell which scale set a runner pod's usage belongs to:
 
 ```text
-http://prometheus-operated.monitoring.svc:9090/federate?match%5B%5D=%7B__name__%3D~%22gha_.%2A%22%7D
+--metric-labels-allowlist=pods=[actions.github.com/scale-set-name]
 ```
 
-Partial answers are published rather than discarded: if three of twenty listeners
-are unreachable, the other seventeen sets keep their queue depth, the three show
-no depth rather than zero, and the health strip names the listeners that failed.
-A NetworkPolicy in the controller namespace, or a service mesh requiring mTLS, is
-the usual reason for that.
+In kube-prometheus-stack that is:
 
-How large a listener's response is does not matter. Most of it is series the
-dashboard never reads — `gha_job_execution_duration_seconds` and
-`gha_job_startup_duration_seconds` carry a bucket per repository, workflow, job
-name and result, and the Go runtime families come along for free — so the
-exposition is filtered as it streams and only the ten gauge and counter families
-behind queue depth are held in memory. What is bounded is that kept subset, not
-the response, which is why a busy listener serving tens of megabytes is scraped
-like any other.
+```yaml
+kube-state-metrics:
+  metricLabelsAllowlist:
+    - pods=[actions.github.com/scale-set-name]
+```
+
+### No Prometheus
+
+The chart can bring its own: `victoria-metrics-single.enabled=true` installs a
+VictoriaMetrics store (30d, 16Gi) that scrapes ARC, cAdvisor and
+kube-state-metrics and is wired in as `ARC_UI_PROMETHEUS_URL`.
+`collector.enabled=true` adds an Alloy collector that remote-writes into it, or
+into any store named by `collection.remoteWrite.url`. Both are off by default,
+and kube-state-metrics with the allowlist above still has to exist. Details in
+[`chart/README.md`](chart/README.md#no-prometheus-the-bundled-store-and-collector).
 
 ## Kubernetes
+
+After the one-time `helm dependency build chart/` from the [Quick start](#quick-start):
 
 ```bash
 helm install arc-ui ./chart \
   --namespace arc-systems --create-namespace \
+  --set prometheus.url=http://prometheus-operated.monitoring:9090 \
   --set env.ARC_UI_NAMESPACES=arc-runners \
   --set env.ARC_UI_CONTROLLER_NAMESPACE=arc-systems
 ```
@@ -330,31 +376,18 @@ The ClusterRole is `get`/`list`/`watch` on:
 
 | API group | Resources |
 | --- | --- |
-| `actions.github.com` | `autoscalingrunnersets`, `ephemeralrunnersets`, `ephemeralrunners`, `autoscalinglisteners` (+ each `/status`) |
-| `""` (core) | `pods`, `events`, `nodes` |
-| `apps` | `deployments` (to report the controller version) |
-| `metrics.k8s.io` | `pods`, `nodes` |
+| `actions.github.com` | `autoscalingrunnersets`, `ephemeralrunnersets`, `ephemeralrunners`, `autoscalinglisteners` |
+| `""` (core) | `pods`, `events` |
 
 Withheld on purpose: `secrets` (ARC keeps the GitHub App credentials there),
 `pods/exec` and `pods/attach` (RCE inside a runner), `pods/log` (job logs contain
-masked-but-recoverable values), and every write verb.
+masked-but-recoverable values), every write verb, and nodes and `metrics.k8s.io`,
+since usage comes from Prometheus. The bundled scraper, when enabled, gets its own
+ClusterRole with `nodes/metrics` for cAdvisor, never `nodes/proxy`.
 
-Two failure modes account for nearly every "the dashboard is broken" report:
-
-1. **RBAC covers the runner namespace but not the controller namespace.** The
-   AutoscalingListener pods live in the controller namespace and carry queue depth
-   and listener health. The fleet renders perfectly; the listener panel is blank
-   forever.
-2. **The `metrics.k8s.io` resources are spelled `podmetrics`/`nodemetrics`.** They
-   are named **`pods` and `nodes`** in that API group — the Go kinds are
-   `PodMetrics`/`NodeMetrics`, which is where the wrong guess comes from. The
-   apiserver accepts the wrong name silently, it matches nothing, and every scrape
-   403s in a way that is indistinguishable from metrics-server being uninstalled.
-
-   ```bash
-   kubectl auth can-i list pods.metrics.k8s.io \
-     --as=system:serviceaccount:arc-systems:arc-ui
-   ```
+The usual misconfiguration is RBAC that covers the runner namespace but not the
+controller namespace, where the AutoscalingListeners live: the fleet renders and
+every listener shows as unknown.
 
 ## Docker
 
@@ -415,9 +448,9 @@ task check                    # vet + lint + tests
 
 ### Regenerating the screenshots
 
-The six views render from fixture data — a fleet under real load, with a
+The seven views render from fixture data — a fleet under real load, with a
 saturated set, an unbounded set, partial metrics coverage, a couple of failed
-runners, and a window of job history — so the output is reproducible and needs
+runners, a window of job history and one firing alert — so the output is reproducible and needs
 no cluster.
 
 ```bash
@@ -441,8 +474,8 @@ differ slightly.
 ## How it is built
 
 - Go 1.26, cobra (CLI), zerolog (logs), caarlos0/env (config), sentry-go
-- `k8s.io/client-go` informers over the ARC CRDs, pods, events and nodes;
-  `k8s.io/metrics` for `metrics.k8s.io`
+- `k8s.io/client-go` informers over the ARC CRDs and pods, events on demand
+- PromQL over the Prometheus HTTP API for every time series and usage figure
 - Hand-vendored ARC CRD types in `internal/arcapi/v1alpha1` — ARC does not publish
   an importable Go API module
 - gin (HTTP), [a-h/templ][templ] (server-rendered HTML), [Datastar][datastar] (SSE
@@ -481,10 +514,21 @@ docs/screenshots/    generated previews, HTML and PNG
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | PR, push to `main` | golangci-lint, `go test -race` with a coverage floor, and a container build per architecture that smoke-tests the resulting image |
+| `ci.yml` | PR, push to `main` | golangci-lint, `go test -race` with a coverage floor, arc-compat (the vendored types against the pinned ARC release's CRDs), `helm dependency build` + lint + unittest, a kind e2e run, and a container build per architecture that smoke-tests the resulting image |
 | `release-drafter.yml` | push to `main` | keeps a draft release up to date from merged PR titles |
 | `release-image.yml` | release published, or manual dispatch with a tag | builds and pushes the multi-arch image to GHCR, signs it with cosign and attests its provenance |
 | `zizmor.yml` | changes under `.github/`, weekly | audits the workflows themselves for supply-chain issues |
+
+The **kind e2e** job ([`test/e2e/run.sh`](test/e2e/run.sh), `task e2e` locally)
+installs the pinned ARC release and the chart with the bundled VictoriaMetrics
+store into kind, then checks that every page serves, that the app's
+ServiceAccount cannot write or read secrets, and that the store actually scrapes
+cAdvisor through `nodes/metrics` (and is denied `nodes/proxy`).
+
+**Dependency updates** come from [Renovate](.github/renovate.json5): Go modules,
+SHA-pinned actions, Dockerfile base images, the chart's subcharts and the ARC pin
+in `internal/arcapi/v1alpha1/arc-version`. Every update waits seven days after
+release; vulnerability fixes don't. Dependabot is kept for security alerts only.
 
 `release-image.yml` refuses any tag that is not `vMAJOR.MINOR.PATCH[-prerelease]`,
 builds `linux/amd64` and `linux/arm64` on native runners, pushes them by digest

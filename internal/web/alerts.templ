@@ -1,0 +1,103 @@
+package web
+
+// AlertsPage is the persistent list behind the toasts: what is firing, what
+// resolved recently, and whether each rule could be evaluated at all.
+templ AlertsPage(v AlertsView) {
+	<div class="mt-3 grid gap-3">
+		@AlertsFiring(v)
+		@AlertRules(v)
+		@AlertsResolved(v)
+	</div>
+}
+
+templ AlertsFiring(v AlertsView) {
+	@Card("alerts-firing", "firing", v.Evaluated) {
+		if !v.Enabled {
+			@Empty("alerting is not configured")
+		} else if len(v.Firing) == 0 {
+			@Empty("nothing firing")
+		} else {
+			@AlertTable(v.Firing)
+		}
+	}
+}
+
+templ AlertsResolved(v AlertsView) {
+	@Card("alerts-resolved", "recently resolved", "last 24h, since restart") {
+		if len(v.Resolved) == 0 {
+			@Empty("nothing resolved")
+		} else {
+			@AlertTable(v.Resolved)
+		}
+	}
+}
+
+templ AlertTable(rows []AlertRow) {
+	<div class="overflow-x-auto -mx-3.5 -my-3.5">
+		<table class="w-full min-w-[720px] text-[12px] border-collapse">
+			<thead>
+				<tr class="border-b border-default">
+					@ColHead("alert", "left")
+					@ColHead("runner set", "left")
+					@ColHead("detail", "left")
+					@ColHead("", "right")
+				</tr>
+			</thead>
+			<tbody>
+				for _, r := range rows {
+					<tr class="border-b border-muted last:border-0 hover:bg-inset/60">
+						<td class="px-3.5 py-2.5">
+							<span class="inline-flex items-center gap-2">
+								@Dot(r.Tone)
+								<span class="text-fg">{ r.Alert.Title }</span>
+							</span>
+						</td>
+						<td class="px-3.5 py-2.5 font-mono">
+							if r.SetURL != "" {
+								<a href={ templ.SafeURL(r.SetURL) } class="text-fg hover:underline">{ r.Alert.Set }</a>
+							} else {
+								{ Dash(r.Alert.Set) }
+							}
+						</td>
+						<td class="px-3.5 py-2.5 text-fg-body">{ r.Alert.Message }</td>
+						<td class="px-3.5 py-2.5 text-right tabular-nums font-mono text-fg-subtle whitespace-nowrap">{ r.Age }</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+templ AlertRules(v AlertsView) {
+	@Card("alert-rules", "rules", "") {
+		if len(v.Rules) == 0 {
+			@Empty("no rules evaluated yet")
+		} else {
+			<div class="overflow-x-auto -mx-3.5 -my-3.5">
+				<table class="w-full min-w-[720px] text-[12px] border-collapse">
+					<thead>
+						<tr class="border-b border-default">
+							@ColHead("rule", "left")
+							@ColHead("fires when", "left")
+							@ColHead("state", "left")
+						</tr>
+					</thead>
+					<tbody>
+						for _, r := range v.Rules {
+							<tr class="border-b border-muted last:border-0">
+								<td class="px-3.5 py-2.5 text-fg">{ r.Rule.Title }</td>
+								<td class="px-3.5 py-2.5 font-mono text-fg-muted">{ r.Rule.Threshold }</td>
+								<td class="px-3.5 py-2.5">
+									@Pill(r.Tone, r.State)
+									if r.Rule.Unavailable != "" {
+										<span class="ml-2 text-[11px] text-fg-subtle" data-unavailable>{ r.Rule.Unavailable }</span>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+	}
+}

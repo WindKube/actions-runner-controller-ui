@@ -36,6 +36,7 @@ templ Document(p Page, body templ.Component) {
 				@body
 			</main>
 			@HealthStrip(p)
+			@Toasts(p)
 		</body>
 	</html>
 }
@@ -64,25 +65,61 @@ templ Topbar(p Page) {
 	</header>
 }
 
-// TabStrip is the top-level navigation between the live fleet and the two
-// history views.
-//
-// These are ordinary links, not stream calls. Each tab is a different page
-// with a different SSE endpoint, so switching one has to be a navigation —
-// reopening the stream in place would leave the browser holding the previous
-// page's markup and a URL that no longer describes it.
+// TabStrip is the top-level navigation. Tabs are links, not stream calls: each
+// is a different page with its own SSE endpoint.
 templ TabStrip(p Page) {
-	<nav class="mx-auto max-w-[1600px] px-4 flex items-center gap-1 -mb-px" aria-label="views">
+	<nav id="tabs" class="mx-auto max-w-[1600px] px-4 flex items-center gap-1 -mb-px" aria-label="views">
 		for _, t := range AllTabs() {
 			<a
 				href={ templ.SafeURL(t.Href) }
-				class={ "px-3 h-8 inline-flex items-center text-[12px] border-b-2 -mb-px",
+				class={ "px-3 h-8 inline-flex items-center gap-1.5 text-[12px] border-b-2 -mb-px",
 					templ.KV("border-accent text-fg font-semibold", t.Tab == p.Tab),
 					templ.KV("border-transparent text-fg-subtle hover:text-fg", t.Tab != p.Tab) }
 				aria-current={ ariaCurrent(t.Tab == p.Tab) }
-			>{ t.Label }</a>
+			>
+				{ t.Label }
+				if t.Tab == TabAlerts && len(p.Alerts) > 0 {
+					<span class="min-w-[16px] h-[16px] px-1 rounded-full bg-danger text-canvas text-[10px] font-semibold tabular-nums inline-flex items-center justify-center">{ fmt.Sprint(len(p.Alerts)) }</span>
+				}
+			</a>
 		}
 	</nav>
+}
+
+// Toasts pops up alerts that fired recently. Dismissal is a local signal, so
+// a later patch does not bring a dismissed toast back.
+templ Toasts(p Page) {
+	<div id="toasts" class="fixed bottom-14 right-4 z-30 flex flex-col gap-2 w-[340px] max-w-[calc(100vw-2rem)]" aria-live="polite">
+		for _, a := range p.Alerts {
+			if a.Toast {
+				<div
+					class="rounded-md border border-default bg-raised shadow-lg px-3 py-2.5 flex items-start gap-2.5"
+					role="status"
+					{ templ.Attributes{"data-signals:" + a.Signal + "__ifmissing": "false"}... }
+					data-show={ "!$" + a.Signal }
+				>
+					<span class="mt-[5px]">
+						@Dot(a.Tone)
+					</span>
+					<a href="/alerts" class="flex-1 min-w-0">
+						<div class="text-[12px] font-semibold text-fg">{ a.Alert.Title }</div>
+						<div class="text-[11.5px] text-fg-muted">
+							if a.Alert.Set != "" {
+								<span class="font-mono">{ a.Alert.Set }</span> ·
+							}
+							{ a.Alert.Message }
+						</div>
+					</a>
+					<button
+						type="button"
+						class="text-fg-subtle hover:text-fg text-[14px] leading-none cursor-pointer"
+						aria-label="dismiss"
+						data-on:click={ "$" + a.Signal + " = true" }
+					>×</button>
+				</div>
+			}
+		}
+	</div>
 }
 
 // ariaCurrent renders the attribute value screen readers use to announce the

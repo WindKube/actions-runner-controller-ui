@@ -13,18 +13,12 @@ import (
 	"github.com/a-h/templ"
 	"github.com/stretchr/testify/require"
 
+	"arc-ui/internal/alert"
 	"arc-ui/internal/fleet"
 )
 
-// TestWritePreview renders all three views to standalone HTML files.
-//
-// It exists because the charts are server-computed SVG: their geometry is
-// decided in Go, so the only way to see whether a chart is right is to look at
-// one. Set ARC_UI_PREVIEW_DIR to a directory and run:
-//
-//	go test ./internal/web -run TestWritePreview
-//
-// The CSS is inlined so the files open straight from disk with no server.
+// TestWritePreview renders every view from fixtures to standalone HTML, with the
+// CSS inlined. Set ARC_UI_PREVIEW_DIR to enable it.
 func TestWritePreview(t *testing.T) {
 	dir := os.Getenv("ARC_UI_PREVIEW_DIR")
 	if dir == "" {
@@ -37,12 +31,11 @@ func TestWritePreview(t *testing.T) {
 	b := &Builder{
 		Fleet:    SnapshotFunc(previewSnapshot),
 		History:  previewHistory{},
+		Alerts:   previewAlerts(),
 		Version:  "preview",
 		Interval: 15 * time.Second,
-		// Only needs to be a stable string for write() to match on — the link is swapped
-		// for an inline <style> there. JS is deliberately left unset: the layout omits the
-		// module script entirely when Page.JS is empty, and an empty src= would resolve to
-		// the page itself and make the browser parse this HTML as a module.
+		// write() swaps this link for an inline <style>. JS stays unset: an empty
+		// src= would make the browser load this page as a module.
 		CSS: "/static/app.css",
 	}
 	ctx := context.Background()
@@ -74,6 +67,33 @@ func TestWritePreview(t *testing.T) {
 	require.True(t, ok, "preview job missing")
 	job.Stream = fmt.Sprintf("/stream/jobs/%d", previewJobID)
 	write(t, dir, "job.html", css, job.Page, JobPage(job))
+
+	alerts := b.AlertsPage(ctx, sig, previewNow)
+	alerts.Stream = "/stream/alerts"
+	write(t, dir, "alerts.html", css, alerts.Page, AlertsPage(alerts))
+}
+
+// previewAlerts fired long enough ago that no toast covers the screenshots.
+func previewAlerts() fixedAlerts {
+	ago := func(d time.Duration) time.Time { return previewNow.Add(-d) }
+	return fixedAlerts{
+		Evaluated: ago(4 * time.Second),
+		Firing: []alert.Alert{
+			{Rule: "queued-at-max", Title: "jobs queued at max runners", Severity: alert.Warning, Set: "arc-ubuntu-small",
+				Message: "6 jobs queued with 12/12 runners", Since: ago(28 * time.Minute), FiredAt: ago(18 * time.Minute)},
+		},
+		Resolved: []alert.Alert{
+			{Rule: "oom-killed", Title: "runners OOMKilled", Severity: alert.Warning, Set: "arc-arm64",
+				Message: "1 runners OOMKilled in the last 1h", Since: ago(3 * time.Hour), FiredAt: ago(3 * time.Hour), ResolvedAt: ago(2 * time.Hour)},
+		},
+		Rules: []alert.RuleStatus{
+			{ID: "queued-at-max", Title: "jobs queued at max runners", Severity: alert.Warning, Threshold: "queued > 0 at max runners for 10m", Firing: 1},
+			{ID: "listener-down", Title: "listener down", Severity: alert.Critical, Threshold: "not running for 2m"},
+			{ID: "oom-killed", Title: "runners OOMKilled", Severity: alert.Warning, Threshold: "any in the last 1h"},
+			{ID: "failed-runners-rising", Title: "failed runners rising", Severity: alert.Warning, Threshold: "+3 in 15m"},
+			{ID: "startup-p95", Title: "slow job startup", Severity: alert.Warning, Threshold: "p95 > 2m over 30m"},
+		},
+	}
 }
 
 // previewJobID is the job the detail preview renders — the one with a full
@@ -88,30 +108,28 @@ func previewJobs() []Job {
 		{
 			ID: previewJobID, Runner: "arc-ubuntu-2xl-r7k2p", Set: "arc-ubuntu-2xl",
 			Repository: "WindKube/platform", Workflow: "ci.yml", Name: "build (ubuntu-2xl)",
-			RunID: 4_182_993, StartedAt: mins(42), Succeeded: false,
-			CPUSeconds: 2_940, MemGiBSecs: 5_880,
-			// The detail preview is rendered from this row. Memory is
-			// burstable and CPU has no limit, which is the ARC default and
-			// gives the chart one line on one axis and two on the other.
+			RunID: 4_182_993, StartedAt: mins(42), JobID: "29811",
+			WorkflowRef: "WindKube/platform/.github/workflows/ci.yml@refs/heads/main",
+			// Burstable memory and no CPU limit, the ARC default.
 			CPURequest: 2, MemRequest: 3 * fleet.GiB, MemLimit: 4 * fleet.GiB,
 		},
 		{
 			ID: 2, Runner: "arc-ubuntu-2xl-h9z1w", Set: "arc-ubuntu-2xl",
 			Repository: "WindKube/platform", Workflow: "ci.yml", Name: "test (integration)",
-			RunID: 4_182_993, StartedAt: mins(41), FinishedAt: mins(12), Succeeded: true,
-			CPUSeconds: 3_180, MemGiBSecs: 7_420,
+			RunID: 4_182_993, StartedAt: mins(41), FinishedAt: mins(12),
+			CPUSeconds: 3_180, MemPeakBytes: 3.4 * fleet.GiB,
 		},
 		{
 			ID: 3, Runner: "arc-arm64-graviton-b2k7d", Set: "arc-arm64-graviton",
 			Repository: "WindKube/actions-runner-controller-ui", Workflow: "release.yml",
 			Name: "publish", RunID: 4_182_871, StartedAt: mins(96), FinishedAt: mins(74),
-			Succeeded: false, CPUSeconds: 1_104, MemGiBSecs: 2_030,
+			RunnerFailed: true, FailureReason: "OOMKilled", CPUSeconds: 1_104, MemPeakBytes: 4 * fleet.GiB,
 		},
 		{
 			ID: 4, Runner: "arc-ubuntu-2xl-x7p3r", Set: "arc-ubuntu-2xl",
 			Repository: "WindKube/platform", Workflow: "nightly.yml", Name: "e2e",
-			StartedAt: mins(188), FinishedAt: mins(41), Succeeded: true,
-			CPUSeconds: 26_400, MemGiBSecs: 61_200,
+			StartedAt: mins(188), FinishedAt: mins(41),
+			CPUSeconds: 26_400, MemPeakBytes: 6.1 * fleet.GiB,
 		},
 	}
 }
@@ -141,17 +159,17 @@ func (previewHistory) Workflows(_ context.Context, _ JobFilter, _ Window) (Workf
 			{
 				Repository: "WindKube/platform", Workflow: "ci.yml", RunID: 4_182_993,
 				Jobs: 12, Running: 1, Failed: 0, StartedAt: mins(42),
-				CPUSeconds: 18_240, MemGiBSecs: 41_100,
+				CPUSeconds: 18_240, MemPeakBytes: 3.8 * fleet.GiB,
 			},
 			{
 				Repository: "WindKube/actions-runner-controller-ui", Workflow: "release.yml",
 				RunID: 4_182_871, Jobs: 3, Failed: 1, StartedAt: mins(96), FinishedAt: mins(74),
-				CPUSeconds: 3_312, MemGiBSecs: 6_090,
+				CPUSeconds: 3_312, MemPeakBytes: 4 * fleet.GiB,
 			},
 			{
 				Repository: "WindKube/platform", Workflow: "nightly.yml",
 				Jobs: 5, StartedAt: mins(188), FinishedAt: mins(41),
-				CPUSeconds: 44_800, MemGiBSecs: 98_300,
+				CPUSeconds: 44_800, MemPeakBytes: 6.1 * fleet.GiB,
 			},
 		},
 		Total: 187,
@@ -171,8 +189,8 @@ func (h previewHistory) Job(_ context.Context, id int) (Job, bool, error) {
 // JobSeries is a job ramping up and then holding, which is the shape a build
 // actually makes and the one that shows whether the chart's peak scaling is
 // right.
-func (previewHistory) JobSeries(_ context.Context, id int, _ Window) (JobSeries, error) {
-	if id != previewJobID {
+func (previewHistory) JobSeries(_ context.Context, j Job, _ Window) (JobSeries, error) {
+	if j.ID != previewJobID {
 		return JobSeries{}, nil
 	}
 	const n = 42
@@ -333,13 +351,16 @@ func previewSnapshot() fleet.Snapshot {
 	return fleet.Snapshot{
 		At: previewNow.Add(-3 * time.Second), Org: "WindKube",
 		Sets: sets, Runners: runners,
-		ControllerVersion: "0.14.2",
-		ListenersReady:    2, ListenersTotal: 3,
+		ARCVersions:    []string{"0.15.1"},
+		ListenersReady: 2, ListenersTotal: 3,
 		Sources: []fleet.Source{
 			{Name: fleet.SourceKubernetes, Available: true, CheckedAt: previewNow},
 			{Name: fleet.SourceARCCRDs, Available: true, CheckedAt: previewNow},
-			{Name: fleet.SourceMetrics, Available: true, CheckedAt: previewNow},
-			{Name: fleet.SourceListener, Available: true, CheckedAt: previewNow},
+			{Name: fleet.SourcePrometheus, Available: true, CheckedAt: previewNow},
+			{Name: fleet.SourceARCMetrics, Available: true, CheckedAt: previewNow},
+			{Name: fleet.SourceControllerMetrics, Available: true, CheckedAt: previewNow},
+			{Name: fleet.SourceCAdvisor, Available: true, CheckedAt: previewNow},
+			{Name: fleet.SourceKSM, Available: true, CheckedAt: previewNow},
 			{Name: fleet.SourceStore, Available: true, CheckedAt: previewNow},
 		},
 	}
@@ -382,16 +403,11 @@ func (previewHistory) Failures(_ context.Context, _ Scope, _ Window, limit int) 
 // is nowhere near full, so the footer renders every row with realistic widths.
 func (previewHistory) Stats(context.Context) (StoreStats, error) {
 	return StoreStats{
-		Enabled:     true,
-		Path:        "/data/arc-ui.db",
-		SizeBytes:   47 * 1024 * 1024,
-		Samples:     3_214_887,
-		Jobs:        18_402,
-		JobSamples:  742_118,
-		ChurnEvents: 36_804,
-		Failures:    1_142,
-		Rows:        3_362_990,
-		Oldest:      previewNow.Add(-21 * 24 * time.Hour),
+		Enabled:   true,
+		Path:      "/data/arc-ui.db",
+		SizeBytes: 6 * 1024 * 1024,
+		Jobs:      18_402,
+		Oldest:    previewNow.Add(-21 * 24 * time.Hour),
 	}, nil
 }
 
@@ -466,11 +482,11 @@ func previewCounts(w Window, n int, amp, freq float64) Counts {
 
 func (previewHistory) Repos(_ context.Context, _ Window, limit int) ([]RepoHistory, error) {
 	all := []RepoHistory{
-		{Repository: "WindKube/web-api", Jobs: 412, CPUSeconds: 184320, MemGiBSecs: 372000},
-		{Repository: "WindKube/payments", Jobs: 208, CPUSeconds: 96400, MemGiBSecs: 201400},
-		{Repository: "WindKube/mobile", Jobs: 96, CPUSeconds: 71200, MemGiBSecs: 156800},
-		{Repository: "WindKube/docs", Jobs: 143, CPUSeconds: 22800, MemGiBSecs: 41200},
-		{Repository: "WindKube/infra", Jobs: 61, CPUSeconds: 14100, MemGiBSecs: 29900},
+		{Repository: "WindKube/web-api", Jobs: 412, Seconds: 184320},
+		{Repository: "WindKube/payments", Jobs: 208, Seconds: 96400},
+		{Repository: "WindKube/mobile", Jobs: 96, Seconds: 71200},
+		{Repository: "WindKube/docs", Jobs: 143, Seconds: 22800},
+		{Repository: "WindKube/infra", Jobs: 61, Seconds: 14100},
 	}
 	if limit > 0 && len(all) > limit {
 		all = all[:limit]

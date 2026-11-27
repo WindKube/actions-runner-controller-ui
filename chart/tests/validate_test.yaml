@@ -1,12 +1,17 @@
-# The guard rails in the "arc-ui.validate" helper, which deployment.yaml
-# includes on its first line. `fail` aborts the render, so every case below
-# asserts on the render failing rather than on rendered output — that is the
-# whole point of the helper: be caught by `helm template` in CI, not at 3am by a
-# Deployment that can never roll.
+# The guard rails in "arc-ui.validate", which deployment.yaml includes first.
 suite: arc-ui.validate guard rails
 templates:
   - deployment.yaml
+set:
+  prometheus.url: http://prometheus.monitoring:9090
 tests:
+  - it: requires a Prometheus URL
+    set:
+      prometheus.url: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "prometheus.url is required"
+
   - it: renders with the shipped defaults
     asserts:
       - hasDocuments:

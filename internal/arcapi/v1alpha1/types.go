@@ -1,26 +1,20 @@
-// Package v1alpha1 holds a minimal, hand-vendored copy of the Actions Runner
-// Controller custom resource types for group actions.github.com.
+// Package v1alpha1 is a hand-vendored subset of the Actions Runner Controller
+// types for group actions.github.com, with json tags copied from the release
+// pinned in arc-version.
 //
-// These are deliberately NOT imported from
-// github.com/actions/actions-runner-controller. That module is effectively
-// unversioned for Go consumers: every release since October 2023 is tagged
-// `gha-runner-scale-set-X.Y.Z`, which the module proxy cannot see, so a plain
-// `go get` silently resolves to v0.27.6 and drags in a k8s.io generation from
-// 2023. Importing the real API package also compiles the entire Azure Key Vault
-// SDK, because VaultConfig.Type is typed `vault.VaultType`.
-//
-// So we copy the ~20 structs we actually render, with json tags taken verbatim
-// from release tag gha-runner-scale-set-0.14.2 (commit 9bb16ae). Decoding via
-// runtime.DefaultUnstructuredConverter ignores fields we did not declare, so ARC
-// can grow its API without breaking us.
+// ARC's Go module is not imported: its releases are tagged
+// gha-runner-scale-set-X.Y.Z, so `go get` resolves to v0.27.6 from 2023 and pulls
+// in the Azure SDK. Every status field is optional and no runner counts are read
+// from status: 0.15.0 removed them (actions/actions-runner-controller#4557).
 package v1alpha1
 
 import (
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// AutoscalingRunnerSet is the top-level scale set resource, one per runner pool.
 type AutoscalingRunnerSet struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -29,7 +23,6 @@ type AutoscalingRunnerSet struct {
 	Status AutoscalingRunnerSetStatus `json:"status,omitempty"`
 }
 
-// AutoscalingRunnerSetSpec is the declared shape of a scale set.
 type AutoscalingRunnerSetSpec struct {
 	GitHubConfigURL      string   `json:"githubConfigUrl,omitempty"`
 	GitHubConfigSecret   string   `json:"githubConfigSecret,omitempty"`
@@ -37,54 +30,24 @@ type AutoscalingRunnerSetSpec struct {
 	RunnerScaleSetName   string   `json:"runnerScaleSetName,omitempty"`
 	RunnerScaleSetLabels []string `json:"runnerScaleSetLabels,omitempty"`
 
-	// Template carries the runner pod, and with it the image, resource
-	// requests and limits, and node selector the dashboard displays.
 	Template corev1.PodTemplateSpec `json:"template,omitempty"`
 
-	// MaxRunners is a pointer because nil means *unbounded*, not zero. The
-	// controller resolves nil to math.MaxInt32 when creating the listener, so
-	// an unbounded set reports a max of 2147483647 — render "unlimited"
-	// instead of a capacity line.
+	// nil means unbounded; the controller hands the listener MaxInt32 in that case.
 	MaxRunners *int `json:"maxRunners,omitempty"`
 	MinRunners *int `json:"minRunners,omitempty"`
 }
 
-// AutoscalingRunnerSetStatus mirrors counts up from the EphemeralRunnerSet.
-//
-// Treat these as a display hint only and prefer the EphemeralRunnerSet's own
-// status: upstream is actively trimming this struct down to Phase alone, and
-// the CRD's printer columns already reference fields that no longer exist.
 type AutoscalingRunnerSetStatus struct {
-	CurrentRunners          int    `json:"currentRunners"`
-	Phase                   string `json:"phase"`
-	PendingEphemeralRunners int    `json:"pendingEphemeralRunners"`
-	RunningEphemeralRunners int    `json:"runningEphemeralRunners"`
-	FailedEphemeralRunners  int    `json:"failedEphemeralRunners"`
-
-	// State is the pre-0.14.0 spelling of Phase. Declared so a dashboard
-	// pointed at an older controller still shows something.
-	State string `json:"state,omitempty"`
+	Phase string `json:"phase,omitempty"`
 }
 
-// AutoscalingRunnerSetPhase values.
 const (
 	AutoscalingRunnerSetPhasePending  = "Pending"
 	AutoscalingRunnerSetPhaseRunning  = "Running"
 	AutoscalingRunnerSetPhaseOutdated = "Outdated"
 )
 
-// EffectivePhase prefers the modern Phase field and falls back to the legacy
-// State spelling used before gha-runner-scale-set 0.14.0.
-func (s AutoscalingRunnerSetStatus) EffectivePhase() string {
-	if s.Phase != "" {
-		return s.Phase
-	}
-	return s.State
-}
-
-// MaxRunnersValue reports the configured ceiling. ok is false when the set is
-// unbounded, either because maxRunners is unset or because the controller has
-// already expanded nil to MaxInt32.
+// MaxRunnersValue reports the configured ceiling; ok is false for an unbounded set.
 func (s AutoscalingRunnerSetSpec) MaxRunnersValue() (value int, ok bool) {
 	if s.MaxRunners == nil || *s.MaxRunners >= UnboundedRunners {
 		return 0, false
@@ -92,7 +55,6 @@ func (s AutoscalingRunnerSetSpec) MaxRunnersValue() (value int, ok bool) {
 	return *s.MaxRunners, true
 }
 
-// MinRunnersValue reports the configured floor, defaulting to zero.
 func (s AutoscalingRunnerSetSpec) MinRunnersValue() int {
 	if s.MinRunners == nil {
 		return 0
@@ -100,28 +62,46 @@ func (s AutoscalingRunnerSetSpec) MinRunnersValue() int {
 	return *s.MinRunners
 }
 
-// UnboundedRunners is what the controller substitutes for a nil maxRunners
-// when it creates the AutoscalingListener (math.MaxInt32).
 const UnboundedRunners = 2147483647
 
-// RunnerContainer returns the runner container from the pod template, which is
-// where image and resource requests live.
 func (s AutoscalingRunnerSetSpec) RunnerContainer() (corev1.Container, bool) {
-	for _, c := range s.Template.Spec.Containers {
+	return RunnerContainer(s.Template.Spec.Containers)
+}
+
+// RunnerContainer picks the container named "runner", or the first one for sets
+// that rename it.
+func RunnerContainer(containers []corev1.Container) (corev1.Container, bool) {
+	for _, c := range containers {
 		if c.Name == RunnerContainerName {
 			return c, true
 		}
 	}
-	// Some scale sets name the container differently; the first one is a
-	// better guess than nothing.
-	if len(s.Template.Spec.Containers) > 0 {
-		return s.Template.Spec.Containers[0], true
+	if len(containers) > 0 {
+		return containers[0], true
 	}
 	return corev1.Container{}, false
 }
 
-// EphemeralRunnerSet is one generation of a scale set's runners. A rollout can
-// leave more than one alive at a time.
+// ContainerMode infers the scale set chart's containerMode from the template it
+// rendered, since the mode itself is not part of the API.
+func (s AutoscalingRunnerSetSpec) ContainerMode() string {
+	spec := s.Template.Spec
+	for _, c := range append(spec.InitContainers, spec.Containers...) {
+		if c.Name == "dind" || c.Name == "init-dind-externals" {
+			return "dind"
+		}
+		for _, e := range c.Env {
+			if e.Name == "ACTIONS_RUNNER_CONTAINER_HOOKS" {
+				if strings.Contains(e.Value, "k8s-novolume") {
+					return "kubernetes-novolume"
+				}
+				return "kubernetes"
+			}
+		}
+	}
+	return "default"
+}
+
 type EphemeralRunnerSet struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -130,28 +110,15 @@ type EphemeralRunnerSet struct {
 	Status EphemeralRunnerSetStatus `json:"status,omitempty"`
 }
 
-// EphemeralRunnerSetSpec is what the listener asked the controller for.
 type EphemeralRunnerSetSpec struct {
 	Replicas int `json:"replicas,omitempty"`
-	// PatchID uses a capital ID in its json tag, unlike every other field in
-	// this API.
-	PatchID int `json:"patchID"`
+	PatchID  int `json:"patchID,omitempty"`
 }
 
-// EphemeralRunnerSetStatus is the authoritative source of runner counts.
-//
-// CurrentReplicas is pending+running only: finished, deleting and outdated
-// runners are tracked internally but never published, so this can read lower
-// than the number of EphemeralRunner objects that exist.
 type EphemeralRunnerSetStatus struct {
-	CurrentReplicas         int    `json:"currentReplicas"`
-	PendingEphemeralRunners int    `json:"pendingEphemeralRunners"`
-	RunningEphemeralRunners int    `json:"runningEphemeralRunners"`
-	FailedEphemeralRunners  int    `json:"failedEphemeralRunners"`
-	Phase                   string `json:"phase"`
+	Phase string `json:"phase,omitempty"`
 }
 
-// EphemeralRunner is a single runner. Its pod always shares its name.
 type EphemeralRunner struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -160,8 +127,6 @@ type EphemeralRunner struct {
 	Status EphemeralRunnerStatus `json:"status,omitempty"`
 }
 
-// EphemeralRunnerSpec embeds a pod template inline, so the pod spec is reached
-// through Spec.Spec.
 type EphemeralRunnerSpec struct {
 	GitHubConfigURL  string `json:"githubConfigUrl,omitempty"`
 	RunnerScaleSetID int    `json:"runnerScaleSetId,omitempty"`
@@ -169,9 +134,8 @@ type EphemeralRunnerSpec struct {
 	corev1.PodTemplateSpec `json:",inline"`
 }
 
-// EphemeralRunnerStatus carries both runner lifecycle and current job.
 type EphemeralRunnerStatus struct {
-	Ready   bool   `json:"ready"`
+	Ready   bool   `json:"ready,omitempty"`
 	Phase   string `json:"phase,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Message string `json:"message,omitempty"`
@@ -189,8 +153,7 @@ type EphemeralRunnerStatus struct {
 	JobDisplayName    string `json:"jobDisplayName,omitempty"`
 }
 
-// EphemeralRunnerPhase values. The phase is a superset of PodPhase, so it
-// describes the pod, not the job.
+// EphemeralRunner phases describe the pod, not the job: an idle runner is Running.
 const (
 	EphemeralRunnerPhasePending   = "Pending"
 	EphemeralRunnerPhaseRunning   = "Running"
@@ -199,13 +162,9 @@ const (
 	EphemeralRunnerPhaseOutdated  = "Outdated"
 )
 
-// HasJob reports whether a job is currently executing.
-//
-// This is the only correct busy test. Phase == "Running" means the *pod* is
-// running, which is equally true of an idle runner waiting for work.
+// HasJob is the only correct busy test; Phase == Running is true of idle runners too.
 func (r *EphemeralRunner) HasJob() bool { return r.Status.JobID != "" }
 
-// IsDone reports whether the runner has reached a terminal phase.
 func (r *EphemeralRunner) IsDone() bool {
 	switch r.Status.Phase {
 	case EphemeralRunnerPhaseSucceeded, EphemeralRunnerPhaseFailed, EphemeralRunnerPhaseOutdated:
@@ -214,7 +173,6 @@ func (r *EphemeralRunner) IsDone() bool {
 	return false
 }
 
-// LastFailure returns the most recent recorded failure time, or the zero time.
 func (s EphemeralRunnerStatus) LastFailure() metav1.Time {
 	var latest metav1.Time
 	for _, ts := range s.Failures {
@@ -225,22 +183,19 @@ func (s EphemeralRunnerStatus) LastFailure() metav1.Time {
 	return latest
 }
 
-// AutoscalingListener polls GitHub for job assignments.
-//
-// It lives in the *controller's* namespace, not the runner namespace, and has
-// no ownerReference back to its AutoscalingRunnerSet — correlate through
-// Spec.AutoscalingRunnerSetNamespace and Spec.AutoscalingRunnerSetName.
+// AutoscalingListener lives in the controller namespace with no ownerReference to
+// its scale set; correlate through the spec's namespace and name. Its status is
+// an empty struct upstream.
 type AutoscalingListener struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	Spec AutoscalingListenerSpec `json:"spec,omitempty"`
-	// Status is deliberately omitted: AutoscalingListenerStatus is an empty
-	// struct upstream, so listener health must come from the listener pod.
 }
 
-// AutoscalingListenerSpec ties a listener back to its scale set.
 type AutoscalingListenerSpec struct {
+	// Phase appeared in 0.15.0 and is empty on 0.14.x.
+	Phase                         string `json:"phase,omitempty"`
 	GitHubConfigURL               string `json:"githubConfigUrl,omitempty"`
 	RunnerScaleSetID              int    `json:"runnerScaleSetId,omitempty"`
 	AutoscalingRunnerSetNamespace string `json:"autoscalingRunnerSetNamespace,omitempty"`
@@ -250,3 +205,8 @@ type AutoscalingListenerSpec struct {
 	MinRunners                    int    `json:"minRunners,omitempty"`
 	Image                         string `json:"image,omitempty"`
 }
+
+const (
+	AutoscalingListenerPhaseRunning = "Running"
+	AutoscalingListenerPhaseStopped = "Stopped"
+)

@@ -1,14 +1,19 @@
 package web
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/samber/lo"
 
+	arcapi "arc-ui/internal/arcapi/v1alpha1"
 	"arc-ui/internal/chart"
 	"arc-ui/internal/fleet"
 )
@@ -84,12 +89,17 @@ func (f SnapshotFunc) Snapshot() fleet.Snapshot { return f() }
 // a snapshot plus a history query into something a template can render, which
 // is what keeps the templates free of logic and the handlers free of layout.
 type Builder struct {
-	Fleet   Snapshotter
-	History History
-	Version string
-	// Interval is the configured scrape interval, shown in the health strip so
-	// an operator can tell a stale chart from a slow one.
+	Fleet    Snapshotter
+	History  History
+	Version  string
 	Interval time.Duration
+
+	GitHubURL         string
+	GrafanaURL        string
+	GrafanaDatasource string
+
+	// Alerts is nil when alerting is off.
+	Alerts AlertSource
 
 	// CSS and JS are the content-hashed asset URLs. They are carried on the
 	// page rather than read from a package-level variable so a test can render
@@ -116,6 +126,7 @@ type Page struct {
 	Sources  []SourceRow
 	Warnings []string
 	Crumbs   []Crumb
+	Alerts   []AlertRow
 
 	// Tab is which of the top-level views is showing, so the tab strip can
 	// mark it. The zero value is the fleet overview, which is what a page
@@ -134,33 +145,28 @@ type Page struct {
 // Tab names one of the dashboard's top-level views.
 type Tab string
 
-// The three tabs. TabFleet is the zero value so a page that sets none is the
-// overview.
+// TabFleet is the zero value so a page that sets none is the overview.
 const (
 	TabFleet     Tab = ""
 	TabWorkflows Tab = "workflows"
 	TabJobs      Tab = "jobs"
+	TabAlerts    Tab = "alerts"
 )
 
-// TabLink is one entry in the top-level tab strip.
 type TabLink struct {
 	Tab   Tab
 	Label string
 	Href  string
 }
 
-// AllTabs lists the tabs in strip order.
-//
-// The hrefs carry no filter state on purpose. Switching tab is a change of
-// subject — from what the fleet is doing now to what it did — and the fleet
-// tab's filters are over runner state, which the history tabs have no column
-// for. Carrying them across would silently empty the table someone just
-// clicked into.
+// AllTabs lists the tabs in strip order. The hrefs carry no filters: the
+// fleet tab's filters are over runner state, which the other tabs lack.
 func AllTabs() []TabLink {
 	return []TabLink{
 		{Tab: TabFleet, Label: "fleet", Href: "/"},
 		{Tab: TabWorkflows, Label: "workflows", Href: "/workflows"},
 		{Tab: TabJobs, Label: "jobs", Href: "/jobs"},
+		{Tab: TabAlerts, Label: "alerts", Href: "/alerts"},
 	}
 }
 
@@ -195,10 +201,11 @@ type Overview struct {
 	Throughput BarChart
 	Churn      ChurnChart
 
-	Sets     []SetRow
-	Runners  []fleet.Runner
-	Repos    []RepoBar
-	Failures FailureLane
+	Sets             []SetRow
+	Runners          []fleet.Runner
+	Repos            []RepoBar
+	ReposUnavailable bool
+	Failures         FailureLane
 
 	// Store is the history store's own footprint, reported at the foot of the
 	// page. Nothing else on the dashboard is about the dashboard itself.
@@ -250,6 +257,7 @@ type RunnerDetail struct {
 	Facts  []KV
 	CPU    LineChart
 	Mem    LineChart
+	Window string
 	Events []fleet.Event
 
 	// SetJobs is recent job activity across the whole RunnerSet rather than
@@ -311,24 +319,23 @@ type RepoBar struct {
 	Detail     string
 }
 
-// AreaChart is a stacked area chart with an optional dashed ceiling.
+// AreaChart is a stacked area chart with an optional dashed ceiling. Width is
+// the viewBox width every coordinate was computed against; Unavailable means
+// the source did not answer, which must never draw as an empty or zero chart.
 type AreaChart struct {
-	// Width is the viewBox width every coordinate in this struct was computed
-	// against, and the width the template draws its viewBox with. It is zero on
-	// an empty chart, which renders a placeholder rather than an SVG.
 	Width float64
 
 	Areas []chart.Area
 	Grid  []chart.GridLine
 	Ticks []string
 
-	// Cap is the dashed max-capacity line, absent for unbounded sets.
 	Cap      string
 	CapLabel string
 	CapTopPx string
 
-	Legend []LegendItem
-	Empty  bool
+	Legend      []LegendItem
+	Empty       bool
+	Unavailable bool
 }
 
 // LegendItem is one swatch and label beneath a chart.
@@ -340,16 +347,16 @@ type LegendItem struct {
 
 // LineChart is a single series with optional flat reference lines.
 type LineChart struct {
-	// Width is the geometry's viewBox width; see AreaChart.Width.
 	Width float64
 
-	Title  string
-	Line   chart.Line
-	Refs   []RefLine
-	Grid   []chart.GridLine
-	Ticks  []string
-	Legend []LegendItem
-	Empty  bool
+	Title       string
+	Line        chart.Line
+	Refs        []RefLine
+	Grid        []chart.GridLine
+	Ticks       []string
+	Legend      []LegendItem
+	Empty       bool
+	Unavailable bool
 }
 
 // RefLine is a horizontal request or limit marker.
@@ -361,27 +368,25 @@ type RefLine struct {
 
 // BarChart is a two-segment stacked column chart.
 type BarChart struct {
-	// Width is the geometry's viewBox width; see AreaChart.Width.
 	Width float64
 
-	Bars   []chart.StackedBar
-	Ticks  []string
-	Legend []LegendItem
-	Empty  bool
+	Bars        []chart.StackedBar
+	Ticks       []string
+	Legend      []LegendItem
+	Empty       bool
+	Unavailable bool
 }
 
 // ChurnChart is a column chart mirrored about a centre line.
 type ChurnChart struct {
-	// Width is the geometry's viewBox width; see AreaChart.Width. The mirror
-	// line spans it, so a churn chart drawn at any other width would have its
-	// bars hanging off the end of the line they are mirrored about.
 	Width float64
 
-	Bars   []chart.DivergingBar
-	Centre string
-	Ticks  []string
-	Legend []LegendItem
-	Empty  bool
+	Bars        []chart.DivergingBar
+	Centre      string
+	Ticks       []string
+	Legend      []LegendItem
+	Empty       bool
+	Unavailable bool
 }
 
 // page builds the shared chrome.
@@ -404,6 +409,7 @@ func (b *Builder) page(title string, s fleet.Snapshot, sig Signals, now time.Tim
 		Stale:   s.At.IsZero() || lag > 2*b.interval(),
 		Sources: sourceRows(s, b.interval()),
 		Crumbs:  crumbs,
+		Alerts:  b.firingAlerts(now),
 		CSS:     b.CSS,
 		JS:      b.JS,
 	}
@@ -443,10 +449,10 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 		scope = Set(filter.Set)
 	}
 
-	series, _ := b.History.Scope(ctx, scope, win)
-	throughput, _ := b.History.Throughput(ctx, scope, win)
-	churn, _ := b.History.Churn(ctx, scope, win)
-	repos, _ := b.History.Repos(ctx, win, 8)
+	series, seriesErr := b.History.Scope(ctx, scope, win)
+	throughput, throughputErr := b.History.Throughput(ctx, scope, win)
+	churn, churnErr := b.History.Churn(ctx, scope, win)
+	repos, reposErr := b.History.Repos(ctx, win, 8)
 	stats, _ := b.History.Stats(ctx)
 
 	// A store that cannot answer leaves the live snapshot, which still knows what is
@@ -461,25 +467,46 @@ func (b *Builder) Overview(ctx context.Context, sig Signals, now time.Time) Over
 	page.Warnings = warnings(snap, totals)
 
 	return Overview{
-		Page:       page,
-		Selects:    filter.Selects(snap),
-		Summary:    filter.Summary(len(runners), len(snap.Runners), len(snap.Sets)),
-		Active:     filter.Active(),
-		Tiles:      overviewTiles(totals),
-		Totals:     totals,
-		History:    areaChart(series, rng),
-		Util:       utilChart(series, rng),
-		CPU:        cpuChart(series, rng),
-		Mem:        memChart(series, rng),
-		Throughput: throughputChart(throughput, rng),
-		Churn:      churnChart(churn, rng),
-		Sets:       setRows(fleet.GroupBySet(runners, sets)),
-		Runners:    runners,
-		Repos:      repoBars(repos, runners),
-		Failures:   lane,
-		Store:      storePanel(stats, now),
-		SetSort:    setSort,
+		Page:             page,
+		Selects:          filter.Selects(snap),
+		Summary:          filter.Summary(len(runners), len(snap.Runners), len(snap.Sets)),
+		Active:           filter.Active(),
+		Tiles:            overviewTiles(totals),
+		Totals:           totals,
+		History:          unavailableArea(areaChart(series, rng), seriesErr),
+		Util:             unavailableLine(utilChart(series, rng), seriesErr),
+		CPU:              unavailableLine(cpuChart(series, rng), seriesErr),
+		Mem:              unavailableLine(memChart(series, rng), seriesErr),
+		Throughput:       unavailableBars(throughputChart(throughput, rng), throughputErr),
+		Churn:            unavailableChurn(churnChart(churn, rng), churnErr),
+		Sets:             setRows(fleet.GroupBySet(runners, sets)),
+		Runners:          runners,
+		Repos:            repoBars(repos, runners),
+		ReposUnavailable: reposErr != nil,
+		Failures:         lane,
+		Store:            storePanel(stats, now),
+		SetSort:          setSort,
 	}
+}
+
+func unavailableArea(c AreaChart, err error) AreaChart {
+	c.Unavailable = err != nil
+	return c
+}
+
+func unavailableLine(c LineChart, err error) LineChart {
+	c.Unavailable = err != nil
+	return c
+}
+
+func unavailableBars(c BarChart, err error) BarChart {
+	c.Unavailable = err != nil
+	return c
+}
+
+func unavailableChurn(c ChurnChart, err error) ChurnChart {
+	c.Unavailable = err != nil
+	return c
 }
 
 // Set builds the RunnerSet detail view. It reports false when the named set is
@@ -500,8 +527,8 @@ func (b *Builder) Set(ctx context.Context, name string, sig Signals, now time.Ti
 	fleet.SortRunners(runners, now)
 	totals := fleet.Aggregate(runners, []fleet.RunnerSet{set})
 
-	series, _ := b.History.Scope(ctx, Set(name), win)
-	churn, _ := b.History.Churn(ctx, Set(name), win)
+	series, seriesErr := b.History.Scope(ctx, Set(name), win)
+	churn, churnErr := b.History.Churn(ctx, Set(name), win)
 
 	page := b.page(name, snap, sig, now, []Crumb{
 		{Label: snap.Org},
@@ -515,10 +542,10 @@ func (b *Builder) Set(ctx context.Context, name string, sig Signals, now time.Ti
 		Totals:  totals,
 		Tiles:   setTiles(set, totals),
 		Config:  setConfig(set),
-		History: areaChart(series, rng),
-		CPU:     cpuChart(series, rng),
-		Mem:     memChart(series, rng),
-		Churn:   churnChart(churn, rng),
+		History: unavailableArea(areaChart(series, rng), seriesErr),
+		CPU:     unavailableLine(cpuChart(series, rng), seriesErr),
+		Mem:     unavailableLine(memChart(series, rng), seriesErr),
+		Churn:   unavailableChurn(churnChart(churn, rng), churnErr),
 		Runners: runners,
 	}, true
 }
@@ -534,11 +561,9 @@ func (b *Builder) Runner(ctx context.Context, name string, sig Signals, now time
 	}
 	set, _ := snap.Set(r.SetName)
 
-	// Runner charts are always the short window: raw per-runner samples are
-	// retained for minutes, so honouring a 30d range here would render a line
-	// with five points at the far right and nothing else.
-	win := Window{From: now.Add(-4 * time.Minute), To: now, Points: 48}
-	raw, _ := b.History.Runner(ctx, name, win)
+	win := runnerWindow(r, now)
+	raw, rawErr := b.History.Runner(ctx, name, win)
+	ticks := spanTicks(win.To.Sub(win.From))
 
 	page := b.page(name, snap, sig, now, []Crumb{
 		{Label: snap.Org},
@@ -552,15 +577,55 @@ func (b *Builder) Runner(ctx context.Context, name string, sig Signals, now time
 		Runner:  r,
 		Set:     set,
 		Facts:   runnerFacts(r, now),
-		CPU:     runnerLine("CPU", raw.At, raw.CPU, r.CPU.Request, r.CPU.Limit, strokeCPU, fillCPU, fleet.FormatCores),
-		Mem:     runnerLine("Memory", raw.At, raw.Mem, r.Mem.Request, r.Mem.Limit, strokeMem, fillMem, fleet.FormatGiB),
+		CPU:     unavailableLine(runnerLine("CPU", raw.CPU, r.CPU, ticks, strokeCPU, fillCPU, ToneCPU, fleet.FormatCores), rawErr),
+		Mem:     unavailableLine(runnerLine("Memory", raw.Mem, r.Mem, ticks, strokeMem, fillMem, ToneMemory, fleet.FormatGiB), rawErr),
+		Window:  runnerWindowLabel(r, win),
 		Events:  events,
 		SetJobs: setJobs(snap, r, now),
 	}, true
 }
 
+// maxRunnerWindow bounds the runner charts; a long-lived idle runner would
+// otherwise ask for days of one pod at a useless resolution.
+const maxRunnerWindow = 6 * time.Hour
+
+// runnerWindow covers the runner's whole life, so a job's usage is on screen
+// from the pod's first sample.
+func runnerWindow(r fleet.Runner, now time.Time) Window {
+	from := now.Add(-15 * time.Minute)
+	if !r.CreatedAt.IsZero() && r.CreatedAt.Before(from) {
+		from = r.CreatedAt
+	}
+	if limit := now.Add(-maxRunnerWindow); from.Before(limit) {
+		from = limit
+	}
+	return Window{From: from, To: now, Points: 60}
+}
+
+func runnerWindowLabel(r fleet.Runner, win Window) string {
+	if win.From.Equal(r.CreatedAt) {
+		return "since the pod started"
+	}
+	return "last " + strings.TrimSuffix(strings.TrimSuffix(win.To.Sub(win.From).String(), "0s"), "0m")
+}
+
+// spanTicks labels five evenly spaced points back from now.
+func spanTicks(span time.Duration) []string {
+	const n = 5
+	out := make([]string, 0, n)
+	for i := n - 1; i > 0; i-- {
+		d := span * time.Duration(i) / (n - 1)
+		if d < time.Hour {
+			out = append(out, fmt.Sprintf("-%dm", int(d.Round(time.Minute).Minutes())))
+		} else {
+			out = append(out, fmt.Sprintf("-%.3gh", d.Hours()))
+		}
+	}
+	return append(out, "now")
+}
+
 func overviewTiles(t fleet.Totals) []Tile {
-	queued := Tile{Label: "queued", Value: "—", Sub: "listener metrics off", Tone: ToneMuted}
+	queued := Tile{Label: "queued", Value: "—", Sub: "no listener metrics", Tone: ToneMuted}
 	if t.QueuedKnown {
 		queued = Tile{Label: "queued", Value: fmt.Sprint(t.Queued), Sub: "jobs waiting", Tone: ToneAttention}
 		if t.Queued == 0 {
@@ -607,7 +672,7 @@ func overviewTiles(t fleet.Totals) []Tile {
 }
 
 func setTiles(s fleet.RunnerSet, t fleet.Totals) []Tile {
-	queued := Tile{Label: "queued", Value: "—", Sub: "listener metrics off", Tone: ToneMuted}
+	queued := Tile{Label: "queued", Value: "—", Sub: "no listener metrics", Tone: ToneMuted}
 	if s.QueuedKnown {
 		queued = Tile{Label: "queued", Value: fmt.Sprint(s.Queued), Sub: "jobs waiting", Tone: ToneAttention}
 	}
@@ -757,34 +822,37 @@ func churnChart(c Counts, r TimeRange) ChurnChart {
 	if c.Len() == 0 {
 		return ChurnChart{Empty: true, Ticks: r.Ticks(), Centre: fmt.Sprintf("%.0f", churnCentre)}
 	}
-	created, destroyed := c.Sum()
+	started, finished := c.Sum()
 	return ChurnChart{
 		Width:  chartW,
 		Bars:   chart.Diverging(c.Up, c.Down, c.Len(), chartW, churnH, churnCentre, c.Peak(), barGap),
 		Centre: fmt.Sprintf("%.0f", churnCentre),
 		Ticks:  r.Ticks(),
 		Legend: []LegendItem{
-			{Label: "created", Tone: ToneSuccess, Value: fmt.Sprintf("%.0f", created)},
-			{Label: "destroyed", Tone: ToneMuted, Value: fmt.Sprintf("%.0f", destroyed)},
+			{Label: "started", Tone: ToneSuccess, Value: fmt.Sprintf("%.0f", started)},
+			{Label: "finished", Tone: ToneMuted, Value: fmt.Sprintf("%.0f", finished)},
 		},
 	}
 }
 
-// runnerLine draws one raw per-runner series with its request and limit.
-func runnerLine(title string, at []time.Time, vals []float64, request, limit float64, stroke, fill string, format func(float64) string) LineChart {
-	if len(vals) == 0 {
-		return LineChart{Title: title, Empty: true, Ticks: []string{"-4m", "-3m", "-2m", "-1m", "now"}}
+// runnerLine draws one pod's usage against its request and limit.
+func runnerLine(title string, vals []float64, res fleet.Resources, ticks []string, stroke, fill string, tone Tone, format func(float64) string) LineChart {
+	top, sampled := maxOf(vals)
+	if !sampled {
+		return LineChart{Title: title, Empty: true, Ticks: ticks}
 	}
 
+	request, limit := res.Request, res.Limit
 	peak := PeakOf(vals, []float64{request, limit})
 	c := LineChart{
 		Width: chartW,
 		Title: title,
 		Line:  chart.Plot(vals, chartW, lineH, peak, fill, stroke),
 		Grid:  chart.Grid(2, chartW, lineH, 6, peak, lineH, format),
-		Ticks: []string{"-4m", "-3m", "-2m", "-1m", "now"},
+		Ticks: ticks,
 		Legend: []LegendItem{
-			{Label: "used", Tone: ToneCPU, Value: format(lastOf(vals))},
+			{Label: "used", Tone: tone, Value: format(lastOf(vals))},
+			{Label: "peak", Tone: tone, Value: format(top)},
 		},
 	}
 	if request > 0 {
@@ -816,11 +884,24 @@ func anyPositive(v []float64) bool {
 	return false
 }
 
+// lastOf is the latest sampled value; NaN marks a bucket with no sample.
 func lastOf(v []float64) float64 {
-	if len(v) == 0 {
-		return 0
+	for i := len(v) - 1; i >= 0; i-- {
+		if !math.IsNaN(v[i]) {
+			return v[i]
+		}
 	}
-	return v[len(v)-1]
+	return 0
+}
+
+func maxOf(v []float64) (float64, bool) {
+	peak, ok := 0.0, false
+	for _, x := range v {
+		if !math.IsNaN(x) && (!ok || x > peak) {
+			peak, ok = x, true
+		}
+	}
+	return peak, ok
 }
 
 func setRows(groups []fleet.SetTotals) []SetRow {
@@ -850,13 +931,13 @@ func setRows(groups []fleet.SetTotals) []SetRow {
 // and an operator staring at a saturated fleet still needs the answer.
 func repoBars(history []RepoHistory, runners []fleet.Runner) []RepoBar {
 	if len(history) > 0 {
-		peak := lo.MaxBy(history, func(a, b RepoHistory) bool { return a.CPUSeconds > b.CPUSeconds })
+		peak := lo.MaxBy(history, func(a, b RepoHistory) bool { return a.Seconds > b.Seconds })
 		return lo.Map(history, func(h RepoHistory, _ int) RepoBar {
 			return RepoBar{
 				Repository: h.Repository,
-				Value:      h.CPUSeconds,
-				Max:        peak.CPUSeconds,
-				Label:      fmt.Sprintf("%.0f core-s", h.CPUSeconds),
+				Value:      h.Seconds,
+				Max:        peak.Seconds,
+				Label:      RunnerTime(h.Seconds),
 				Detail:     fmt.Sprintf("%d jobs", h.Jobs),
 			}
 		})
@@ -882,6 +963,8 @@ func setConfig(s fleet.RunnerSet) []KV {
 		{Label: "bounds", Value: Bounds(s), Mono: true},
 		{Label: "image", Value: Dash(s.Image), Mono: true},
 		{Label: "labels", Value: fleet.FormatLabels(s.RunnerLabels), Mono: true},
+		{Label: "container mode", Value: Dash(s.ContainerMode), Mono: true},
+		{Label: "arc version", Value: Dash(s.Version), Mono: true},
 		{Label: "cpu request", Value: fleet.FormatCores(s.CPURequest), Mono: true},
 		{Label: "cpu limit", Value: limitOrNone(s.CPULimit, fleet.FormatCores), Mono: true},
 		{Label: "memory request", Value: fleet.FormatGiB(s.MemRequest), Mono: true},
@@ -924,6 +1007,16 @@ func runnerFacts(r fleet.Runner, now time.Time) []KV {
 	if r.FailureReason != "" {
 		facts = append(facts, KV{Label: "failure", Value: r.FailureReason, Tone: ToneDanger, Mono: true})
 	}
+	if r.ControllerStatus != "" && r.ControllerStatus != r.FailureReason {
+		facts = append(facts, KV{Label: "arc status", Value: r.ControllerStatus, Tone: ToneAttention, Mono: true})
+	}
+	if r.PodFailures > 0 {
+		facts = append(facts, KV{
+			Label: "failed pods",
+			Value: fmt.Sprintf("%d replaced by ARC", r.PodFailures),
+			Tone:  ToneAttention, Mono: true,
+		})
+	}
 	return facts
 }
 
@@ -958,8 +1051,11 @@ func sourceRows(s fleet.Snapshot, interval time.Duration) []SourceRow {
 	strip := []struct{ name, label string }{
 		{fleet.SourceKubernetes, "kubernetes"},
 		{fleet.SourceARCCRDs, "arc crds"},
-		{fleet.SourceMetrics, "metrics-server"},
-		{fleet.SourceListener, "listener metrics"},
+		{fleet.SourcePrometheus, "prometheus"},
+		{fleet.SourceARCMetrics, "arc metrics"},
+		{fleet.SourceControllerMetrics, "controller metrics"},
+		{fleet.SourceCAdvisor, "cadvisor"},
+		{fleet.SourceKSM, "kube-state-metrics"},
 		{fleet.SourceStore, "history store"},
 	}
 
@@ -978,13 +1074,21 @@ func sourceRows(s fleet.Snapshot, interval time.Duration) []SourceRow {
 	}
 
 	rows = append(rows,
-		SourceRow{Label: "scrape interval", Value: interval.String(), Tone: ToneMuted},
+		SourceRow{Label: "refresh", Value: interval.String(), Tone: ToneMuted},
 		SourceRow{Label: "listeners", Value: listenerValue(s), Tone: listenerTone(s)},
 	)
-	if s.ControllerVersion != "" {
-		rows = append(rows, SourceRow{Label: "controller", Value: s.ControllerVersion, Tone: ToneMuted})
+	if len(s.ARCVersions) > 0 {
+		tone := ToneMuted
+		if len(unsupportedVersions(s)) > 0 {
+			tone = ToneAttention
+		}
+		rows = append(rows, SourceRow{Label: "arc", Value: strings.Join(s.ARCVersions, ", "), Tone: tone})
 	}
 	return rows
+}
+
+func unsupportedVersions(s fleet.Snapshot) []string {
+	return lo.Reject(s.ARCVersions, func(v string, _ int) bool { return arcapi.Supported(v) })
 }
 
 func listenerValue(s fleet.Snapshot) string {
@@ -1054,32 +1158,22 @@ func mergeFailures(stored FailureWindow, live []fleet.Failure, limit int, window
 	return FailureLane{Items: items, More: max(0, total-len(items)), Window: window}
 }
 
-// storePanel describes the history store's own footprint.
-//
-// Every count is a row the retention sweep is responsible for eventually
-// deleting, so the panel doubles as the readout for whether retention is
-// keeping up: rows climbing while the oldest sample stays put is the shape of a
-// compactor that has stopped running.
+// storePanel is the job store's footprint; jobs climbing while the oldest
+// stays put means retention has stopped.
 func storePanel(s StoreStats, now time.Time) StorePanel {
 	if !s.Enabled {
 		return StorePanel{}
 	}
-
 	oldest := "—"
 	if !s.Oldest.IsZero() {
 		oldest = fleet.FormatRelative(s.Oldest, now)
 	}
-
 	return StorePanel{
 		Enabled: true,
 		Rows: []KV{
 			{Label: "on disk", Value: fleet.FormatBytes(s.SizeBytes), Mono: true},
-			{Label: "rows", Value: Thousands(s.Rows), Mono: true},
-			{Label: "samples", Value: Thousands(s.Samples), Mono: true},
 			{Label: "jobs", Value: Thousands(s.Jobs), Mono: true},
-			{Label: "churn events", Value: Thousands(s.ChurnEvents), Mono: true},
-			{Label: "failures", Value: Thousands(s.Failures), Mono: true},
-			{Label: "oldest sample", Value: oldest, Mono: true},
+			{Label: "oldest job", Value: oldest, Mono: true},
 			{Label: "file", Value: Dash(s.Path), Mono: true},
 		},
 	}
@@ -1096,6 +1190,10 @@ func warnings(s fleet.Snapshot, t fleet.Totals) []string {
 		out = append(out, fmt.Sprintf(
 			"resource usage covers %d of %d runners — the rest have not been scraped yet",
 			t.MetricsCovered, t.Runners))
+	}
+	if bad := unsupportedVersions(s); len(bad) > 0 {
+		out = append(out, fmt.Sprintf("ARC %s is outside the supported range (%s.x); fields may be missing or misread",
+			strings.Join(bad, ", "), strings.Join(arcapi.SupportedMinors(), ".x, ")))
 	}
 	if !t.QueuedKnown && len(s.Sets) > 0 {
 		out = append(out, "queue depth is unavailable: ARC listener metrics are disabled")
@@ -1158,11 +1256,17 @@ type JobView struct {
 	Facts []KV
 	CPU   LineChart
 	Mem   LineChart
+	Links []Link
 
-	// Buckets is how many usage samples the chart was drawn from. Zero means
-	// none were recorded, which the panel explains rather than drawing a flat
-	// line at zero.
-	Buckets int
+	// Buckets is how many usage samples the chart was drawn from.
+	Buckets     int
+	Unavailable bool
+}
+
+// Link is an outbound deep link.
+type Link struct {
+	Label string
+	Href  string
 }
 
 // JobListRow is one line of the Jobs table, with its display values resolved.
@@ -1284,24 +1388,22 @@ func (b *Builder) Job(ctx context.Context, id int, sig Signals, now time.Time) (
 	})
 	page.Tab = TabJobs
 
-	// The window is the job's own life, not the range picker's: a job is a
-	// bounded thing and its chart should show all of it, whatever window the
-	// operator was looking at when they clicked through. Points is capped the
-	// same way every other chart is, so a six-hour job renders as a readable
-	// line rather than three thousand coordinates.
+	// The job's own life, not the range picker's.
 	end := j.FinishedAt
 	if end.IsZero() {
 		end = now
 	}
 	win := Window{From: j.StartedAt, To: end.Add(time.Second), Points: 90}
-	series, _ := b.History.JobSeries(ctx, id, win)
+	series, seriesErr := b.History.JobSeries(ctx, j, win)
 
 	view := JobView{
-		Page:    page,
-		Job:     j,
-		Tiles:   jobTiles(j, now),
-		Facts:   jobFacts(j, now),
-		Buckets: series.Len(),
+		Page:        page,
+		Links:       b.jobLinks(j, end),
+		Unavailable: seriesErr != nil,
+		Job:         j,
+		Tiles:       jobTiles(j, now),
+		Facts:       jobFacts(j, now),
+		Buckets:     series.Len(),
 	}
 
 	ticks := jobTicks(j.Duration(now))
@@ -1387,7 +1489,7 @@ func jobListRow(j Job, now time.Time) JobListRow {
 		Duration: fleet.FormatAge(j.Duration(now)),
 		Started:  fleet.FormatRelative(j.StartedAt, now),
 		CPU:      CoreSeconds(j.CPUSeconds),
-		Mem:      GiBSeconds(j.MemGiBSecs),
+		Mem:      PeakBytes(j.MemPeakBytes),
 		Href:     fmt.Sprintf("/jobs/%d", j.ID),
 	}
 }
@@ -1401,7 +1503,7 @@ func workflowListRow(w WorkflowRun, now time.Time) WorkflowListRow {
 		Duration: fleet.FormatAge(w.Duration(now)),
 		Started:  fleet.FormatRelative(w.StartedAt, now),
 		CPU:      CoreSeconds(w.CPUSeconds),
-		Mem:      GiBSeconds(w.MemGiBSecs),
+		Mem:      PeakBytes(w.MemPeakBytes),
 	}
 
 	// A run ARC reported no id for cannot be addressed as a run, so the row
@@ -1417,26 +1519,27 @@ func workflowListRow(w WorkflowRun, now time.Time) WorkflowListRow {
 	return row
 }
 
-// JobTone colours a job by how it ended.
+// JobTone colours a job by its runner's outcome.
 func JobTone(j Job) Tone {
 	switch {
 	case j.Running():
 		return ToneAccent
-	case j.Succeeded:
-		return ToneSuccess
+	case j.RunnerFailed:
+		return ToneDanger
 	}
-	return ToneDanger
+	return ToneSuccess
 }
 
-// JobBadge labels a job by how it ended.
+// JobBadge names the runner outcome, never the job conclusion, which the
+// cluster cannot see: a failing test on a healthy runner is "runner ok".
 func JobBadge(j Job) string {
 	switch {
 	case j.Running():
 		return "running"
-	case j.Succeeded:
-		return "ok"
+	case j.RunnerFailed:
+		return "runner failed"
 	}
-	return "failed"
+	return "runner ok"
 }
 
 // RunTone colours a workflow run. A run with any failure is a failed run: the
@@ -1471,8 +1574,6 @@ func RunLabel(id int64) string {
 	return fmt.Sprintf("#%d", id)
 }
 
-// CoreSeconds renders integrated CPU cost, promoting to core-hours once
-// core-seconds stops being a number anyone can read at a glance.
 func CoreSeconds(v float64) string {
 	if v <= 0 {
 		return "—"
@@ -1483,15 +1584,12 @@ func CoreSeconds(v float64) string {
 	return fmt.Sprintf("%.1f core-h", v/3600)
 }
 
-// GiBSeconds renders integrated memory cost on the same scale.
-func GiBSeconds(v float64) string {
+// PeakBytes renders a peak working set, "—" when none was sampled.
+func PeakBytes(v float64) string {
 	if v <= 0 {
 		return "—"
 	}
-	if v < 3600 {
-		return fmt.Sprintf("%.0f GiB-s", v)
-	}
-	return fmt.Sprintf("%.1f GiB-h", v/3600)
+	return fleet.FormatGiB(v) + " peak"
 }
 
 // jobCrumb is the breadcrumb label for one job.
@@ -1502,47 +1600,93 @@ func jobCrumb(j Job) string {
 	return j.Workflow + " · " + Dash(j.Name)
 }
 
-// jobTiles is the KPI strip on the job detail page.
-//
-// The averages are derived from the integrated cost rather than from the
-// samples, because they are the only figures that survive for a job whose
-// samples have been swept: cost is a column on the job row, the series is not.
+// jobLinks are the GitHub run and, when configured, Grafana Explore on the
+// runner pod over the job's lifetime.
+func (b *Builder) jobLinks(j Job, end time.Time) []Link {
+	var out []Link
+	if j.Repository != "" && j.RunID > 0 {
+		base := strings.TrimRight(cmp.Or(b.GitHubURL, "https://github.com"), "/")
+		out = append(out, Link{
+			Label: "GitHub run",
+			Href:  fmt.Sprintf("%s/%s/actions/runs/%d", base, j.Repository, j.RunID),
+		})
+	}
+	if b.GrafanaURL != "" && j.Runner != "" {
+		out = append(out, Link{Label: "Grafana Explore", Href: b.exploreURL(j, end)})
+	}
+	return out
+}
+
+func (b *Builder) exploreURL(j Job, end time.Time) string {
+	selector := fmt.Sprintf(`pod=%q,container!=""`, j.Runner)
+	if j.Namespace != "" {
+		selector = fmt.Sprintf(`namespace=%q,`, j.Namespace) + selector
+	}
+	query := map[string]any{
+		"refId": "A",
+		"expr":  fmt.Sprintf(`sum by (container) (rate(container_cpu_usage_seconds_total{%s}[2m]))`, selector),
+	}
+	pane := map[string]any{
+		"queries": []any{query},
+		"range": map[string]string{
+			"from": strconv.FormatInt(j.StartedAt.Add(-time.Minute).UnixMilli(), 10),
+			"to":   strconv.FormatInt(end.Add(time.Minute).UnixMilli(), 10),
+		},
+	}
+	if b.GrafanaDatasource != "" {
+		pane["datasource"] = b.GrafanaDatasource
+		query["datasource"] = map[string]string{"type": "prometheus", "uid": b.GrafanaDatasource}
+	}
+	panes, _ := json.Marshal(map[string]any{"a": pane})
+	q := url.Values{}
+	q.Set("schemaVersion", "1")
+	q.Set("panes", string(panes))
+	return strings.TrimRight(b.GrafanaURL, "/") + "/explore?" + q.Encode()
+}
+
+// jobTiles is the KPI strip on the job detail page. The usage figures are
+// read from cAdvisor once, when the job closes.
 func jobTiles(j Job, now time.Time) []Tile {
 	d := j.Duration(now)
 	secs := d.Seconds()
 
-	cpu := Tile{Label: "avg cpu", Value: "—", Sub: "no cost recorded", Tone: ToneMuted}
+	missing := "no cAdvisor samples"
+	if j.Running() {
+		missing = "read when the job ends"
+	}
+	cpu := Tile{Label: "avg cpu", Value: "—", Sub: missing, Tone: ToneMuted}
 	if secs > 0 && j.CPUSeconds > 0 {
 		cpu = Tile{
 			Label: "avg cpu", Value: fleet.FormatCores(j.CPUSeconds / secs),
 			Sub: "cores over " + fleet.FormatAge(d), Tone: ToneCPU,
 		}
 	}
+	mem := Tile{Label: "peak memory", Value: "—", Sub: missing, Tone: ToneMuted}
+	if j.MemPeakBytes > 0 {
+		mem = Tile{Label: "peak memory", Value: fleet.FormatGiB(j.MemPeakBytes), Sub: "working set", Tone: ToneMemory}
+	}
 
-	mem := Tile{Label: "avg memory", Value: "—", Sub: "no cost recorded", Tone: ToneMuted}
-	if secs > 0 && j.MemGiBSecs > 0 {
-		mem = Tile{
-			Label: "avg memory", Value: fleet.FormatGiB(j.MemGiBSecs / secs * fleet.GiB),
-			Sub: "over " + fleet.FormatAge(d), Tone: ToneMemory,
-		}
+	used := Tile{Label: "cpu used", Value: CoreSeconds(j.CPUSeconds), Sub: "over the job", Tone: ToneCPU}
+	if j.CPUSeconds <= 0 {
+		used = Tile{Label: "cpu used", Value: "—", Sub: missing, Tone: ToneMuted}
 	}
 
 	return []Tile{
-		{Label: "outcome", Value: JobBadge(j), Sub: Dash(j.Repository), Tone: JobTone(j)},
+		{Label: "runner outcome", Value: JobBadge(j), Sub: Dash(j.Repository), Tone: JobTone(j)},
 		{Label: "duration", Value: fleet.FormatAge(d), Sub: "since " + fleet.FormatRelative(j.StartedAt, now), Tone: ToneAccent},
 		cpu,
 		mem,
-		{Label: "cpu cost", Value: CoreSeconds(j.CPUSeconds), Sub: "integrated", Tone: ToneCPU},
-		{Label: "memory cost", Value: GiBSeconds(j.MemGiBSecs), Sub: "integrated", Tone: ToneMemory},
+		used,
 	}
 }
 
-// jobFacts is the detail page's label/value panel.
 func jobFacts(j Job, now time.Time) []KV {
 	facts := []KV{
 		{Label: "repository", Value: Dash(j.Repository), Mono: true},
 		{Label: "workflow", Value: Dash(j.Workflow), Mono: true},
+		{Label: "workflow ref", Value: Dash(j.WorkflowRef), Mono: true},
 		{Label: "job", Value: Dash(j.Name)},
+		{Label: "job id", Value: Dash(j.JobID), Mono: true},
 		{Label: "run", Value: RunLabel(j.RunID), Mono: true},
 		{Label: "runner", Value: Dash(j.Runner), Mono: true},
 		{Label: "runnerset", Value: Dash(j.Set), Mono: true},
@@ -1551,10 +1695,14 @@ func jobFacts(j Job, now time.Time) []KV {
 	if j.Running() {
 		return append(facts, KV{Label: "finished", Value: "still running", Tone: ToneAccent})
 	}
-	return append(facts,
+	facts = append(facts,
 		KV{Label: "finished", Value: fleet.FormatRelative(j.FinishedAt, now), Mono: true},
-		KV{Label: "outcome", Value: JobBadge(j), Tone: JobTone(j)},
+		KV{Label: "runner outcome", Value: JobBadge(j), Tone: JobTone(j)},
 	)
+	if j.FailureReason != "" {
+		facts = append(facts, KV{Label: "failure", Value: j.FailureReason, Tone: ToneDanger, Mono: true})
+	}
+	return facts
 }
 
 // jobTicks labels a job chart's x-axis in elapsed time rather than in clock
@@ -1589,7 +1737,7 @@ func jobLine(
 	title string, vals []float64, ticks []string,
 	request, limit float64, stroke, fill string, tone Tone, format func(float64) string,
 ) LineChart {
-	if len(vals) == 0 {
+	if _, sampled := maxOf(vals); !sampled {
 		return LineChart{Title: title, Empty: true, Ticks: ticks}
 	}
 	peak := PeakOf(vals, []float64{request, limit})

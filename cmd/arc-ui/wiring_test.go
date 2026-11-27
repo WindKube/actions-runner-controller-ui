@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,7 +15,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"arc-ui/internal/config"
+	"arc-ui/internal/fleet"
+	"arc-ui/internal/prom"
+	"arc-ui/internal/promql"
+	"arc-ui/internal/store"
 )
 
 func TestLocalAddrMakesAWildcardBindDialable(t *testing.T) {
@@ -92,26 +97,87 @@ func TestVersionCommandPrintsTheStampedVersion(t *testing.T) {
 	assert.Equal(t, version+"\n", out.String())
 }
 
-func TestRetentionFromCarriesEveryWindow(t *testing.T) {
+type fakeJobStore struct {
+	mu     sync.Mutex
+	closed []store.JobRecord
+	usage  map[int][2]float64
+	stored chan int
+}
+
+func (f *fakeJobStore) Observe(context.Context, fleet.Snapshot) ([]store.JobRecord, error) {
+	return f.closed, nil
+}
+
+func (f *fakeJobStore) SetUsage(_ context.Context, id int, cpu, mem float64) error {
+	f.mu.Lock()
+	f.usage[id] = [2]float64{cpu, mem}
+	f.mu.Unlock()
+	f.stored <- id
+	return nil
+}
+
+// laggingQuerier has no samples for r1 until its third read, and never for r2.
+type laggingQuerier struct {
+	mu    sync.Mutex
+	reads int
+	at    []time.Time
+}
+
+func (l *laggingQuerier) QueryAt(_ context.Context, q string, at time.Time) ([]prom.Sample, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.at = append(l.at, at)
+	if !strings.Contains(q, `pod="r1"`) {
+		return nil, nil
+	}
+	l.reads++
+	if l.reads <= 4 {
+		return nil, nil
+	}
+	if strings.Contains(q, "cpu") {
+		return []prom.Sample{{Value: 42}}, nil
+	}
+	return []prom.Sample{{Value: 1 << 30}}, nil
+}
+
+func TestJobObserverRetriesUntilPrometheusHasTheJob(t *testing.T) {
 	t.Parallel()
 
-	// Six fields copied one by one, which is exactly the shape a mistake hides
-	// in: every duration here is distinct, so a crossed pair cannot pass.
-	ret := retentionFrom(config.Config{
-		RetentionRunnerRaw:  1 * time.Minute,
-		RetentionScopeRaw:   2 * time.Minute,
-		RetentionScope1m:    3 * time.Minute,
-		RetentionScope5m:    4 * time.Minute,
-		RetentionScope1h:    5 * time.Minute,
-		RetentionJobSamples: 6 * time.Minute,
-	})
+	finished := time.Now().Add(-10 * time.Minute)
+	db := &fakeJobStore{
+		closed: []store.JobRecord{
+			{ID: 7, Runner: "r1", StartedAt: finished.Add(-time.Minute), FinishedAt: finished},
+			{ID: 8, Runner: "r2", StartedAt: finished.Add(-time.Minute), FinishedAt: finished},
+		},
+		usage:  map[int][2]float64{},
+		stored: make(chan int, 2),
+	}
+	q := &laggingQuerier{}
+	delays := []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	observe := jobObserver(t.Context(), db, q, promql.Queries{}, time.Second, delays, zerolog.Nop())
+	require.NoError(t, observe(t.Context(), fleet.Snapshot{At: time.Now()}))
 
-	assert.Equal(t, 1*time.Minute, ret.RunnerRaw, "runner raw")
-	assert.Equal(t, 2*time.Minute, ret.ScopeRaw, "scope raw")
-	assert.Equal(t, 3*time.Minute, ret.Scope1m, "1m")
-	assert.Equal(t, 4*time.Minute, ret.Scope5m, "5m")
-	assert.Equal(t, 5*time.Minute, ret.Scope1h, "1h")
-	assert.Equal(t, 6*time.Minute, ret.JobSamples, "job samples")
+	select {
+	case id := <-db.stored:
+		assert.Equal(t, 7, id)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "usage was never stored")
+	}
+	db.mu.Lock()
+	assert.Equal(t, [2]float64{42, 1 << 30}, db.usage[7])
+	db.mu.Unlock()
+
+	select {
+	case id := <-db.stored:
+		assert.Failf(t, "an empty answer was stored", "job %d", id)
+	case <-time.After(50 * time.Millisecond):
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, at := range q.at {
+		assert.True(t, at.After(finished), "usage is read at the job's end, not now: %s", at)
+		assert.True(t, at.Before(finished.Add(2*time.Minute)))
+	}
 }
 
 func TestSuperviseReportsOnlyUnexpectedStops(t *testing.T) {

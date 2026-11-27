@@ -9,6 +9,7 @@
 package chart
 
 import (
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -93,7 +94,8 @@ func Stacked(values [][]float64, bands []Band, w, h, top, max float64) []Area {
 
 // Plot builds a line and the filled area beneath it. The series is compressed
 // by 18 units — zero sits 6 above the bottom edge, a full-scale value 12 below
-// the top — so a value at the maximum still shows its cap.
+// the top — so a value at the maximum still shows its cap. NaN marks a bucket
+// with no sample and is skipped.
 func Plot(vals []float64, w, h, max float64, fill, stroke string) Line {
 	if len(vals) == 0 || max <= 0 {
 		return Line{Fill: fill, Stroke: stroke}
@@ -101,15 +103,25 @@ func Plot(vals []float64, w, h, max float64, fill, stroke string) Line {
 
 	x := xScale(len(vals), w)
 	var sb strings.Builder
+	first, last := "", ""
 	for i, v := range vals {
-		writePoint(&sb, x(i), plotY(v, h, max))
+		if math.IsNaN(v) {
+			continue
+		}
+		if first == "" {
+			first = x(i)
+		}
+		last = x(i)
+		writePoint(&sb, last, plotY(v, h, max))
+	}
+	if first == "" {
+		return Line{Fill: fill, Stroke: stroke}
 	}
 	line := sb.String()
 
-	baseline := f1(0) + "," + f1(h)
 	return Line{
 		Points: line,
-		Area:   baseline + " " + line + " " + f1(w) + "," + f1(h),
+		Area:   first + "," + f1(h) + " " + line + " " + last + "," + f1(h),
 		Fill:   fill,
 		Stroke: stroke,
 	}

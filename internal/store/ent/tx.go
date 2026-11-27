@@ -12,16 +12,8 @@ import (
 // Tx is a transactional client that is created by calling Client.Tx().
 type Tx struct {
 	config
-	// ChurnEvent is the client for interacting with the ChurnEvent builders.
-	ChurnEvent *ChurnEventClient
-	// JobObservation is the client for interacting with the JobObservation builders.
-	JobObservation *JobObservationClient
-	// JobSample is the client for interacting with the JobSample builders.
-	JobSample *JobSampleClient
-	// RunnerFailure is the client for interacting with the RunnerFailure builders.
-	RunnerFailure *RunnerFailureClient
-	// Sample is the client for interacting with the Sample builders.
-	Sample *SampleClient
+	// Job is the client for interacting with the Job builders.
+	Job *JobClient
 
 	// lazily loaded.
 	client     *Client
@@ -153,11 +145,7 @@ func (tx *Tx) Client() *Client {
 }
 
 func (tx *Tx) init() {
-	tx.ChurnEvent = NewChurnEventClient(tx.config)
-	tx.JobObservation = NewJobObservationClient(tx.config)
-	tx.JobSample = NewJobSampleClient(tx.config)
-	tx.RunnerFailure = NewRunnerFailureClient(tx.config)
-	tx.Sample = NewSampleClient(tx.config)
+	tx.Job = NewJobClient(tx.config)
 }
 
 // txDriver wraps the given dialect.Tx with a nop dialect.Driver implementation.
@@ -167,7 +155,7 @@ func (tx *Tx) init() {
 // of them in order to commit or rollback the transaction.
 //
 // If a closed transaction is embedded in one of the generated entities, and the entity
-// applies a query, for example: ChurnEvent.QueryXXX(), the query will be executed
+// applies a query, for example: Job.QueryXXX(), the query will be executed
 // through the driver which created this transaction.
 //
 // Note that txDriver is not goroutine safe.

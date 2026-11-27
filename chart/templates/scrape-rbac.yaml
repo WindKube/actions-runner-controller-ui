@@ -1,0 +1,42 @@
+{{- $vm := index .Values "victoria-metrics-single" }}
+{{- $vmScrapes := include "arc-ui.vmScrapes" . }}
+{{- if or $vmScrapes .Values.collector.enabled }}
+# For the bundled scraper only. The kubelet authorizes /metrics/cadvisor as
+# nodes/metrics; nodes/proxy, which would also open exec through the kubelet,
+# is never granted.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "arc-ui.fullname" . }}-scrape
+  labels:
+    {{- include "arc-ui.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes, pods]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [nodes/metrics]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "arc-ui.fullname" . }}-scrape
+  labels:
+    {{- include "arc-ui.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "arc-ui.fullname" . }}-scrape
+subjects:
+  {{- if $vmScrapes }}
+  - kind: ServiceAccount
+    name: {{ $vm.serviceAccount.name }}
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+  {{- if .Values.collector.enabled }}
+  - kind: ServiceAccount
+    name: {{ .Values.collector.serviceAccount.name }}
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+{{- end }}

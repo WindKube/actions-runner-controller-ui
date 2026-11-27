@@ -3,11 +3,7 @@
 package ent
 
 import (
-	"arc-ui/internal/store/ent/churnevent"
-	"arc-ui/internal/store/ent/jobobservation"
-	"arc-ui/internal/store/ent/jobsample"
-	"arc-ui/internal/store/ent/runnerfailure"
-	"arc-ui/internal/store/ent/sample"
+	"arc-ui/internal/store/ent/job"
 	"arc-ui/internal/store/ent/schema"
 )
 
@@ -15,94 +11,78 @@ import (
 // (default values, validators, hooks and policies) and stitches it
 // to their package variables.
 func init() {
-	churneventFields := schema.ChurnEvent{}.Fields()
-	_ = churneventFields
-	// churneventDescSetName is the schema descriptor for set_name field.
-	churneventDescSetName := churneventFields[1].Descriptor()
-	// churnevent.DefaultSetName holds the default value on creation for the set_name field.
-	churnevent.DefaultSetName = churneventDescSetName.Default.(string)
-	jobobservationFields := schema.JobObservation{}.Fields()
-	_ = jobobservationFields
-	// jobobservationDescSetName is the schema descriptor for set_name field.
-	jobobservationDescSetName := jobobservationFields[1].Descriptor()
-	// jobobservation.DefaultSetName holds the default value on creation for the set_name field.
-	jobobservation.DefaultSetName = jobobservationDescSetName.Default.(string)
-	// jobobservationDescRepository is the schema descriptor for repository field.
-	jobobservationDescRepository := jobobservationFields[2].Descriptor()
-	// jobobservation.DefaultRepository holds the default value on creation for the repository field.
-	jobobservation.DefaultRepository = jobobservationDescRepository.Default.(string)
-	// jobobservationDescWorkflow is the schema descriptor for workflow field.
-	jobobservationDescWorkflow := jobobservationFields[3].Descriptor()
-	// jobobservation.DefaultWorkflow holds the default value on creation for the workflow field.
-	jobobservation.DefaultWorkflow = jobobservationDescWorkflow.Default.(string)
-	// jobobservationDescJobName is the schema descriptor for job_name field.
-	jobobservationDescJobName := jobobservationFields[4].Descriptor()
-	// jobobservation.DefaultJobName holds the default value on creation for the job_name field.
-	jobobservation.DefaultJobName = jobobservationDescJobName.Default.(string)
-	// jobobservationDescRunID is the schema descriptor for run_id field.
-	jobobservationDescRunID := jobobservationFields[5].Descriptor()
-	// jobobservation.DefaultRunID holds the default value on creation for the run_id field.
-	jobobservation.DefaultRunID = jobobservationDescRunID.Default.(int64)
-	// jobobservationDescFinishedAt is the schema descriptor for finished_at field.
-	jobobservationDescFinishedAt := jobobservationFields[7].Descriptor()
-	// jobobservation.DefaultFinishedAt holds the default value on creation for the finished_at field.
-	jobobservation.DefaultFinishedAt = jobobservationDescFinishedAt.Default.(int64)
-	// jobobservationDescSucceeded is the schema descriptor for succeeded field.
-	jobobservationDescSucceeded := jobobservationFields[8].Descriptor()
-	// jobobservation.DefaultSucceeded holds the default value on creation for the succeeded field.
-	jobobservation.DefaultSucceeded = jobobservationDescSucceeded.Default.(bool)
-	// jobobservationDescCPUSeconds is the schema descriptor for cpu_seconds field.
-	jobobservationDescCPUSeconds := jobobservationFields[9].Descriptor()
-	// jobobservation.DefaultCPUSeconds holds the default value on creation for the cpu_seconds field.
-	jobobservation.DefaultCPUSeconds = jobobservationDescCPUSeconds.Default.(float64)
-	// jobobservationDescMemByteSeconds is the schema descriptor for mem_byte_seconds field.
-	jobobservationDescMemByteSeconds := jobobservationFields[10].Descriptor()
-	// jobobservation.DefaultMemByteSeconds holds the default value on creation for the mem_byte_seconds field.
-	jobobservation.DefaultMemByteSeconds = jobobservationDescMemByteSeconds.Default.(float64)
-	// jobobservationDescCPURequest is the schema descriptor for cpu_request field.
-	jobobservationDescCPURequest := jobobservationFields[11].Descriptor()
-	// jobobservation.DefaultCPURequest holds the default value on creation for the cpu_request field.
-	jobobservation.DefaultCPURequest = jobobservationDescCPURequest.Default.(float64)
-	// jobobservationDescCPULimit is the schema descriptor for cpu_limit field.
-	jobobservationDescCPULimit := jobobservationFields[12].Descriptor()
-	// jobobservation.DefaultCPULimit holds the default value on creation for the cpu_limit field.
-	jobobservation.DefaultCPULimit = jobobservationDescCPULimit.Default.(float64)
-	// jobobservationDescMemRequest is the schema descriptor for mem_request field.
-	jobobservationDescMemRequest := jobobservationFields[13].Descriptor()
-	// jobobservation.DefaultMemRequest holds the default value on creation for the mem_request field.
-	jobobservation.DefaultMemRequest = jobobservationDescMemRequest.Default.(float64)
-	// jobobservationDescMemLimit is the schema descriptor for mem_limit field.
-	jobobservationDescMemLimit := jobobservationFields[14].Descriptor()
-	// jobobservation.DefaultMemLimit holds the default value on creation for the mem_limit field.
-	jobobservation.DefaultMemLimit = jobobservationDescMemLimit.Default.(float64)
-	jobsampleFields := schema.JobSample{}.Fields()
-	_ = jobsampleFields
-	// jobsampleDescCPUCores is the schema descriptor for cpu_cores field.
-	jobsampleDescCPUCores := jobsampleFields[2].Descriptor()
-	// jobsample.DefaultCPUCores holds the default value on creation for the cpu_cores field.
-	jobsample.DefaultCPUCores = jobsampleDescCPUCores.Default.(float64)
-	// jobsampleDescMemBytes is the schema descriptor for mem_bytes field.
-	jobsampleDescMemBytes := jobsampleFields[3].Descriptor()
-	// jobsample.DefaultMemBytes holds the default value on creation for the mem_bytes field.
-	jobsample.DefaultMemBytes = jobsampleDescMemBytes.Default.(float64)
-	// jobsampleDescSamples is the schema descriptor for samples field.
-	jobsampleDescSamples := jobsampleFields[4].Descriptor()
-	// jobsample.DefaultSamples holds the default value on creation for the samples field.
-	jobsample.DefaultSamples = jobsampleDescSamples.Default.(int)
-	runnerfailureFields := schema.RunnerFailure{}.Fields()
-	_ = runnerfailureFields
-	// runnerfailureDescSetName is the schema descriptor for set_name field.
-	runnerfailureDescSetName := runnerfailureFields[1].Descriptor()
-	// runnerfailure.DefaultSetName holds the default value on creation for the set_name field.
-	runnerfailure.DefaultSetName = runnerfailureDescSetName.Default.(string)
-	// runnerfailureDescSevere is the schema descriptor for severe field.
-	runnerfailureDescSevere := runnerfailureFields[3].Descriptor()
-	// runnerfailure.DefaultSevere holds the default value on creation for the severe field.
-	runnerfailure.DefaultSevere = runnerfailureDescSevere.Default.(bool)
-	sampleFields := schema.Sample{}.Fields()
-	_ = sampleFields
-	// sampleDescScopeID is the schema descriptor for scope_id field.
-	sampleDescScopeID := sampleFields[2].Descriptor()
-	// sample.DefaultScopeID holds the default value on creation for the scope_id field.
-	sample.DefaultScopeID = sampleDescScopeID.Default.(string)
+	jobFields := schema.Job{}.Fields()
+	_ = jobFields
+	// jobDescWorkflowRunID is the schema descriptor for workflow_run_id field.
+	jobDescWorkflowRunID := jobFields[1].Descriptor()
+	// job.DefaultWorkflowRunID holds the default value on creation for the workflow_run_id field.
+	job.DefaultWorkflowRunID = jobDescWorkflowRunID.Default.(int64)
+	// jobDescRepository is the schema descriptor for repository field.
+	jobDescRepository := jobFields[2].Descriptor()
+	// job.DefaultRepository holds the default value on creation for the repository field.
+	job.DefaultRepository = jobDescRepository.Default.(string)
+	// jobDescWorkflowRef is the schema descriptor for workflow_ref field.
+	jobDescWorkflowRef := jobFields[3].Descriptor()
+	// job.DefaultWorkflowRef holds the default value on creation for the workflow_ref field.
+	job.DefaultWorkflowRef = jobDescWorkflowRef.Default.(string)
+	// jobDescWorkflow is the schema descriptor for workflow field.
+	jobDescWorkflow := jobFields[4].Descriptor()
+	// job.DefaultWorkflow holds the default value on creation for the workflow field.
+	job.DefaultWorkflow = jobDescWorkflow.Default.(string)
+	// jobDescName is the schema descriptor for name field.
+	jobDescName := jobFields[5].Descriptor()
+	// job.DefaultName holds the default value on creation for the name field.
+	job.DefaultName = jobDescName.Default.(string)
+	// jobDescRunner is the schema descriptor for runner field.
+	jobDescRunner := jobFields[6].Descriptor()
+	// job.DefaultRunner holds the default value on creation for the runner field.
+	job.DefaultRunner = jobDescRunner.Default.(string)
+	// jobDescNamespace is the schema descriptor for namespace field.
+	jobDescNamespace := jobFields[7].Descriptor()
+	// job.DefaultNamespace holds the default value on creation for the namespace field.
+	job.DefaultNamespace = jobDescNamespace.Default.(string)
+	// jobDescScaleSet is the schema descriptor for scale_set field.
+	jobDescScaleSet := jobFields[8].Descriptor()
+	// job.DefaultScaleSet holds the default value on creation for the scale_set field.
+	job.DefaultScaleSet = jobDescScaleSet.Default.(string)
+	// jobDescFinishedAt is the schema descriptor for finished_at field.
+	jobDescFinishedAt := jobFields[10].Descriptor()
+	// job.DefaultFinishedAt holds the default value on creation for the finished_at field.
+	job.DefaultFinishedAt = jobDescFinishedAt.Default.(int64)
+	// jobDescLastSeenAt is the schema descriptor for last_seen_at field.
+	jobDescLastSeenAt := jobFields[11].Descriptor()
+	// job.DefaultLastSeenAt holds the default value on creation for the last_seen_at field.
+	job.DefaultLastSeenAt = jobDescLastSeenAt.Default.(int64)
+	// jobDescOutcome is the schema descriptor for outcome field.
+	jobDescOutcome := jobFields[12].Descriptor()
+	// job.DefaultOutcome holds the default value on creation for the outcome field.
+	job.DefaultOutcome = jobDescOutcome.Default.(string)
+	// jobDescFailureReason is the schema descriptor for failure_reason field.
+	jobDescFailureReason := jobFields[13].Descriptor()
+	// job.DefaultFailureReason holds the default value on creation for the failure_reason field.
+	job.DefaultFailureReason = jobDescFailureReason.Default.(string)
+	// jobDescCPUSeconds is the schema descriptor for cpu_seconds field.
+	jobDescCPUSeconds := jobFields[14].Descriptor()
+	// job.DefaultCPUSeconds holds the default value on creation for the cpu_seconds field.
+	job.DefaultCPUSeconds = jobDescCPUSeconds.Default.(float64)
+	// jobDescMemPeakBytes is the schema descriptor for mem_peak_bytes field.
+	jobDescMemPeakBytes := jobFields[15].Descriptor()
+	// job.DefaultMemPeakBytes holds the default value on creation for the mem_peak_bytes field.
+	job.DefaultMemPeakBytes = jobDescMemPeakBytes.Default.(float64)
+	// jobDescCPURequest is the schema descriptor for cpu_request field.
+	jobDescCPURequest := jobFields[16].Descriptor()
+	// job.DefaultCPURequest holds the default value on creation for the cpu_request field.
+	job.DefaultCPURequest = jobDescCPURequest.Default.(float64)
+	// jobDescCPULimit is the schema descriptor for cpu_limit field.
+	jobDescCPULimit := jobFields[17].Descriptor()
+	// job.DefaultCPULimit holds the default value on creation for the cpu_limit field.
+	job.DefaultCPULimit = jobDescCPULimit.Default.(float64)
+	// jobDescMemRequest is the schema descriptor for mem_request field.
+	jobDescMemRequest := jobFields[18].Descriptor()
+	// job.DefaultMemRequest holds the default value on creation for the mem_request field.
+	job.DefaultMemRequest = jobDescMemRequest.Default.(float64)
+	// jobDescMemLimit is the schema descriptor for mem_limit field.
+	jobDescMemLimit := jobFields[19].Descriptor()
+	// job.DefaultMemLimit holds the default value on creation for the mem_limit field.
+	job.DefaultMemLimit = jobDescMemLimit.Default.(float64)
 }

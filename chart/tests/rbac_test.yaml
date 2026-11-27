@@ -15,6 +15,19 @@ suite: rbac
 templates:
   - rbac.yaml
 tests:
+  - it: grants reads on ARC, pods and events only
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["actions.github.com"]
+              resources: [autoscalingrunnersets, ephemeralrunnersets, ephemeralrunners, autoscalinglisteners]
+              verbs: [get, list, watch]
+            - apiGroups: [""]
+              resources: [pods, events]
+              verbs: [get, list, watch]
+        documentIndex: 0
+
   - it: binds cluster-wide by default
     asserts:
       - hasDocuments:

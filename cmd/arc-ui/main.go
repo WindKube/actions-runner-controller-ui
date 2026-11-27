@@ -18,15 +18,17 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/types"
 
+	"arc-ui/internal/alert"
 	"arc-ui/internal/api"
+	"arc-ui/internal/appmetrics"
 	"arc-ui/internal/config"
 	"arc-ui/internal/fleet"
 	"arc-ui/internal/history"
 	"arc-ui/internal/hub"
 	"arc-ui/internal/k8s"
-	"arc-ui/internal/listener"
 	"arc-ui/internal/logging"
-	"arc-ui/internal/metrics"
+	"arc-ui/internal/prom"
+	"arc-ui/internal/promql"
 	"arc-ui/internal/store"
 	"arc-ui/internal/telemetry"
 	"arc-ui/internal/web"
@@ -170,8 +172,7 @@ func run(parent context.Context) error {
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	db, err := store.Open(ctx, cfg.DBPath, log,
-		store.WithJobSampleResolution(cfg.JobSampleResolution))
+	db, err := store.Open(ctx, cfg.DBPath, log)
 	if err != nil {
 		return err
 	}
@@ -193,36 +194,33 @@ func run(parent context.Context) error {
 
 	events := hub.New()
 
-	poller := metrics.NewPoller(clients.Metrics, cfg.Namespaces, cfg.ScrapeInterval, log, collector)
-	go supervise(ctx, log, "metrics poller", poller.Run)
-
-	// A configured URL wins: it names one endpoint, which is what an operator pointing
-	// the dashboard at an aggregator has asked for. With nothing configured the
-	// listener pods are discovered from the controller namespace, because ARC runs one
-	// listener per scale set and each serves only its own series.
-	scraper := listener.NewDiscoveringScraper(collector, cfg.ScrapeInterval, log, collector)
-	if cfg.ListenerMetricsURL != "" {
-		scraper = listener.NewScraper(cfg.ListenerMetricsURL, cfg.ScrapeInterval, log, collector)
+	promClient, err := prom.New(promConfig(cfg))
+	if err != nil {
+		return err
 	}
-	go supervise(ctx, log, "listener scraper", scraper.Run)
+	queries := promql.Queries{Schema: promSchema(cfg)}
+	streams := web.NewStreamRegistry()
+	alerts := &alert.Engine{
+		Rules:    alertRules(cfg, collector, db, promClient, queries),
+		Interval: cfg.RefreshInterval,
+		OnChange: func() { events.Broadcast(time.Now()) },
+		Log:      log,
+	}
+	metrics := appmetrics.New(streams.Len, alerts.State)
+	promClient.Observe(metrics.ObservePrometheus)
 
-	// Fleet changes are handed to the recorder, which persists each snapshot for the
-	// history charts and then ticks the hub so connected browsers re-render. What is
-	// guaranteed is ordering, not that every change gets both: the worker applies
-	// snapshots one at a time in the order this callback observed them, but a change
-	// superseded while a write is in flight is dropped whole, because the snapshot
-	// that replaced it is about to be recorded and ticked in its place.
-	//
-	// The tick is sent after the write returns, and announces only that a newer
-	// snapshot exists. It carries no fleet data, and it goes out even when the write
-	// failed, deliberately, so a broken store does not freeze the dashboard.
-	//
-	// The snapshot is taken here rather than in the worker: this runs the instant the
-	// debounce fires, so its timestamp is when the change was observed rather than
-	// whenever the write queue got to it. That also keeps the slow half — the write —
-	// off the collector's notifier goroutine this callback runs on.
+	prober := prom.NewProber(promClient, queries.Schema, cfg.PrometheusProbeInterval, collector, log)
+	go supervise(ctx, log, "prometheus probe", prober.Run)
+
+	live := promql.Live{Client: promClient, Queries: queries, Interval: cfg.RefreshInterval, Sink: collector, Log: log}
+	go supervise(ctx, log, "live prometheus readings", live.Run)
+
+	// Each fleet change is written to the job store, then ticks the hub so
+	// browsers re-render. A change superseded while a write is in flight is
+	// dropped for its successor; the tick goes out even when the write failed,
+	// so a broken store never freezes the dashboard.
 	recorder := startSnapshotRecorder(ctx,
-		db.RecordSnapshot,
+		jobObserver(ctx, db, promClient, queries, cfg.PrometheusTimeout, usageDelays, log),
 		events.Broadcast,
 		func(err error) {
 			if err != nil {
@@ -235,7 +233,8 @@ func run(parent context.Context) error {
 	cancelWatch := collector.OnChange(func() { recorder.enqueue(collector.Snapshot()) })
 	defer cancelWatch()
 
-	go runCompactor(ctx, db, retentionFrom(cfg), log)
+	go runPruner(ctx, db, cfg.JobRetention, log)
+	go supervise(ctx, log, "alerts", alerts.Run)
 
 	assets, err := web.NewAssets()
 	if err != nil {
@@ -245,17 +244,22 @@ func run(parent context.Context) error {
 	handler := &web.Handler{
 		Builder: &web.Builder{
 			Fleet:    collector,
-			History:  history.New(db),
+			History:  promql.History{Rest: history.New(db), Client: promClient, Queries: queries},
 			Version:  version,
-			Interval: cfg.ScrapeInterval,
-			CSS:      assets.CSS(),
-			JS:       assets.JS(),
+			Interval: cfg.RefreshInterval,
+
+			GitHubURL:         cfg.GitHubURL,
+			GrafanaURL:        cfg.GrafanaURL,
+			GrafanaDatasource: cfg.GrafanaDatasource,
+			Alerts:            alerts,
+			CSS:               assets.CSS(),
+			JS:                assets.JS(),
 		},
 		Hub:       events,
 		Log:       log,
 		Events:    eventSource{collector},
-		Heartbeat: cfg.ScrapeInterval,
-		Streams:   web.NewStreamRegistry(),
+		Heartbeat: cfg.RefreshInterval,
+		Streams:   streams,
 	}
 
 	server := api.New(api.Options{
@@ -263,6 +267,7 @@ func run(parent context.Context) error {
 		Log:     log,
 		Handler: handler,
 		Assets:  assets,
+		Metrics: metrics.Handler(),
 		Ready: map[string]api.Checker{
 			// HasSynced, never WaitForCacheSync: the latter blocks, and a probe
 			// that blocks reads to the kubelet as a probe that failed.
@@ -447,22 +452,83 @@ func supervise(ctx context.Context, log zerolog.Logger, name string, run func(co
 	}
 }
 
-// compactInterval is how often roll-ups and retention run.
-//
-// It is a minute because the store answers a range query from exactly one tier,
-// and the default one-hour view resolves to the one-minute tier. Compacting every
-// ten minutes would leave that chart visibly missing its last ten minutes. Each
-// pass is incremental, so running it often is cheap.
-const compactInterval = time.Minute
+// jobStore is what the observer writes to.
+type jobStore interface {
+	Observe(ctx context.Context, snap fleet.Snapshot) ([]store.JobRecord, error)
+	SetUsage(ctx context.Context, id int, cpuSeconds, memPeak float64) error
+}
 
-// runCompactor rolls samples up and applies retention until ctx ends.
-func runCompactor(ctx context.Context, db *store.Store, ret store.Retention, log zerolog.Logger) {
-	ticker := time.NewTicker(compactInterval)
+// jobObserver records each snapshot's jobs, then reads closed jobs' usage from
+// cAdvisor off the recorder's path so a slow Prometheus never delays a render.
+// usageDelays are the waits before each read of a closed job's usage. The
+// first gives remote-write and ingestion a few scrapes to catch up.
+var usageDelays = []time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute}
+
+func jobObserver(ctx context.Context, db jobStore, c promql.InstantQuerier, q promql.Queries, timeout time.Duration, delays []time.Duration, log zerolog.Logger) func(context.Context, fleet.Snapshot) error {
+	return func(octx context.Context, snap fleet.Snapshot) error {
+		closed, err := db.Observe(octx, snap)
+		if err != nil || len(closed) == 0 {
+			return err
+		}
+		go func() {
+			pending := closed
+			for _, d := range delays {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(d):
+				}
+				pending = readUsage(ctx, db, c, q, timeout, pending, log)
+				if len(pending) == 0 {
+					return
+				}
+			}
+			for _, j := range pending {
+				log.Debug().Str("job", j.JobID).Msg("job usage unavailable; leaving it unset")
+			}
+		}()
+		return nil
+	}
+}
+
+// readUsage stores the usage of each job Prometheus can answer for and returns
+// the rest.
+func readUsage(ctx context.Context, db jobStore, c promql.InstantQuerier, q promql.Queries, timeout time.Duration, jobs []store.JobRecord, log zerolog.Logger) []store.JobRecord {
+	var retry []store.JobRecord
+	for _, j := range jobs {
+		qctx, cancel := context.WithTimeout(ctx, timeout)
+		cpu, mem, err := promql.JobUsage(qctx, c, q, j.Runner, j.StartedAt, j.FinishedAt)
+		cancel()
+		if err != nil {
+			retry = append(retry, j)
+			continue
+		}
+		if err := db.SetUsage(ctx, j.ID, cpu, mem); err != nil {
+			log.Warn().Err(err).Str("job", j.JobID).Msg("store job usage")
+		}
+	}
+	return retry
+}
+
+func alertRules(cfg config.Config, f alert.Snapshotter, db alert.FailureStore, q alert.Querier, queries promql.Queries) []alert.Rule {
+	return []alert.Rule{
+		alert.QueuedAtMax(f, cfg.AlertQueuedAtMaxFor),
+		alert.ListenerDown(f, cfg.AlertListenerDownFor),
+		alert.OOMKilled(f, db, cfg.AlertOOMWindow),
+		alert.FailedRising(f, q, queries.FailedRunnersIncrease(cfg.AlertFailedRunnersWindow), cfg.AlertFailedRunnersRise, cfg.AlertFailedRunnersWindow),
+		alert.StartupP95(f, q, queries.StartupP95(cfg.AlertStartupWindow), queries.Schema.ScaleSetLabel, cfg.AlertStartupP95, cfg.AlertStartupWindow),
+	}
+}
+
+// runPruner applies job retention hourly until ctx ends.
+func runPruner(ctx context.Context, db *store.Store, retention time.Duration, log zerolog.Logger) {
+	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
-
 	for {
-		if err := db.Compact(ctx, time.Now(), ret); err != nil && ctx.Err() == nil {
-			log.Warn().Err(err).Msg("compaction failed; retrying next tick")
+		if n, err := db.Prune(ctx, time.Now().Add(-retention)); err != nil && ctx.Err() == nil {
+			log.Warn().Err(err).Msg("job retention failed; retrying next hour")
+		} else if n > 0 {
+			log.Info().Int("jobs", n).Msg("pruned jobs past retention")
 		}
 		select {
 		case <-ctx.Done():
@@ -472,14 +538,26 @@ func runCompactor(ctx context.Context, db *store.Store, ret store.Retention, log
 	}
 }
 
-func retentionFrom(cfg config.Config) store.Retention {
-	return store.Retention{
-		RunnerRaw:  cfg.RetentionRunnerRaw,
-		ScopeRaw:   cfg.RetentionScopeRaw,
-		Scope1m:    cfg.RetentionScope1m,
-		Scope5m:    cfg.RetentionScope5m,
-		Scope1h:    cfg.RetentionScope1h,
-		JobSamples: cfg.RetentionJobSamples,
+func promConfig(cfg config.Config) prom.Config {
+	return prom.Config{
+		URL:                cfg.PrometheusURL,
+		BearerToken:        cfg.PrometheusBearerToken,
+		BearerTokenFile:    cfg.PrometheusBearerTokenFile,
+		Username:           cfg.PrometheusUsername,
+		Password:           cfg.PrometheusPassword,
+		Headers:            cfg.PrometheusHeaders,
+		CAFile:             cfg.PrometheusCAFile,
+		InsecureSkipVerify: cfg.PrometheusInsecureSkipVerify,
+		Timeout:            cfg.PrometheusTimeout,
+		CacheTTL:           cfg.RefreshInterval,
+	}
+}
+
+func promSchema(cfg config.Config) prom.Schema {
+	return prom.Schema{
+		ScaleSetLabel:    cfg.PrometheusScaleSetLabel,
+		KSMScaleSetLabel: cfg.PrometheusKSMScaleSetLabel,
+		RunnerNamespaces: cfg.Namespaces,
 	}
 }
 

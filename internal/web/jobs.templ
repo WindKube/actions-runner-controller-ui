@@ -194,6 +194,14 @@ templ JobPage(v JobView) {
 		@Pill(JobTone(v.Job), JobBadge(v.Job))
 		<span class="text-[11px] text-fg-subtle font-mono">{ Dash(v.Job.Workflow) } · { RunLabel(v.Job.RunID) }</span>
 		<div class="flex-1"></div>
+		for _, l := range v.Links {
+			<a
+				href={ templ.SafeURL(l.Href) }
+				target="_blank"
+				rel="noopener noreferrer"
+				class="h-[28px] inline-flex items-center px-2.5 rounded-md border border-default text-[11px] text-fg-muted hover:text-fg hover:bg-inset"
+			>{ l.Label } ↗</a>
+		}
 		<a
 			href={ templ.SafeURL("/jobs?repo=" + v.Job.Repository) }
 			class="h-[28px] inline-flex items-center px-2.5 rounded-md border border-default text-[11px] text-fg-muted hover:text-fg hover:bg-inset"
@@ -217,16 +225,13 @@ templ JobTiles(v JobView) {
 	</section>
 }
 
-// JobResources is the job's own CPU and memory usage over its lifetime.
-//
-// The empty state is the whole reason per-job sampling exists, so it explains
-// itself rather than showing a blank chart: a job that ran before sampling was
-// switched on, or whose samples have aged out, is a different thing from one
-// that used no CPU.
+// JobResources is the runner pod's cAdvisor usage over the job's lifetime.
 templ JobResources(v JobView) {
 	@Card("resources", "resource usage", jobChartSubtitle(v)) {
-		if v.Buckets == 0 {
-			@Empty("no resource samples recorded for this job")
+		if v.Unavailable {
+			@Unavailable()
+		} else if v.Buckets == 0 {
+			@Empty("cAdvisor has no samples for this runner pod")
 		} else {
 			@ResourcePair(v.CPU, v.Mem)
 		}
