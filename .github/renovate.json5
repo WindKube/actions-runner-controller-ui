@@ -43,6 +43,8 @@
     {
       matchDepNames: ["ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller"],
       addLabels: ["arc"],
+      // arc-version holds a bare version; there is no digest to pin.
+      pinDigests: false,
       // The supported window is the pinned minor and the one before, so a minor
       // bump drops a version users may still run. Never merged unreviewed.
       automerge: false,

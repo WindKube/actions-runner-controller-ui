@@ -139,7 +139,7 @@ tasks:
       - go test -race -count=1 ./...
 
   preview:
-    desc: Render the every view to docs/screenshots as standalone HTML
+    desc: Render every view to docs/screenshots as standalone HTML
     deps: [gen]
     cmds:
       # The test's working directory is internal/web, so the output path has to

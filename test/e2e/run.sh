@@ -14,8 +14,9 @@ step() { printf '\n== %s\n' "$*"; }
 
 pids=()
 cleanup() {
+  local rc=$?
   for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done
-  if [[ -n "${failed:-}" ]]; then
+  if (( rc != 0 )); then
     kubectl get pods -A -o wide || true
     kubectl get autoscalingrunnersets -A -o yaml || true
     kubectl -n "$ns" logs deploy/arc-gha-rs-controller --tail=60 || true
@@ -23,7 +24,6 @@ cleanup() {
     kubectl -n "$ns" describe pods || true
   fi
 }
-trap 'failed=1' ERR
 trap cleanup EXIT
 
 forward() {
