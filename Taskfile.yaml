@@ -139,7 +139,7 @@ tasks:
       - go test -race -count=1 ./...
 
   preview:
-    desc: Render the three views to docs/screenshots as standalone HTML
+    desc: Render the every view to docs/screenshots as standalone HTML
     deps: [gen]
     cmds:
       # The test's working directory is internal/web, so the output path has to
@@ -257,6 +257,13 @@ tasks:
     deps: [helm:deps]
     cmds:
       - helm template {{.BIN}} chart/ --set prometheus.url=http://prometheus:9090
+
+  e2e:
+    desc: Run test/e2e/run.sh in a throwaway kind cluster (needs docker and kind)
+    cmds:
+      - kind create cluster --name arc-ui-e2e
+      - defer: kind delete cluster --name arc-ui-e2e
+      - KIND_CLUSTER=arc-ui-e2e test/e2e/run.sh
 
   clean:
     desc: Remove build artefacts and generated files

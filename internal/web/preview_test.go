@@ -13,18 +13,12 @@ import (
 	"github.com/a-h/templ"
 	"github.com/stretchr/testify/require"
 
+	"arc-ui/internal/alert"
 	"arc-ui/internal/fleet"
 )
 
-// TestWritePreview renders all three views to standalone HTML files.
-//
-// It exists because the charts are server-computed SVG: their geometry is
-// decided in Go, so the only way to see whether a chart is right is to look at
-// one. Set ARC_UI_PREVIEW_DIR to a directory and run:
-//
-//	go test ./internal/web -run TestWritePreview
-//
-// The CSS is inlined so the files open straight from disk with no server.
+// TestWritePreview renders every view from fixtures to standalone HTML, with the
+// CSS inlined. Set ARC_UI_PREVIEW_DIR to enable it.
 func TestWritePreview(t *testing.T) {
 	dir := os.Getenv("ARC_UI_PREVIEW_DIR")
 	if dir == "" {
@@ -37,12 +31,11 @@ func TestWritePreview(t *testing.T) {
 	b := &Builder{
 		Fleet:    SnapshotFunc(previewSnapshot),
 		History:  previewHistory{},
+		Alerts:   previewAlerts(),
 		Version:  "preview",
 		Interval: 15 * time.Second,
-		// Only needs to be a stable string for write() to match on — the link is swapped
-		// for an inline <style> there. JS is deliberately left unset: the layout omits the
-		// module script entirely when Page.JS is empty, and an empty src= would resolve to
-		// the page itself and make the browser parse this HTML as a module.
+		// write() swaps this link for an inline <style>. JS stays unset: an empty
+		// src= would make the browser load this page as a module.
 		CSS: "/static/app.css",
 	}
 	ctx := context.Background()
@@ -74,6 +67,33 @@ func TestWritePreview(t *testing.T) {
 	require.True(t, ok, "preview job missing")
 	job.Stream = fmt.Sprintf("/stream/jobs/%d", previewJobID)
 	write(t, dir, "job.html", css, job.Page, JobPage(job))
+
+	alerts := b.AlertsPage(ctx, sig, previewNow)
+	alerts.Stream = "/stream/alerts"
+	write(t, dir, "alerts.html", css, alerts.Page, AlertsPage(alerts))
+}
+
+// previewAlerts fired long enough ago that no toast covers the screenshots.
+func previewAlerts() fixedAlerts {
+	ago := func(d time.Duration) time.Time { return previewNow.Add(-d) }
+	return fixedAlerts{
+		Evaluated: ago(4 * time.Second),
+		Firing: []alert.Alert{
+			{Rule: "queued-at-max", Title: "jobs queued at max runners", Severity: alert.Warning, Set: "arc-ubuntu-small",
+				Message: "6 jobs queued with 12/12 runners", Since: ago(28 * time.Minute), FiredAt: ago(18 * time.Minute)},
+		},
+		Resolved: []alert.Alert{
+			{Rule: "oom-killed", Title: "runners OOMKilled", Severity: alert.Warning, Set: "arc-arm64",
+				Message: "1 runners OOMKilled in the last 1h", Since: ago(3 * time.Hour), FiredAt: ago(3 * time.Hour), ResolvedAt: ago(2 * time.Hour)},
+		},
+		Rules: []alert.RuleStatus{
+			{ID: "queued-at-max", Title: "jobs queued at max runners", Severity: alert.Warning, Threshold: "queued > 0 at max runners for 10m", Firing: 1},
+			{ID: "listener-down", Title: "listener down", Severity: alert.Critical, Threshold: "not running for 2m"},
+			{ID: "oom-killed", Title: "runners OOMKilled", Severity: alert.Warning, Threshold: "any in the last 1h"},
+			{ID: "failed-runners-rising", Title: "failed runners rising", Severity: alert.Warning, Threshold: "+3 in 15m"},
+			{ID: "startup-p95", Title: "slow job startup", Severity: alert.Warning, Threshold: "p95 > 2m over 30m"},
+		},
+	}
 }
 
 // previewJobID is the job the detail preview renders — the one with a full

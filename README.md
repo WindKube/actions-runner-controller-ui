@@ -3,15 +3,15 @@
 # Actions Runner Controller UI
 
 **A read-only dashboard for [GitHub Actions Runner Controller][arc] — what every
-runner in the fleet is doing right now, what it cost, and what happened an hour
+runner in the fleet is doing right now, what it used, and what happened an hour
 ago.**
 
-[![CI](https://github.com/WindKube/actions-runners-controller-ui/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WindKube/actions-runners-controller-ui/actions/workflows/ci.yml)
-[![Latest release](https://img.shields.io/github/v/release/WindKube/actions-runners-controller-ui?sort=semver&color=3fb950)](https://github.com/WindKube/actions-runners-controller-ui/releases/latest)
-[![Container image](https://img.shields.io/badge/ghcr.io-actions--runner--controller--ui-2496ed?logo=docker&logoColor=white)](https://github.com/WindKube/actions-runners-controller-ui/pkgs/container/actions-runner-controller-ui)
-[![Go](https://img.shields.io/github/go-mod/go-version/WindKube/actions-runners-controller-ui?logo=go&logoColor=white)](go.mod)
+[![CI](https://github.com/WindKube/actions-runner-controller-ui/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/WindKube/actions-runner-controller-ui/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/WindKube/actions-runner-controller-ui?sort=semver&color=3fb950)](https://github.com/WindKube/actions-runner-controller-ui/releases/latest)
+[![Container image](https://img.shields.io/badge/ghcr.io-actions--runner--controller--ui-2496ed?logo=docker&logoColor=white)](https://github.com/WindKube/actions-runner-controller-ui/pkgs/container/actions-runner-controller-ui)
+[![Go](https://img.shields.io/github/go-mod/go-version/WindKube/actions-runner-controller-ui?logo=go&logoColor=white)](go.mod)
 [![Cluster access](https://img.shields.io/badge/cluster%20access-read--only-8957e5)](#rbac)
-[![License](https://img.shields.io/github/license/WindKube/actions-runners-controller-ui?color=blue)](LICENSE)
+[![License](https://img.shields.io/github/license/WindKube/actions-runner-controller-ui?color=blue)](LICENSE)
 
 </div>
 
@@ -63,17 +63,18 @@ off it simply does not leave a connection behind.
 
 ## Screenshots
 
-Six views, each answering a different question. Three are about the fleet right
-now; three are about what it already did.
+Seven views, each answering a different question. Three are about the fleet
+right now, three are about what it already did, and one says what needs a look.
 
 | View | Answers |
 | --- | --- |
 | **Fleet overview** | how many runners are busy / idle / pending / failed, per scale set, against each set's ceiling — and how much work is still queued |
-| **RunnerSet detail** | one scale set over time: capacity, churn, job starts, the listener's queue |
-| **Runner detail** | one ephemeral runner: phase history, CPU and memory against requests and limits, the events that explain a stuck pod |
-| **Workflows** | which workflow runs went through the fleet, what they cost, and which of them failed |
+| **RunnerSet detail** | one scale set over time: capacity, jobs started vs finished, the listener's queue |
+| **Runner detail** | one ephemeral runner: CPU and memory since its pod started against requests and limits, the events that explain a stuck pod |
+| **Workflows** | which workflow runs went through the fleet, their duration, CPU and memory, and which of their runners failed |
 | **Jobs** | every job the dashboard watched, filterable by repository, searchable by name |
-| **Job detail** | one job's own CPU and memory over its lifetime against what its runner reserved, and what it cost |
+| **Job detail** | one job's own CPU and memory over its lifetime against what its runner reserved |
+| **Alerts** | what is firing, which rules are unavailable because their source is down, and what resolved |
 
 The fleet overview is the screenshot at the top of this page.
 
@@ -88,6 +89,34 @@ The fleet overview is the screenshot at the top of this page.
 <summary><b>Runner detail</b> — one ephemeral runner, with pod events</summary>
 
 ![Runner detail](docs/screenshots/runner.png)
+
+</details>
+
+<details>
+<summary><b>Workflows</b> — runs that went through the fleet</summary>
+
+![Workflows](docs/screenshots/workflows.png)
+
+</details>
+
+<details>
+<summary><b>Jobs</b> — every observed job, with its runner outcome</summary>
+
+![Jobs](docs/screenshots/jobs.png)
+
+</details>
+
+<details>
+<summary><b>Job detail</b> — one job's usage against its runner's requests</summary>
+
+![Job detail](docs/screenshots/job.png)
+
+</details>
+
+<details>
+<summary><b>Alerts</b> — firing, rules, recently resolved</summary>
+
+![Alerts](docs/screenshots/alerts.png)
 
 </details>
 
@@ -419,9 +448,9 @@ task check                    # vet + lint + tests
 
 ### Regenerating the screenshots
 
-The six views render from fixture data — a fleet under real load, with a
+The seven views render from fixture data — a fleet under real load, with a
 saturated set, an unbounded set, partial metrics coverage, a couple of failed
-runners, and a window of job history — so the output is reproducible and needs
+runners, a window of job history and one firing alert — so the output is reproducible and needs
 no cluster.
 
 ```bash
@@ -485,10 +514,21 @@ docs/screenshots/    generated previews, HTML and PNG
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | PR, push to `main` | golangci-lint, `go test -race` with a coverage floor, and a container build per architecture that smoke-tests the resulting image |
+| `ci.yml` | PR, push to `main` | golangci-lint, `go test -race` with a coverage floor, arc-compat (the vendored types against the pinned ARC release's CRDs), `helm dependency build` + lint + unittest, a kind e2e run, and a container build per architecture that smoke-tests the resulting image |
 | `release-drafter.yml` | push to `main` | keeps a draft release up to date from merged PR titles |
 | `release-image.yml` | release published, or manual dispatch with a tag | builds and pushes the multi-arch image to GHCR, signs it with cosign and attests its provenance |
 | `zizmor.yml` | changes under `.github/`, weekly | audits the workflows themselves for supply-chain issues |
+
+The **kind e2e** job ([`test/e2e/run.sh`](test/e2e/run.sh), `task e2e` locally)
+installs the pinned ARC release and the chart with the bundled VictoriaMetrics
+store into kind, then checks that every page serves, that the app's
+ServiceAccount cannot write or read secrets, and that the store actually scrapes
+cAdvisor through `nodes/metrics` (and is denied `nodes/proxy`).
+
+**Dependency updates** come from [Renovate](.github/renovate.json5): Go modules,
+SHA-pinned actions, Dockerfile base images, the chart's subcharts and the ARC pin
+in `internal/arcapi/v1alpha1/arc-version`. Every update waits seven days after
+release; vulnerability fixes don't. Dependabot is kept for security alerts only.
 
 `release-image.yml` refuses any tag that is not `vMAJOR.MINOR.PATCH[-prerelease]`,
 builds `linux/amd64` and `linux/arm64` on native runners, pushes them by digest

@@ -1,0 +1,64 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    "docker:pinDigests",
+    "helpers:pinGitHubActionDigestsToSemver",
+  ],
+  timezone: "Etc/UTC",
+  schedule: ["before 9am on monday"],
+  // A week before adopting any release: compromised versions are usually
+  // yanked within days. Security fixes come through vulnerabilityAlerts, which
+  // ignores this.
+  minimumReleaseAge: "7 days",
+  prConcurrentLimit: 5,
+  labels: ["dependencies"],
+  postUpdateOptions: ["gomodTidy"],
+  vulnerabilityAlerts: {
+    labels: ["security"],
+    minimumReleaseAge: null,
+  },
+  packageRules: [
+    {
+      matchManagers: ["github-actions"],
+      groupName: "github actions",
+      semanticCommitType: "ci",
+      addLabels: ["ci"],
+    },
+    {
+      matchManagers: ["gomod"],
+      matchUpdateTypes: ["patch", "digest"],
+      groupName: "go patch",
+    },
+    {
+      matchManagers: ["gomod"],
+      matchUpdateTypes: ["minor"],
+      groupName: "go minor",
+    },
+    {
+      matchManagers: ["helmv3"],
+      groupName: "chart subcharts",
+      addLabels: ["chart"],
+    },
+    {
+      matchDepNames: ["ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller"],
+      addLabels: ["arc"],
+      // The supported window is the pinned minor and the one before, so a minor
+      // bump drops a version users may still run. Never merged unreviewed.
+      automerge: false,
+      prBodyNotes: [
+        "Moves the ARC pin, so the supported window becomes this minor and the one before it. The arc-compat job checks the vendored types against this release's CRDs.",
+      ],
+    },
+  ],
+  customManagers: [
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^internal/arcapi/v1alpha1/arc-version$/"],
+      matchStrings: ["^(?<currentValue>\\d+\\.\\d+\\.\\d+)\\s*$"],
+      depNameTemplate: "ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller",
+      datasourceTemplate: "docker",
+      versioningTemplate: "semver",
+    },
+  ],
+}

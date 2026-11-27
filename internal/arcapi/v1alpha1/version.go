@@ -10,8 +10,8 @@ import (
 //go:embed arc-version
 var pinnedVersion string
 
-// PinnedVersion is the ARC release these types were copied from; the arc-compat
-// CI job checks the types against that release's CRDs.
+// PinnedVersion is the ARC release these types were copied from. Renovate moves
+// it, and the arc-compat CI job checks the types against that release's CRDs.
 func PinnedVersion() string { return strings.TrimSpace(pinnedVersion) }
 
 // SupportedMinors is the pinned minor and the one before it, e.g. 0.15 and 0.14.
