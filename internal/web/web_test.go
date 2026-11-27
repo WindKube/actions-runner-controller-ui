@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -408,6 +409,20 @@ func TestRunnerDetailWindowFollowsTheRunnerNotThePageRange(t *testing.T) {
 
 	assert.Equal(t, []string{"-40m", "-30m", "-20m", "-10m", "now"}, spanTicks(40*time.Minute))
 	assert.Equal(t, []string{"-6h", "-4.5h", "-3h", "-1.5h", "now"}, spanTicks(6*time.Hour))
+}
+
+func TestRunnerLineIgnoresBucketsWithoutSamples(t *testing.T) {
+	t.Parallel()
+
+	nan := math.NaN()
+	c := runnerLine("CPU", []float64{nan, nan, 0.5, 1.5, 0.25, nan}, fleet.Resources{}, nil,
+		strokeCPU, fillCPU, ToneCPU, fleet.FormatCores)
+	require.False(t, c.Empty)
+	assert.Equal(t, fleet.FormatCores(0.25), c.Legend[0].Value, "used is the last sample, not a zero after the pod ended")
+	assert.Equal(t, fleet.FormatCores(1.5), c.Legend[1].Value)
+	assert.NotContains(t, c.Line.Points, "NaN")
+
+	assert.True(t, runnerLine("CPU", []float64{nan, nan}, fleet.Resources{}, nil, strokeCPU, fillCPU, ToneCPU, fleet.FormatCores).Empty)
 }
 
 func TestRunnerFactsCarryTheControllerStatus(t *testing.T) {

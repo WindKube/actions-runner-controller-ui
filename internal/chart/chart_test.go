@@ -1,6 +1,7 @@
 package chart
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -57,6 +58,18 @@ func TestPlotClosesAreaAcrossFullWidth(t *testing.T) {
 		"area must start at the baseline, got %q", got.Area)
 	assert.True(t, strings.HasSuffix(got.Area, " 300.0,100.0"),
 		"area must close at the far baseline, got %q", got.Area)
+}
+
+func TestPlotSkipsMissingBuckets(t *testing.T) {
+	t.Parallel()
+
+	nan := math.NaN()
+	got := Plot([]float64{nan, nan, 1, 2, nan}, 400, 100, 4, "f", "s")
+	assert.Equal(t, "200.0,73.5 300.0,53.0", got.Points)
+	assert.Equal(t, "200.0,100.0 200.0,73.5 300.0,53.0 300.0,100.0", got.Area,
+		"the area spans only the buckets that have samples")
+
+	assert.Empty(t, Plot([]float64{nan, nan}, 400, 100, 4, "f", "s").Points)
 }
 
 func TestDivergingMirrorsAboutCentre(t *testing.T) {

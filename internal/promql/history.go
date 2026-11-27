@@ -3,6 +3,7 @@ package promql
 import (
 	"cmp"
 	"context"
+	"math"
 	"slices"
 	"time"
 
@@ -56,13 +57,18 @@ func axis(r prom.Range) []time.Time {
 	return out
 }
 
-// dense lays the first series of a sum() result onto the axis; gaps inside a
-// series read as 0, but no series at all is nil so it never draws as zeros.
-func dense(series []prom.Series, at []time.Time) []float64 {
+// layOut puts the first series of a sum() result onto the axis with missing
+// buckets set to gap; no series at all is nil so it never draws as zeros.
+// Fleet sums use 0, since no runner means none in use; a single pod uses NaN,
+// since it did not exist before it started or after it was gone.
+func layOut(series []prom.Series, at []time.Time, gap float64) []float64 {
 	if len(series) == 0 {
 		return nil
 	}
 	out := make([]float64, len(at))
+	for i := range out {
+		out[i] = gap
+	}
 	idx := make(map[int64]int, len(at))
 	for i, t := range at {
 		idx[t.Unix()] = i
@@ -80,6 +86,10 @@ func setOf(scope web.Scope) string { return string(scope) }
 // rangeQueries runs several range queries concurrently onto one axis. Any
 // failure fails the whole chart: a half-drawn stack would misstate the fleet.
 func (h History) rangeQueries(ctx context.Context, r prom.Range, queries ...string) ([][]float64, []time.Time, error) {
+	return h.rangeQueriesGap(ctx, r, 0, queries...)
+}
+
+func (h History) rangeQueriesGap(ctx context.Context, r prom.Range, gap float64, queries ...string) ([][]float64, []time.Time, error) {
 	at := axis(r)
 	out := make([][]float64, len(queries))
 	g, ctx := errgroup.WithContext(ctx)
@@ -89,7 +99,7 @@ func (h History) rangeQueries(ctx context.Context, r prom.Range, queries ...stri
 			if err != nil {
 				return err
 			}
-			out[i] = dense(series, at)
+			out[i] = layOut(series, at, gap)
 			return nil
 		})
 	}
@@ -125,7 +135,7 @@ func (h History) Scope(ctx context.Context, scope web.Scope, w web.Window) (web.
 // Runner is one runner pod's cAdvisor usage; the pod shares the runner's name.
 func (h History) Runner(ctx context.Context, name string, w web.Window) (web.RunnerSeries, error) {
 	r := rangeOf(w)
-	v, at, err := h.rangeQueries(ctx, r, h.Queries.RunnerCPU(name, r.Step), h.Queries.RunnerMem(name))
+	v, at, err := h.rangeQueriesGap(ctx, r, math.NaN(), h.Queries.RunnerCPU(name, r.Step), h.Queries.RunnerMem(name))
 	if err != nil {
 		return web.RunnerSeries{}, err
 	}

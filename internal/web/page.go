@@ -3,8 +3,8 @@ package web
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -822,7 +822,8 @@ func churnChart(c Counts, r TimeRange) ChurnChart {
 
 // runnerLine draws one pod's usage against its request and limit.
 func runnerLine(title string, vals []float64, res fleet.Resources, ticks []string, stroke, fill string, tone Tone, format func(float64) string) LineChart {
-	if len(vals) == 0 {
+	top, sampled := maxOf(vals)
+	if !sampled {
 		return LineChart{Title: title, Empty: true, Ticks: ticks}
 	}
 
@@ -836,7 +837,7 @@ func runnerLine(title string, vals []float64, res fleet.Resources, ticks []strin
 		Ticks: ticks,
 		Legend: []LegendItem{
 			{Label: "used", Tone: tone, Value: format(lastOf(vals))},
-			{Label: "peak", Tone: tone, Value: format(slices.Max(vals))},
+			{Label: "peak", Tone: tone, Value: format(top)},
 		},
 	}
 	if request > 0 {
@@ -868,11 +869,24 @@ func anyPositive(v []float64) bool {
 	return false
 }
 
+// lastOf is the latest sampled value; NaN marks a bucket with no sample.
 func lastOf(v []float64) float64 {
-	if len(v) == 0 {
-		return 0
+	for i := len(v) - 1; i >= 0; i-- {
+		if !math.IsNaN(v[i]) {
+			return v[i]
+		}
 	}
-	return v[len(v)-1]
+	return 0
+}
+
+func maxOf(v []float64) (float64, bool) {
+	peak, ok := 0.0, false
+	for _, x := range v {
+		if !math.IsNaN(x) && (!ok || x > peak) {
+			peak, ok = x, true
+		}
+	}
+	return peak, ok
 }
 
 func setRows(groups []fleet.SetTotals) []SetRow {
@@ -1668,7 +1682,7 @@ func jobLine(
 	title string, vals []float64, ticks []string,
 	request, limit float64, stroke, fill string, tone Tone, format func(float64) string,
 ) LineChart {
-	if len(vals) == 0 {
+	if _, sampled := maxOf(vals); !sampled {
 		return LineChart{Title: title, Empty: true, Ticks: ticks}
 	}
 	peak := PeakOf(vals, []float64{request, limit})

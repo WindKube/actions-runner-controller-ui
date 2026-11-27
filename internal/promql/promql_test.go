@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -223,6 +224,24 @@ func TestRunnerIsOnePodsCAdvisorUsage(t *testing.T) {
 
 	_, err = History{Client: &fakeQuerier{fail: "container_"}, Queries: testQueries}.Runner(context.Background(), "x", window())
 	require.Error(t, err)
+}
+
+func TestRunnerLeavesBucketsBeforeThePodExistedEmpty(t *testing.T) {
+	t.Parallel()
+
+	late := []prom.Series{{Points: []prom.Point{
+		{At: t0.Add(2 * time.Minute), Value: 0.5},
+		{At: t0.Add(3 * time.Minute), Value: 0.75},
+		{At: t0.Add(4 * time.Minute), Value: 0.5},
+	}}}
+	q := &fakeQuerier{ranged: map[string][]prom.Series{"container_cpu_usage_seconds_total": late}}
+
+	s, err := History{Client: q, Queries: testQueries}.Runner(context.Background(), "linux-x64-abc", window())
+	require.NoError(t, err)
+	require.Len(t, s.CPU, 5)
+	assert.True(t, math.IsNaN(s.CPU[0]) && math.IsNaN(s.CPU[1]), "the pod did not exist yet: %v", s.CPU)
+	assert.Equal(t, []float64{0.5, 0.75, 0.5}, s.CPU[2:])
+	assert.Nil(t, s.Mem, "no memory series at all stays nil")
 }
 
 func TestRangeIsAlignedSoCallersShareACacheEntry(t *testing.T) {
