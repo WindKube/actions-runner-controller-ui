@@ -57,11 +57,13 @@ type Resources struct {
 func (r Resources) HasUsage() bool { return !r.At.IsZero() }
 
 type Job struct {
-	Repository string
-	Workflow   string
-	Name       string
-	RunID      int64
-	StartedAt  time.Time
+	ID          string
+	WorkflowRef string
+	Repository  string
+	Workflow    string
+	Name        string
+	RunID       int64
+	StartedAt   time.Time
 }
 
 func (j Job) Present() bool { return j.Repository != "" || j.Name != "" }

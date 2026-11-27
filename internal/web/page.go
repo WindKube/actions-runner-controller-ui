@@ -1,7 +1,9 @@
 package web
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/url"
@@ -91,6 +93,10 @@ type Builder struct {
 	History  History
 	Version  string
 	Interval time.Duration
+
+	GitHubURL         string
+	GrafanaURL        string
+	GrafanaDatasource string
 
 	// CSS and JS are the content-hashed asset URLs. They are carried on the
 	// page rather than read from a package-level variable so a test can render
@@ -1152,32 +1158,22 @@ func mergeFailures(stored FailureWindow, live []fleet.Failure, limit int, window
 	return FailureLane{Items: items, More: max(0, total-len(items)), Window: window}
 }
 
-// storePanel describes the history store's own footprint.
-//
-// Every count is a row the retention sweep is responsible for eventually
-// deleting, so the panel doubles as the readout for whether retention is
-// keeping up: rows climbing while the oldest sample stays put is the shape of a
-// compactor that has stopped running.
+// storePanel is the job store's footprint; jobs climbing while the oldest
+// stays put means retention has stopped.
 func storePanel(s StoreStats, now time.Time) StorePanel {
 	if !s.Enabled {
 		return StorePanel{}
 	}
-
 	oldest := "—"
 	if !s.Oldest.IsZero() {
 		oldest = fleet.FormatRelative(s.Oldest, now)
 	}
-
 	return StorePanel{
 		Enabled: true,
 		Rows: []KV{
 			{Label: "on disk", Value: fleet.FormatBytes(s.SizeBytes), Mono: true},
-			{Label: "rows", Value: Thousands(s.Rows), Mono: true},
-			{Label: "samples", Value: Thousands(s.Samples), Mono: true},
 			{Label: "jobs", Value: Thousands(s.Jobs), Mono: true},
-			{Label: "churn events", Value: Thousands(s.ChurnEvents), Mono: true},
-			{Label: "failures", Value: Thousands(s.Failures), Mono: true},
-			{Label: "oldest sample", Value: oldest, Mono: true},
+			{Label: "oldest job", Value: oldest, Mono: true},
 			{Label: "file", Value: Dash(s.Path), Mono: true},
 		},
 	}
@@ -1260,11 +1256,17 @@ type JobView struct {
 	Facts []KV
 	CPU   LineChart
 	Mem   LineChart
+	Links []Link
 
-	// Buckets is how many usage samples the chart was drawn from. Zero means
-	// none were recorded, which the panel explains rather than drawing a flat
-	// line at zero.
-	Buckets int
+	// Buckets is how many usage samples the chart was drawn from.
+	Buckets     int
+	Unavailable bool
+}
+
+// Link is an outbound deep link.
+type Link struct {
+	Label string
+	Href  string
 }
 
 // JobListRow is one line of the Jobs table, with its display values resolved.
@@ -1386,24 +1388,22 @@ func (b *Builder) Job(ctx context.Context, id int, sig Signals, now time.Time) (
 	})
 	page.Tab = TabJobs
 
-	// The window is the job's own life, not the range picker's: a job is a
-	// bounded thing and its chart should show all of it, whatever window the
-	// operator was looking at when they clicked through. Points is capped the
-	// same way every other chart is, so a six-hour job renders as a readable
-	// line rather than three thousand coordinates.
+	// The job's own life, not the range picker's.
 	end := j.FinishedAt
 	if end.IsZero() {
 		end = now
 	}
 	win := Window{From: j.StartedAt, To: end.Add(time.Second), Points: 90}
-	series, _ := b.History.JobSeries(ctx, id, win)
+	series, seriesErr := b.History.JobSeries(ctx, id, win)
 
 	view := JobView{
-		Page:    page,
-		Job:     j,
-		Tiles:   jobTiles(j, now),
-		Facts:   jobFacts(j, now),
-		Buckets: series.Len(),
+		Page:        page,
+		Links:       b.jobLinks(j, end),
+		Unavailable: seriesErr != nil,
+		Job:         j,
+		Tiles:       jobTiles(j, now),
+		Facts:       jobFacts(j, now),
+		Buckets:     series.Len(),
 	}
 
 	ticks := jobTicks(j.Duration(now))
@@ -1489,7 +1489,7 @@ func jobListRow(j Job, now time.Time) JobListRow {
 		Duration: fleet.FormatAge(j.Duration(now)),
 		Started:  fleet.FormatRelative(j.StartedAt, now),
 		CPU:      CoreSeconds(j.CPUSeconds),
-		Mem:      GiBSeconds(j.MemGiBSecs),
+		Mem:      PeakBytes(j.MemPeakBytes),
 		Href:     fmt.Sprintf("/jobs/%d", j.ID),
 	}
 }
@@ -1503,7 +1503,7 @@ func workflowListRow(w WorkflowRun, now time.Time) WorkflowListRow {
 		Duration: fleet.FormatAge(w.Duration(now)),
 		Started:  fleet.FormatRelative(w.StartedAt, now),
 		CPU:      CoreSeconds(w.CPUSeconds),
-		Mem:      GiBSeconds(w.MemGiBSecs),
+		Mem:      PeakBytes(w.MemPeakBytes),
 	}
 
 	// A run ARC reported no id for cannot be addressed as a run, so the row
@@ -1519,26 +1519,27 @@ func workflowListRow(w WorkflowRun, now time.Time) WorkflowListRow {
 	return row
 }
 
-// JobTone colours a job by how it ended.
+// JobTone colours a job by its runner's outcome.
 func JobTone(j Job) Tone {
 	switch {
 	case j.Running():
 		return ToneAccent
-	case j.Succeeded:
-		return ToneSuccess
+	case j.RunnerFailed:
+		return ToneDanger
 	}
-	return ToneDanger
+	return ToneSuccess
 }
 
-// JobBadge labels a job by how it ended.
+// JobBadge names the runner outcome, never the job conclusion, which the
+// cluster cannot see: a failing test on a healthy runner is "runner ok".
 func JobBadge(j Job) string {
 	switch {
 	case j.Running():
 		return "running"
-	case j.Succeeded:
-		return "ok"
+	case j.RunnerFailed:
+		return "runner failed"
 	}
-	return "failed"
+	return "runner ok"
 }
 
 // RunTone colours a workflow run. A run with any failure is a failed run: the
@@ -1573,8 +1574,6 @@ func RunLabel(id int64) string {
 	return fmt.Sprintf("#%d", id)
 }
 
-// CoreSeconds renders integrated CPU cost, promoting to core-hours once
-// core-seconds stops being a number anyone can read at a glance.
 func CoreSeconds(v float64) string {
 	if v <= 0 {
 		return "—"
@@ -1585,15 +1584,12 @@ func CoreSeconds(v float64) string {
 	return fmt.Sprintf("%.1f core-h", v/3600)
 }
 
-// GiBSeconds renders integrated memory cost on the same scale.
-func GiBSeconds(v float64) string {
+// PeakBytes renders a peak working set, "—" when none was sampled.
+func PeakBytes(v float64) string {
 	if v <= 0 {
 		return "—"
 	}
-	if v < 3600 {
-		return fmt.Sprintf("%.0f GiB-s", v)
-	}
-	return fmt.Sprintf("%.1f GiB-h", v/3600)
+	return fleet.FormatGiB(v) + " peak"
 }
 
 // jobCrumb is the breadcrumb label for one job.
@@ -1604,47 +1600,84 @@ func jobCrumb(j Job) string {
 	return j.Workflow + " · " + Dash(j.Name)
 }
 
-// jobTiles is the KPI strip on the job detail page.
-//
-// The averages are derived from the integrated cost rather than from the
-// samples, because they are the only figures that survive for a job whose
-// samples have been swept: cost is a column on the job row, the series is not.
+// jobLinks are the GitHub run and, when configured, Grafana Explore on the
+// runner pod over the job's lifetime.
+func (b *Builder) jobLinks(j Job, end time.Time) []Link {
+	var out []Link
+	if j.Repository != "" && j.RunID > 0 {
+		base := strings.TrimRight(cmp.Or(b.GitHubURL, "https://github.com"), "/")
+		out = append(out, Link{
+			Label: "GitHub run",
+			Href:  fmt.Sprintf("%s/%s/actions/runs/%d", base, j.Repository, j.RunID),
+		})
+	}
+	if b.GrafanaURL != "" && j.Runner != "" {
+		out = append(out, Link{Label: "Grafana Explore", Href: b.exploreURL(j, end)})
+	}
+	return out
+}
+
+func (b *Builder) exploreURL(j Job, end time.Time) string {
+	selector := fmt.Sprintf(`pod=%q,container!=""`, j.Runner)
+	if j.Namespace != "" {
+		selector = fmt.Sprintf(`namespace=%q,`, j.Namespace) + selector
+	}
+	query := map[string]any{
+		"refId": "A",
+		"expr":  fmt.Sprintf(`sum by (container) (rate(container_cpu_usage_seconds_total{%s}[2m]))`, selector),
+	}
+	pane := map[string]any{
+		"queries": []any{query},
+		"range": map[string]string{
+			"from": strconv.FormatInt(j.StartedAt.Add(-time.Minute).UnixMilli(), 10),
+			"to":   strconv.FormatInt(end.Add(time.Minute).UnixMilli(), 10),
+		},
+	}
+	if b.GrafanaDatasource != "" {
+		pane["datasource"] = b.GrafanaDatasource
+		query["datasource"] = map[string]string{"type": "prometheus", "uid": b.GrafanaDatasource}
+	}
+	panes, _ := json.Marshal(map[string]any{"a": pane})
+	q := url.Values{}
+	q.Set("schemaVersion", "1")
+	q.Set("panes", string(panes))
+	return strings.TrimRight(b.GrafanaURL, "/") + "/explore?" + q.Encode()
+}
+
+// jobTiles is the KPI strip on the job detail page. The usage figures are
+// read from cAdvisor once, when the job closes.
 func jobTiles(j Job, now time.Time) []Tile {
 	d := j.Duration(now)
 	secs := d.Seconds()
 
-	cpu := Tile{Label: "avg cpu", Value: "—", Sub: "no cost recorded", Tone: ToneMuted}
+	cpu := Tile{Label: "avg cpu", Value: "—", Sub: "no cAdvisor samples", Tone: ToneMuted}
 	if secs > 0 && j.CPUSeconds > 0 {
 		cpu = Tile{
 			Label: "avg cpu", Value: fleet.FormatCores(j.CPUSeconds / secs),
 			Sub: "cores over " + fleet.FormatAge(d), Tone: ToneCPU,
 		}
 	}
-
-	mem := Tile{Label: "avg memory", Value: "—", Sub: "no cost recorded", Tone: ToneMuted}
-	if secs > 0 && j.MemGiBSecs > 0 {
-		mem = Tile{
-			Label: "avg memory", Value: fleet.FormatGiB(j.MemGiBSecs / secs * fleet.GiB),
-			Sub: "over " + fleet.FormatAge(d), Tone: ToneMemory,
-		}
+	mem := Tile{Label: "peak memory", Value: "—", Sub: "no cAdvisor samples", Tone: ToneMuted}
+	if j.MemPeakBytes > 0 {
+		mem = Tile{Label: "peak memory", Value: fleet.FormatGiB(j.MemPeakBytes), Sub: "working set", Tone: ToneMemory}
 	}
 
 	return []Tile{
-		{Label: "outcome", Value: JobBadge(j), Sub: Dash(j.Repository), Tone: JobTone(j)},
+		{Label: "runner outcome", Value: JobBadge(j), Sub: Dash(j.Repository), Tone: JobTone(j)},
 		{Label: "duration", Value: fleet.FormatAge(d), Sub: "since " + fleet.FormatRelative(j.StartedAt, now), Tone: ToneAccent},
 		cpu,
 		mem,
-		{Label: "cpu cost", Value: CoreSeconds(j.CPUSeconds), Sub: "integrated", Tone: ToneCPU},
-		{Label: "memory cost", Value: GiBSeconds(j.MemGiBSecs), Sub: "integrated", Tone: ToneMemory},
+		{Label: "cpu used", Value: CoreSeconds(j.CPUSeconds), Sub: "over the job", Tone: ToneCPU},
 	}
 }
 
-// jobFacts is the detail page's label/value panel.
 func jobFacts(j Job, now time.Time) []KV {
 	facts := []KV{
 		{Label: "repository", Value: Dash(j.Repository), Mono: true},
 		{Label: "workflow", Value: Dash(j.Workflow), Mono: true},
+		{Label: "workflow ref", Value: Dash(j.WorkflowRef), Mono: true},
 		{Label: "job", Value: Dash(j.Name)},
+		{Label: "job id", Value: Dash(j.JobID), Mono: true},
 		{Label: "run", Value: RunLabel(j.RunID), Mono: true},
 		{Label: "runner", Value: Dash(j.Runner), Mono: true},
 		{Label: "runnerset", Value: Dash(j.Set), Mono: true},
@@ -1653,10 +1686,14 @@ func jobFacts(j Job, now time.Time) []KV {
 	if j.Running() {
 		return append(facts, KV{Label: "finished", Value: "still running", Tone: ToneAccent})
 	}
-	return append(facts,
+	facts = append(facts,
 		KV{Label: "finished", Value: fleet.FormatRelative(j.FinishedAt, now), Mono: true},
-		KV{Label: "outcome", Value: JobBadge(j), Tone: JobTone(j)},
+		KV{Label: "runner outcome", Value: JobBadge(j), Tone: JobTone(j)},
 	)
+	if j.FailureReason != "" {
+		facts = append(facts, KV{Label: "failure", Value: j.FailureReason, Tone: ToneDanger, Mono: true})
+	}
+	return facts
 }
 
 // jobTicks labels a job chart's x-axis in elapsed time rather than in clock

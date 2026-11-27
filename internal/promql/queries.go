@@ -149,6 +149,14 @@ func (q Queries) RunnerMem(pod string) string {
 	return fmt.Sprintf(`sum(container_memory_working_set_bytes{%s,pod=%s})`, q.containers(), strconv.Quote(pod))
 }
 
+func (q Queries) JobCPUSeconds(pod string, window time.Duration) string {
+	return fmt.Sprintf(`sum(increase(container_cpu_usage_seconds_total{%s,pod=%s}[%s]))`, q.containers(), strconv.Quote(pod), promDuration(window))
+}
+
+func (q Queries) JobMemPeak(pod string, window time.Duration) string {
+	return fmt.Sprintf(`max(max_over_time(container_memory_working_set_bytes{%s,pod=%s}[%s]))`, q.containers(), strconv.Quote(pod), promDuration(window))
+}
+
 // Queue is jobs assigned to a set but not yet running, per set.
 func (q Queries) Queue() string {
 	l := q.Schema.ScaleSetLabel

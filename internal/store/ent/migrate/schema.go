@@ -8,173 +8,61 @@ import (
 )
 
 var (
-	// ChurnEventsColumns holds the columns for the "churn_events" table.
-	ChurnEventsColumns = []*schema.Column{
+	// JobsColumns holds the columns for the "jobs" table.
+	JobsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
-		{Name: "runner_name", Type: field.TypeString},
-		{Name: "set_name", Type: field.TypeString, Default: ""},
-		{Name: "kind", Type: field.TypeString},
-		{Name: "ts", Type: field.TypeInt64},
-	}
-	// ChurnEventsTable holds the schema information for the "churn_events" table.
-	ChurnEventsTable = &schema.Table{
-		Name:       "churn_events",
-		Columns:    ChurnEventsColumns,
-		PrimaryKey: []*schema.Column{ChurnEventsColumns[0]},
-		Indexes: []*schema.Index{
-			{
-				Name:    "churnevent_runner_name_kind",
-				Unique:  true,
-				Columns: []*schema.Column{ChurnEventsColumns[1], ChurnEventsColumns[3]},
-			},
-			{
-				Name:    "churnevent_set_name_ts",
-				Unique:  false,
-				Columns: []*schema.Column{ChurnEventsColumns[2], ChurnEventsColumns[4]},
-			},
-			{
-				Name:    "churnevent_ts",
-				Unique:  false,
-				Columns: []*schema.Column{ChurnEventsColumns[4]},
-			},
-		},
-	}
-	// JobObservationsColumns holds the columns for the "job_observations" table.
-	JobObservationsColumns = []*schema.Column{
-		{Name: "id", Type: field.TypeInt, Increment: true},
-		{Name: "runner_name", Type: field.TypeString},
-		{Name: "set_name", Type: field.TypeString, Default: ""},
+		{Name: "job_id", Type: field.TypeString, Unique: true},
+		{Name: "workflow_run_id", Type: field.TypeInt64, Default: 0},
 		{Name: "repository", Type: field.TypeString, Default: ""},
+		{Name: "workflow_ref", Type: field.TypeString, Default: ""},
 		{Name: "workflow", Type: field.TypeString, Default: ""},
-		{Name: "job_name", Type: field.TypeString, Default: ""},
-		{Name: "run_id", Type: field.TypeInt64, Default: 0},
+		{Name: "name", Type: field.TypeString, Default: ""},
+		{Name: "runner", Type: field.TypeString, Default: ""},
+		{Name: "namespace", Type: field.TypeString, Default: ""},
+		{Name: "scale_set", Type: field.TypeString, Default: ""},
 		{Name: "started_at", Type: field.TypeInt64},
 		{Name: "finished_at", Type: field.TypeInt64, Default: 0},
-		{Name: "succeeded", Type: field.TypeBool, Default: false},
+		{Name: "last_seen_at", Type: field.TypeInt64, Default: 0},
+		{Name: "outcome", Type: field.TypeString, Default: ""},
+		{Name: "failure_reason", Type: field.TypeString, Default: ""},
 		{Name: "cpu_seconds", Type: field.TypeFloat64, Default: 0},
-		{Name: "mem_byte_seconds", Type: field.TypeFloat64, Default: 0},
+		{Name: "mem_peak_bytes", Type: field.TypeFloat64, Default: 0},
 		{Name: "cpu_request", Type: field.TypeFloat64, Default: 0},
 		{Name: "cpu_limit", Type: field.TypeFloat64, Default: 0},
 		{Name: "mem_request", Type: field.TypeFloat64, Default: 0},
 		{Name: "mem_limit", Type: field.TypeFloat64, Default: 0},
 	}
-	// JobObservationsTable holds the schema information for the "job_observations" table.
-	JobObservationsTable = &schema.Table{
-		Name:       "job_observations",
-		Columns:    JobObservationsColumns,
-		PrimaryKey: []*schema.Column{JobObservationsColumns[0]},
+	// JobsTable holds the schema information for the "jobs" table.
+	JobsTable = &schema.Table{
+		Name:       "jobs",
+		Columns:    JobsColumns,
+		PrimaryKey: []*schema.Column{JobsColumns[0]},
 		Indexes: []*schema.Index{
 			{
-				Name:    "jobobservation_runner_name_run_id_job_name",
-				Unique:  true,
-				Columns: []*schema.Column{JobObservationsColumns[1], JobObservationsColumns[6], JobObservationsColumns[5]},
-			},
-			{
-				Name:    "jobobservation_set_name_started_at",
+				Name:    "job_started_at",
 				Unique:  false,
-				Columns: []*schema.Column{JobObservationsColumns[2], JobObservationsColumns[7]},
+				Columns: []*schema.Column{JobsColumns[10]},
 			},
 			{
-				Name:    "jobobservation_repository_started_at",
+				Name:    "job_finished_at",
 				Unique:  false,
-				Columns: []*schema.Column{JobObservationsColumns[3], JobObservationsColumns[7]},
+				Columns: []*schema.Column{JobsColumns[11]},
 			},
 			{
-				Name:    "jobobservation_finished_at",
+				Name:    "job_repository_started_at",
 				Unique:  false,
-				Columns: []*schema.Column{JobObservationsColumns[8]},
-			},
-		},
-	}
-	// JobSamplesColumns holds the columns for the "job_samples" table.
-	JobSamplesColumns = []*schema.Column{
-		{Name: "id", Type: field.TypeInt, Increment: true},
-		{Name: "job_id", Type: field.TypeInt},
-		{Name: "ts", Type: field.TypeInt64},
-		{Name: "cpu_cores", Type: field.TypeFloat64, Default: 0},
-		{Name: "mem_bytes", Type: field.TypeFloat64, Default: 0},
-		{Name: "samples", Type: field.TypeInt, Default: 0},
-	}
-	// JobSamplesTable holds the schema information for the "job_samples" table.
-	JobSamplesTable = &schema.Table{
-		Name:       "job_samples",
-		Columns:    JobSamplesColumns,
-		PrimaryKey: []*schema.Column{JobSamplesColumns[0]},
-		Indexes: []*schema.Index{
-			{
-				Name:    "jobsample_job_id_ts",
-				Unique:  true,
-				Columns: []*schema.Column{JobSamplesColumns[1], JobSamplesColumns[2]},
-			},
-		},
-	}
-	// RunnerFailuresColumns holds the columns for the "runner_failures" table.
-	RunnerFailuresColumns = []*schema.Column{
-		{Name: "id", Type: field.TypeInt, Increment: true},
-		{Name: "runner_name", Type: field.TypeString},
-		{Name: "set_name", Type: field.TypeString, Default: ""},
-		{Name: "reason", Type: field.TypeString},
-		{Name: "severe", Type: field.TypeBool, Default: false},
-		{Name: "ts", Type: field.TypeInt64},
-	}
-	// RunnerFailuresTable holds the schema information for the "runner_failures" table.
-	RunnerFailuresTable = &schema.Table{
-		Name:       "runner_failures",
-		Columns:    RunnerFailuresColumns,
-		PrimaryKey: []*schema.Column{RunnerFailuresColumns[0]},
-		Indexes: []*schema.Index{
-			{
-				Name:    "runnerfailure_runner_name_reason",
-				Unique:  true,
-				Columns: []*schema.Column{RunnerFailuresColumns[1], RunnerFailuresColumns[3]},
+				Columns: []*schema.Column{JobsColumns[3], JobsColumns[10]},
 			},
 			{
-				Name:    "runnerfailure_set_name_ts",
+				Name:    "job_workflow_run_id",
 				Unique:  false,
-				Columns: []*schema.Column{RunnerFailuresColumns[2], RunnerFailuresColumns[5]},
-			},
-			{
-				Name:    "runnerfailure_ts",
-				Unique:  false,
-				Columns: []*schema.Column{RunnerFailuresColumns[5]},
-			},
-		},
-	}
-	// SamplesColumns holds the columns for the "samples" table.
-	SamplesColumns = []*schema.Column{
-		{Name: "id", Type: field.TypeInt, Increment: true},
-		{Name: "ts", Type: field.TypeInt64},
-		{Name: "scope", Type: field.TypeString},
-		{Name: "scope_id", Type: field.TypeString, Default: ""},
-		{Name: "tier", Type: field.TypeString},
-		{Name: "metric", Type: field.TypeString},
-		{Name: "value", Type: field.TypeFloat64},
-	}
-	// SamplesTable holds the schema information for the "samples" table.
-	SamplesTable = &schema.Table{
-		Name:       "samples",
-		Columns:    SamplesColumns,
-		PrimaryKey: []*schema.Column{SamplesColumns[0]},
-		Indexes: []*schema.Index{
-			{
-				Name:    "sample_scope_scope_id_metric_tier_ts",
-				Unique:  true,
-				Columns: []*schema.Column{SamplesColumns[2], SamplesColumns[3], SamplesColumns[5], SamplesColumns[4], SamplesColumns[1]},
-			},
-			{
-				Name:    "sample_tier_ts",
-				Unique:  false,
-				Columns: []*schema.Column{SamplesColumns[4], SamplesColumns[1]},
+				Columns: []*schema.Column{JobsColumns[2]},
 			},
 		},
 	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
-		ChurnEventsTable,
-		JobObservationsTable,
-		JobSamplesTable,
-		RunnerFailuresTable,
-		SamplesTable,
+		JobsTable,
 	}
 )
 

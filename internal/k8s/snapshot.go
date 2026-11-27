@@ -192,10 +192,12 @@ func buildRunner(er *arcapi.EphemeralRunner, pod *corev1.Pod, setName string, ar
 
 	if er.HasJob() {
 		r.Job = fleet.Job{
-			Repository: er.Status.JobRepositoryName,
-			Workflow:   arcapi.WorkflowFileFromRef(er.Status.JobWorkflowRef),
-			Name:       er.Status.JobDisplayName,
-			RunID:      er.Status.WorkflowRunID,
+			ID:          er.Status.JobID,
+			WorkflowRef: er.Status.JobWorkflowRef,
+			Repository:  er.Status.JobRepositoryName,
+			Workflow:    arcapi.WorkflowFileFromRef(er.Status.JobWorkflowRef),
+			Name:        er.Status.JobDisplayName,
+			RunID:       er.Status.WorkflowRunID,
 		}
 	}
 

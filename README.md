@@ -104,51 +104,24 @@ A **Workflows** row is one workflow run — `(repository, workflow file, run id)
 — aggregated from the jobs observed for it. A run with any failed job is a
 failed run. Clicking one opens **Jobs** narrowed to that run.
 
-A **Jobs** row is one job. Clicking one opens its detail view: what it cost in
-core-seconds and GiB-seconds, the averages those imply over its duration, and
-its CPU and memory as a chart, drawn against the requests and limits its runner
-pod held.
+A **Jobs** row is one job. Clicking one opens its detail view: the runner pod's
+CPU and memory from cAdvisor over the job's lifetime, drawn against the requests
+and limits it held, plus links to the GitHub run and (with `ARC_UI_GRAFANA_URL`)
+Grafana Explore.
 
-### What the job chart is, and what it is not
+### What a job row is, and what it is not
 
-Everything here is inferred from the runner that carried the job. The dashboard
-never talks to the GitHub API, so a job is only as visible as the pod that ran
-it.
+The store holds one row per job, written by watching EphemeralRunners: job id,
+workflow run id, repository, workflow ref, display name, runner, set, start, end
+and **runner outcome**. The dashboard never talks to the GitHub API, so the
+outcome is the runner's ("runner ok" / "runner failed"), not the job's
+conclusion: a failing test on a healthy runner is "runner ok". Throughput charts
+use `job_result` from the ARC listener metrics instead.
 
-Per-job usage is sampled into its own table while a runner holds a job, at
-`ARC_UI_JOB_SAMPLE_RESOLUTION` (default one minute) and kept for
-`ARC_UI_RETENTION_JOB_SAMPLES` (default 30 days, matching the job rows). That
-has three consequences worth knowing before reading a chart:
-
-- **A job shorter than one bucket is a single reading.** It is drawn as one
-  point, and the panel says how many samples it has.
-- **Peak usage is not recoverable.** Each row is already an average over its
-  bucket. The tiles report averages derived from integrated cost, which is the
-  figure that survives.
-- **Jobs recorded before this was switched on have no chart**, and say so.
-  "No resource samples recorded for this job" is a different statement from a
-  job that used nothing, and the panel never renders the second when it means
-  the first.
-
-The dashed request and limit lines are what the runner pod held, copied onto the
-job row while it ran — the pod is long gone by the time you open the chart, so
-they are stored rather than looked up. A reservation the dashboard never managed
-to read is not drawn at all: no line is honest where a line at zero would not be,
-and no CPU limit is the usual ARC configuration.
-
-### What it costs on disk
-
-This is the one table whose size follows how *busy* the fleet is rather than how
-big it is — roughly `(busy runners × job minutes) ÷ resolution`, at about 70
-bytes a row:
-
-| concurrently busy runners | rows over 30 days | on disk |
-| --- | --- | --- |
-| 100 | ~4.3M | ~300 MB |
-| 500 | ~21M | ~1.5 GB |
-
-Both knobs turn it down, and the store footer at the foot of the overview
-reports the real number for your fleet rather than this estimate.
+A job's CPU core-seconds and peak memory are read from cAdvisor once, when the
+job closes. Rows left open across a restart are closed at the time they were
+last seen. Rows are kept for `ARC_UI_JOB_RETENTION` (30 days); at a few hundred
+bytes a row the file stays small even for busy fleets.
 
 ## Requirements
 
@@ -206,13 +179,10 @@ authority; this table is it in prose.
 | `ARC_UI_PROMETHEUS_PROBE_INTERVAL` | `1m` | how often the expected series are re-checked for the health strip |
 | `ARC_UI_REFRESH_INTERVAL` | `15s` | live readings refresh and query cache lifetime |
 | `ARC_UI_DB_PATH` | `/data/arc-ui.db` | SQLite history file |
-| `ARC_UI_RETENTION_RUNNER_RAW` | `15m` | raw per-runner samples — only the runner detail view reads them |
-| `ARC_UI_RETENTION_SCOPE_RAW` | `6h` | raw per-scale-set samples |
-| `ARC_UI_RETENTION_SCOPE_1M` | `168h` | 1-minute rollups (7 days) |
-| `ARC_UI_RETENTION_SCOPE_5M` | `720h` | 5-minute rollups (30 days) |
-| `ARC_UI_RETENTION_SCOPE_1H` | `9600h` | 1-hour rollups (~13 months) |
-| `ARC_UI_RETENTION_JOB_SAMPLES` | `720h` | per-job CPU and memory, behind the [Jobs tab](#workflows-and-jobs)'s usage chart. Defaults to the job rows' own window so a listed job always has a chart |
-| `ARC_UI_JOB_SAMPLE_RESOLUTION` | `1m` | bucket width per-job usage is averaged into. This is the knob that decides what per-job history costs on disk — see [Workflows and Jobs](#workflows-and-jobs) |
+| `ARC_UI_JOB_RETENTION` | `720h` | how long finished job rows are kept (30 days). The store holds only job identity and runner outcome; every time series is in Prometheus |
+| `ARC_UI_GITHUB_URL` | `https://github.com` | base for the job page's GitHub run link (set it for GHES) |
+| `ARC_UI_GRAFANA_URL` | — | Grafana base URL; when set, job pages link to Explore on the runner pod's cAdvisor series |
+| `ARC_UI_GRAFANA_DATASOURCE` | — | Prometheus datasource UID for that link; empty uses Grafana's default |
 | `ARC_UI_GITHUB_ORG` | — | breadcrumb label. Empty derives it from the AutoscalingRunnerSet's `githubConfigUrl` |
 | `ARC_UI_KUBECONFIG` | — | kubeconfig path. Unset means in-cluster if possible, else the default lookup |
 | `ARC_UI_KUBE_CONTEXT` | — | context to select from that kubeconfig |

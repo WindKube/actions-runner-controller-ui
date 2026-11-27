@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,7 +15,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"arc-ui/internal/config"
+	"arc-ui/internal/fleet"
+	"arc-ui/internal/prom"
+	"arc-ui/internal/promql"
+	"arc-ui/internal/store"
 )
 
 func TestLocalAddrMakesAWildcardBindDialable(t *testing.T) {
@@ -92,26 +97,59 @@ func TestVersionCommandPrintsTheStampedVersion(t *testing.T) {
 	assert.Equal(t, version+"\n", out.String())
 }
 
-func TestRetentionFromCarriesEveryWindow(t *testing.T) {
+type fakeJobStore struct {
+	mu     sync.Mutex
+	closed []store.JobRecord
+	usage  map[int][2]float64
+	done   chan struct{}
+}
+
+func (f *fakeJobStore) Observe(context.Context, fleet.Snapshot) ([]store.JobRecord, error) {
+	return f.closed, nil
+}
+
+func (f *fakeJobStore) SetUsage(_ context.Context, id int, cpu, mem float64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.usage[id] = [2]float64{cpu, mem}
+	if len(f.usage) == len(f.closed) {
+		close(f.done)
+	}
+	return nil
+}
+
+type fixedQuerier struct{}
+
+func (fixedQuerier) Query(_ context.Context, q string) ([]prom.Sample, error) {
+	if strings.Contains(q, "cpu") {
+		return []prom.Sample{{Value: 42}}, nil
+	}
+	return []prom.Sample{{Value: 1 << 30}}, nil
+}
+
+func (fixedQuerier) QueryRange(context.Context, string, prom.Range) ([]prom.Series, error) {
+	return nil, nil
+}
+
+func TestJobObserverStoresUsageOfClosedJobs(t *testing.T) {
 	t.Parallel()
 
-	// Six fields copied one by one, which is exactly the shape a mistake hides
-	// in: every duration here is distinct, so a crossed pair cannot pass.
-	ret := retentionFrom(config.Config{
-		RetentionRunnerRaw:  1 * time.Minute,
-		RetentionScopeRaw:   2 * time.Minute,
-		RetentionScope1m:    3 * time.Minute,
-		RetentionScope5m:    4 * time.Minute,
-		RetentionScope1h:    5 * time.Minute,
-		RetentionJobSamples: 6 * time.Minute,
-	})
+	db := &fakeJobStore{
+		closed: []store.JobRecord{{ID: 7, Runner: "r1", StartedAt: time.Now().Add(-time.Minute)}},
+		usage:  map[int][2]float64{},
+		done:   make(chan struct{}),
+	}
+	observe := jobObserver(t.Context(), db, fixedQuerier{}, promql.Queries{}, time.Second, zerolog.Nop())
+	require.NoError(t, observe(t.Context(), fleet.Snapshot{At: time.Now()}))
 
-	assert.Equal(t, 1*time.Minute, ret.RunnerRaw, "runner raw")
-	assert.Equal(t, 2*time.Minute, ret.ScopeRaw, "scope raw")
-	assert.Equal(t, 3*time.Minute, ret.Scope1m, "1m")
-	assert.Equal(t, 4*time.Minute, ret.Scope5m, "5m")
-	assert.Equal(t, 5*time.Minute, ret.Scope1h, "1h")
-	assert.Equal(t, 6*time.Minute, ret.JobSamples, "job samples")
+	select {
+	case <-db.done:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "usage was never stored")
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	assert.Equal(t, [2]float64{42, 1 << 30}, db.usage[7])
 }
 
 func TestSuperviseReportsOnlyUnexpectedStops(t *testing.T) {

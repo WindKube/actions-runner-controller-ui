@@ -3,8 +3,8 @@
 package ent
 
 import (
+	"arc-ui/internal/store/ent/job"
 	"arc-ui/internal/store/ent/predicate"
-	"arc-ui/internal/store/ent/sample"
 	"context"
 	"fmt"
 	"math"
@@ -15,65 +15,64 @@ import (
 	"entgo.io/ent/schema/field"
 )
 
-// SampleQuery is the builder for querying Sample entities.
-type SampleQuery struct {
+// JobQuery is the builder for querying Job entities.
+type JobQuery struct {
 	config
 	ctx        *QueryContext
-	order      []sample.OrderOption
+	order      []job.OrderOption
 	inters     []Interceptor
-	predicates []predicate.Sample
-	modifiers  []func(*sql.Selector)
+	predicates []predicate.Job
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
 }
 
-// Where adds a new predicate for the SampleQuery builder.
-func (_q *SampleQuery) Where(ps ...predicate.Sample) *SampleQuery {
+// Where adds a new predicate for the JobQuery builder.
+func (_q *JobQuery) Where(ps ...predicate.Job) *JobQuery {
 	_q.predicates = append(_q.predicates, ps...)
 	return _q
 }
 
 // Limit the number of records to be returned by this query.
-func (_q *SampleQuery) Limit(limit int) *SampleQuery {
+func (_q *JobQuery) Limit(limit int) *JobQuery {
 	_q.ctx.Limit = &limit
 	return _q
 }
 
 // Offset to start from.
-func (_q *SampleQuery) Offset(offset int) *SampleQuery {
+func (_q *JobQuery) Offset(offset int) *JobQuery {
 	_q.ctx.Offset = &offset
 	return _q
 }
 
 // Unique configures the query builder to filter duplicate records on query.
 // By default, unique is set to true, and can be disabled using this method.
-func (_q *SampleQuery) Unique(unique bool) *SampleQuery {
+func (_q *JobQuery) Unique(unique bool) *JobQuery {
 	_q.ctx.Unique = &unique
 	return _q
 }
 
 // Order specifies how the records should be ordered.
-func (_q *SampleQuery) Order(o ...sample.OrderOption) *SampleQuery {
+func (_q *JobQuery) Order(o ...job.OrderOption) *JobQuery {
 	_q.order = append(_q.order, o...)
 	return _q
 }
 
-// First returns the first Sample entity from the query.
-// Returns a *NotFoundError when no Sample was found.
-func (_q *SampleQuery) First(ctx context.Context) (*Sample, error) {
+// First returns the first Job entity from the query.
+// Returns a *NotFoundError when no Job was found.
+func (_q *JobQuery) First(ctx context.Context) (*Job, error) {
 	nodes, err := _q.Limit(1).All(setContextOp(ctx, _q.ctx, ent.OpQueryFirst))
 	if err != nil {
 		return nil, err
 	}
 	if len(nodes) == 0 {
-		return nil, &NotFoundError{sample.Label}
+		return nil, &NotFoundError{job.Label}
 	}
 	return nodes[0], nil
 }
 
 // FirstX is like First, but panics if an error occurs.
-func (_q *SampleQuery) FirstX(ctx context.Context) *Sample {
+func (_q *JobQuery) FirstX(ctx context.Context) *Job {
 	node, err := _q.First(ctx)
 	if err != nil && !IsNotFound(err) {
 		panic(err)
@@ -81,22 +80,22 @@ func (_q *SampleQuery) FirstX(ctx context.Context) *Sample {
 	return node
 }
 
-// FirstID returns the first Sample ID from the query.
-// Returns a *NotFoundError when no Sample ID was found.
-func (_q *SampleQuery) FirstID(ctx context.Context) (id int, err error) {
+// FirstID returns the first Job ID from the query.
+// Returns a *NotFoundError when no Job ID was found.
+func (_q *JobQuery) FirstID(ctx context.Context) (id int, err error) {
 	var ids []int
 	if ids, err = _q.Limit(1).IDs(setContextOp(ctx, _q.ctx, ent.OpQueryFirstID)); err != nil {
 		return
 	}
 	if len(ids) == 0 {
-		err = &NotFoundError{sample.Label}
+		err = &NotFoundError{job.Label}
 		return
 	}
 	return ids[0], nil
 }
 
 // FirstIDX is like FirstID, but panics if an error occurs.
-func (_q *SampleQuery) FirstIDX(ctx context.Context) int {
+func (_q *JobQuery) FirstIDX(ctx context.Context) int {
 	id, err := _q.FirstID(ctx)
 	if err != nil && !IsNotFound(err) {
 		panic(err)
@@ -104,10 +103,10 @@ func (_q *SampleQuery) FirstIDX(ctx context.Context) int {
 	return id
 }
 
-// Only returns a single Sample entity found by the query, ensuring it only returns one.
-// Returns a *NotSingularError when more than one Sample entity is found.
-// Returns a *NotFoundError when no Sample entities are found.
-func (_q *SampleQuery) Only(ctx context.Context) (*Sample, error) {
+// Only returns a single Job entity found by the query, ensuring it only returns one.
+// Returns a *NotSingularError when more than one Job entity is found.
+// Returns a *NotFoundError when no Job entities are found.
+func (_q *JobQuery) Only(ctx context.Context) (*Job, error) {
 	nodes, err := _q.Limit(2).All(setContextOp(ctx, _q.ctx, ent.OpQueryOnly))
 	if err != nil {
 		return nil, err
@@ -116,14 +115,14 @@ func (_q *SampleQuery) Only(ctx context.Context) (*Sample, error) {
 	case 1:
 		return nodes[0], nil
 	case 0:
-		return nil, &NotFoundError{sample.Label}
+		return nil, &NotFoundError{job.Label}
 	default:
-		return nil, &NotSingularError{sample.Label}
+		return nil, &NotSingularError{job.Label}
 	}
 }
 
 // OnlyX is like Only, but panics if an error occurs.
-func (_q *SampleQuery) OnlyX(ctx context.Context) *Sample {
+func (_q *JobQuery) OnlyX(ctx context.Context) *Job {
 	node, err := _q.Only(ctx)
 	if err != nil {
 		panic(err)
@@ -131,10 +130,10 @@ func (_q *SampleQuery) OnlyX(ctx context.Context) *Sample {
 	return node
 }
 
-// OnlyID is like Only, but returns the only Sample ID in the query.
-// Returns a *NotSingularError when more than one Sample ID is found.
+// OnlyID is like Only, but returns the only Job ID in the query.
+// Returns a *NotSingularError when more than one Job ID is found.
 // Returns a *NotFoundError when no entities are found.
-func (_q *SampleQuery) OnlyID(ctx context.Context) (id int, err error) {
+func (_q *JobQuery) OnlyID(ctx context.Context) (id int, err error) {
 	var ids []int
 	if ids, err = _q.Limit(2).IDs(setContextOp(ctx, _q.ctx, ent.OpQueryOnlyID)); err != nil {
 		return
@@ -143,15 +142,15 @@ func (_q *SampleQuery) OnlyID(ctx context.Context) (id int, err error) {
 	case 1:
 		id = ids[0]
 	case 0:
-		err = &NotFoundError{sample.Label}
+		err = &NotFoundError{job.Label}
 	default:
-		err = &NotSingularError{sample.Label}
+		err = &NotSingularError{job.Label}
 	}
 	return
 }
 
 // OnlyIDX is like OnlyID, but panics if an error occurs.
-func (_q *SampleQuery) OnlyIDX(ctx context.Context) int {
+func (_q *JobQuery) OnlyIDX(ctx context.Context) int {
 	id, err := _q.OnlyID(ctx)
 	if err != nil {
 		panic(err)
@@ -159,18 +158,18 @@ func (_q *SampleQuery) OnlyIDX(ctx context.Context) int {
 	return id
 }
 
-// All executes the query and returns a list of Samples.
-func (_q *SampleQuery) All(ctx context.Context) ([]*Sample, error) {
+// All executes the query and returns a list of Jobs.
+func (_q *JobQuery) All(ctx context.Context) ([]*Job, error) {
 	ctx = setContextOp(ctx, _q.ctx, ent.OpQueryAll)
 	if err := _q.prepareQuery(ctx); err != nil {
 		return nil, err
 	}
-	qr := querierAll[[]*Sample, *SampleQuery]()
-	return withInterceptors[[]*Sample](ctx, _q, qr, _q.inters)
+	qr := querierAll[[]*Job, *JobQuery]()
+	return withInterceptors[[]*Job](ctx, _q, qr, _q.inters)
 }
 
 // AllX is like All, but panics if an error occurs.
-func (_q *SampleQuery) AllX(ctx context.Context) []*Sample {
+func (_q *JobQuery) AllX(ctx context.Context) []*Job {
 	nodes, err := _q.All(ctx)
 	if err != nil {
 		panic(err)
@@ -178,20 +177,20 @@ func (_q *SampleQuery) AllX(ctx context.Context) []*Sample {
 	return nodes
 }
 
-// IDs executes the query and returns a list of Sample IDs.
-func (_q *SampleQuery) IDs(ctx context.Context) (ids []int, err error) {
+// IDs executes the query and returns a list of Job IDs.
+func (_q *JobQuery) IDs(ctx context.Context) (ids []int, err error) {
 	if _q.ctx.Unique == nil && _q.path != nil {
 		_q.Unique(true)
 	}
 	ctx = setContextOp(ctx, _q.ctx, ent.OpQueryIDs)
-	if err = _q.Select(sample.FieldID).Scan(ctx, &ids); err != nil {
+	if err = _q.Select(job.FieldID).Scan(ctx, &ids); err != nil {
 		return nil, err
 	}
 	return ids, nil
 }
 
 // IDsX is like IDs, but panics if an error occurs.
-func (_q *SampleQuery) IDsX(ctx context.Context) []int {
+func (_q *JobQuery) IDsX(ctx context.Context) []int {
 	ids, err := _q.IDs(ctx)
 	if err != nil {
 		panic(err)
@@ -200,16 +199,16 @@ func (_q *SampleQuery) IDsX(ctx context.Context) []int {
 }
 
 // Count returns the count of the given query.
-func (_q *SampleQuery) Count(ctx context.Context) (int, error) {
+func (_q *JobQuery) Count(ctx context.Context) (int, error) {
 	ctx = setContextOp(ctx, _q.ctx, ent.OpQueryCount)
 	if err := _q.prepareQuery(ctx); err != nil {
 		return 0, err
 	}
-	return withInterceptors[int](ctx, _q, querierCount[*SampleQuery](), _q.inters)
+	return withInterceptors[int](ctx, _q, querierCount[*JobQuery](), _q.inters)
 }
 
 // CountX is like Count, but panics if an error occurs.
-func (_q *SampleQuery) CountX(ctx context.Context) int {
+func (_q *JobQuery) CountX(ctx context.Context) int {
 	count, err := _q.Count(ctx)
 	if err != nil {
 		panic(err)
@@ -218,7 +217,7 @@ func (_q *SampleQuery) CountX(ctx context.Context) int {
 }
 
 // Exist returns true if the query has elements in the graph.
-func (_q *SampleQuery) Exist(ctx context.Context) (bool, error) {
+func (_q *JobQuery) Exist(ctx context.Context) (bool, error) {
 	ctx = setContextOp(ctx, _q.ctx, ent.OpQueryExist)
 	switch _, err := _q.FirstID(ctx); {
 	case IsNotFound(err):
@@ -231,7 +230,7 @@ func (_q *SampleQuery) Exist(ctx context.Context) (bool, error) {
 }
 
 // ExistX is like Exist, but panics if an error occurs.
-func (_q *SampleQuery) ExistX(ctx context.Context) bool {
+func (_q *JobQuery) ExistX(ctx context.Context) bool {
 	exist, err := _q.Exist(ctx)
 	if err != nil {
 		panic(err)
@@ -239,22 +238,21 @@ func (_q *SampleQuery) ExistX(ctx context.Context) bool {
 	return exist
 }
 
-// Clone returns a duplicate of the SampleQuery builder, including all associated steps. It can be
+// Clone returns a duplicate of the JobQuery builder, including all associated steps. It can be
 // used to prepare common query builders and use them differently after the clone is made.
-func (_q *SampleQuery) Clone() *SampleQuery {
+func (_q *JobQuery) Clone() *JobQuery {
 	if _q == nil {
 		return nil
 	}
-	return &SampleQuery{
+	return &JobQuery{
 		config:     _q.config,
 		ctx:        _q.ctx.Clone(),
-		order:      append([]sample.OrderOption{}, _q.order...),
+		order:      append([]job.OrderOption{}, _q.order...),
 		inters:     append([]Interceptor{}, _q.inters...),
-		predicates: append([]predicate.Sample{}, _q.predicates...),
+		predicates: append([]predicate.Job{}, _q.predicates...),
 		// clone intermediate query.
-		sql:       _q.sql.Clone(),
-		path:      _q.path,
-		modifiers: append([]func(*sql.Selector){}, _q.modifiers...),
+		sql:  _q.sql.Clone(),
+		path: _q.path,
 	}
 }
 
@@ -264,19 +262,19 @@ func (_q *SampleQuery) Clone() *SampleQuery {
 // Example:
 //
 //	var v []struct {
-//		Ts int64 `json:"ts,omitempty"`
+//		JobID string `json:"job_id,omitempty"`
 //		Count int `json:"count,omitempty"`
 //	}
 //
-//	client.Sample.Query().
-//		GroupBy(sample.FieldTs).
+//	client.Job.Query().
+//		GroupBy(job.FieldJobID).
 //		Aggregate(ent.Count()).
 //		Scan(ctx, &v)
-func (_q *SampleQuery) GroupBy(field string, fields ...string) *SampleGroupBy {
+func (_q *JobQuery) GroupBy(field string, fields ...string) *JobGroupBy {
 	_q.ctx.Fields = append([]string{field}, fields...)
-	grbuild := &SampleGroupBy{build: _q}
+	grbuild := &JobGroupBy{build: _q}
 	grbuild.flds = &_q.ctx.Fields
-	grbuild.label = sample.Label
+	grbuild.label = job.Label
 	grbuild.scan = grbuild.Scan
 	return grbuild
 }
@@ -287,26 +285,26 @@ func (_q *SampleQuery) GroupBy(field string, fields ...string) *SampleGroupBy {
 // Example:
 //
 //	var v []struct {
-//		Ts int64 `json:"ts,omitempty"`
+//		JobID string `json:"job_id,omitempty"`
 //	}
 //
-//	client.Sample.Query().
-//		Select(sample.FieldTs).
+//	client.Job.Query().
+//		Select(job.FieldJobID).
 //		Scan(ctx, &v)
-func (_q *SampleQuery) Select(fields ...string) *SampleSelect {
+func (_q *JobQuery) Select(fields ...string) *JobSelect {
 	_q.ctx.Fields = append(_q.ctx.Fields, fields...)
-	sbuild := &SampleSelect{SampleQuery: _q}
-	sbuild.label = sample.Label
+	sbuild := &JobSelect{JobQuery: _q}
+	sbuild.label = job.Label
 	sbuild.flds, sbuild.scan = &_q.ctx.Fields, sbuild.Scan
 	return sbuild
 }
 
-// Aggregate returns a SampleSelect configured with the given aggregations.
-func (_q *SampleQuery) Aggregate(fns ...AggregateFunc) *SampleSelect {
+// Aggregate returns a JobSelect configured with the given aggregations.
+func (_q *JobQuery) Aggregate(fns ...AggregateFunc) *JobSelect {
 	return _q.Select().Aggregate(fns...)
 }
 
-func (_q *SampleQuery) prepareQuery(ctx context.Context) error {
+func (_q *JobQuery) prepareQuery(ctx context.Context) error {
 	for _, inter := range _q.inters {
 		if inter == nil {
 			return fmt.Errorf("ent: uninitialized interceptor (forgotten import ent/runtime?)")
@@ -318,7 +316,7 @@ func (_q *SampleQuery) prepareQuery(ctx context.Context) error {
 		}
 	}
 	for _, f := range _q.ctx.Fields {
-		if !sample.ValidColumn(f) {
+		if !job.ValidColumn(f) {
 			return &ValidationError{Name: f, err: fmt.Errorf("ent: invalid field %q for query", f)}
 		}
 	}
@@ -332,21 +330,18 @@ func (_q *SampleQuery) prepareQuery(ctx context.Context) error {
 	return nil
 }
 
-func (_q *SampleQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Sample, error) {
+func (_q *JobQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Job, error) {
 	var (
-		nodes = []*Sample{}
+		nodes = []*Job{}
 		_spec = _q.querySpec()
 	)
 	_spec.ScanValues = func(columns []string) ([]any, error) {
-		return (*Sample).scanValues(nil, columns)
+		return (*Job).scanValues(nil, columns)
 	}
 	_spec.Assign = func(columns []string, values []any) error {
-		node := &Sample{config: _q.config}
+		node := &Job{config: _q.config}
 		nodes = append(nodes, node)
 		return node.assignValues(columns, values)
-	}
-	if len(_q.modifiers) > 0 {
-		_spec.Modifiers = _q.modifiers
 	}
 	for i := range hooks {
 		hooks[i](ctx, _spec)
@@ -360,11 +355,8 @@ func (_q *SampleQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Sampl
 	return nodes, nil
 }
 
-func (_q *SampleQuery) sqlCount(ctx context.Context) (int, error) {
+func (_q *JobQuery) sqlCount(ctx context.Context) (int, error) {
 	_spec := _q.querySpec()
-	if len(_q.modifiers) > 0 {
-		_spec.Modifiers = _q.modifiers
-	}
 	_spec.Node.Columns = _q.ctx.Fields
 	if len(_q.ctx.Fields) > 0 {
 		_spec.Unique = _q.ctx.Unique != nil && *_q.ctx.Unique
@@ -372,8 +364,8 @@ func (_q *SampleQuery) sqlCount(ctx context.Context) (int, error) {
 	return sqlgraph.CountNodes(ctx, _q.driver, _spec)
 }
 
-func (_q *SampleQuery) querySpec() *sqlgraph.QuerySpec {
-	_spec := sqlgraph.NewQuerySpec(sample.Table, sample.Columns, sqlgraph.NewFieldSpec(sample.FieldID, field.TypeInt))
+func (_q *JobQuery) querySpec() *sqlgraph.QuerySpec {
+	_spec := sqlgraph.NewQuerySpec(job.Table, job.Columns, sqlgraph.NewFieldSpec(job.FieldID, field.TypeInt))
 	_spec.From = _q.sql
 	if unique := _q.ctx.Unique; unique != nil {
 		_spec.Unique = *unique
@@ -382,9 +374,9 @@ func (_q *SampleQuery) querySpec() *sqlgraph.QuerySpec {
 	}
 	if fields := _q.ctx.Fields; len(fields) > 0 {
 		_spec.Node.Columns = make([]string, 0, len(fields))
-		_spec.Node.Columns = append(_spec.Node.Columns, sample.FieldID)
+		_spec.Node.Columns = append(_spec.Node.Columns, job.FieldID)
 		for i := range fields {
-			if fields[i] != sample.FieldID {
+			if fields[i] != job.FieldID {
 				_spec.Node.Columns = append(_spec.Node.Columns, fields[i])
 			}
 		}
@@ -412,12 +404,12 @@ func (_q *SampleQuery) querySpec() *sqlgraph.QuerySpec {
 	return _spec
 }
 
-func (_q *SampleQuery) sqlQuery(ctx context.Context) *sql.Selector {
+func (_q *JobQuery) sqlQuery(ctx context.Context) *sql.Selector {
 	builder := sql.Dialect(_q.driver.Dialect())
-	t1 := builder.Table(sample.Table)
+	t1 := builder.Table(job.Table)
 	columns := _q.ctx.Fields
 	if len(columns) == 0 {
-		columns = sample.Columns
+		columns = job.Columns
 	}
 	selector := builder.Select(t1.Columns(columns...)...).From(t1)
 	if _q.sql != nil {
@@ -426,9 +418,6 @@ func (_q *SampleQuery) sqlQuery(ctx context.Context) *sql.Selector {
 	}
 	if _q.ctx.Unique != nil && *_q.ctx.Unique {
 		selector.Distinct()
-	}
-	for _, m := range _q.modifiers {
-		m(selector)
 	}
 	for _, p := range _q.predicates {
 		p(selector)
@@ -447,34 +436,28 @@ func (_q *SampleQuery) sqlQuery(ctx context.Context) *sql.Selector {
 	return selector
 }
 
-// Modify adds a query modifier for attaching custom logic to queries.
-func (_q *SampleQuery) Modify(modifiers ...func(s *sql.Selector)) *SampleSelect {
-	_q.modifiers = append(_q.modifiers, modifiers...)
-	return _q.Select()
-}
-
-// SampleGroupBy is the group-by builder for Sample entities.
-type SampleGroupBy struct {
+// JobGroupBy is the group-by builder for Job entities.
+type JobGroupBy struct {
 	selector
-	build *SampleQuery
+	build *JobQuery
 }
 
 // Aggregate adds the given aggregation functions to the group-by query.
-func (_g *SampleGroupBy) Aggregate(fns ...AggregateFunc) *SampleGroupBy {
+func (_g *JobGroupBy) Aggregate(fns ...AggregateFunc) *JobGroupBy {
 	_g.fns = append(_g.fns, fns...)
 	return _g
 }
 
 // Scan applies the selector query and scans the result into the given value.
-func (_g *SampleGroupBy) Scan(ctx context.Context, v any) error {
+func (_g *JobGroupBy) Scan(ctx context.Context, v any) error {
 	ctx = setContextOp(ctx, _g.build.ctx, ent.OpQueryGroupBy)
 	if err := _g.build.prepareQuery(ctx); err != nil {
 		return err
 	}
-	return scanWithInterceptors[*SampleQuery, *SampleGroupBy](ctx, _g.build, _g, _g.build.inters, v)
+	return scanWithInterceptors[*JobQuery, *JobGroupBy](ctx, _g.build, _g, _g.build.inters, v)
 }
 
-func (_g *SampleGroupBy) sqlScan(ctx context.Context, root *SampleQuery, v any) error {
+func (_g *JobGroupBy) sqlScan(ctx context.Context, root *JobQuery, v any) error {
 	selector := root.sqlQuery(ctx).Select()
 	aggregation := make([]string, 0, len(_g.fns))
 	for _, fn := range _g.fns {
@@ -501,28 +484,28 @@ func (_g *SampleGroupBy) sqlScan(ctx context.Context, root *SampleQuery, v any) 
 	return sql.ScanSlice(rows, v)
 }
 
-// SampleSelect is the builder for selecting fields of Sample entities.
-type SampleSelect struct {
-	*SampleQuery
+// JobSelect is the builder for selecting fields of Job entities.
+type JobSelect struct {
+	*JobQuery
 	selector
 }
 
 // Aggregate adds the given aggregation functions to the selector query.
-func (_s *SampleSelect) Aggregate(fns ...AggregateFunc) *SampleSelect {
+func (_s *JobSelect) Aggregate(fns ...AggregateFunc) *JobSelect {
 	_s.fns = append(_s.fns, fns...)
 	return _s
 }
 
 // Scan applies the selector query and scans the result into the given value.
-func (_s *SampleSelect) Scan(ctx context.Context, v any) error {
+func (_s *JobSelect) Scan(ctx context.Context, v any) error {
 	ctx = setContextOp(ctx, _s.ctx, ent.OpQuerySelect)
 	if err := _s.prepareQuery(ctx); err != nil {
 		return err
 	}
-	return scanWithInterceptors[*SampleQuery, *SampleSelect](ctx, _s.SampleQuery, _s, _s.inters, v)
+	return scanWithInterceptors[*JobQuery, *JobSelect](ctx, _s.JobQuery, _s, _s.inters, v)
 }
 
-func (_s *SampleSelect) sqlScan(ctx context.Context, root *SampleQuery, v any) error {
+func (_s *JobSelect) sqlScan(ctx context.Context, root *JobQuery, v any) error {
 	selector := root.sqlQuery(ctx)
 	aggregation := make([]string, 0, len(_s.fns))
 	for _, fn := range _s.fns {
@@ -541,10 +524,4 @@ func (_s *SampleSelect) sqlScan(ctx context.Context, root *SampleQuery, v any) e
 	}
 	defer rows.Close()
 	return sql.ScanSlice(rows, v)
-}
-
-// Modify adds a query modifier for attaching custom logic to queries.
-func (_s *SampleSelect) Modify(modifiers ...func(s *sql.Selector)) *SampleSelect {
-	_s.modifiers = append(_s.modifiers, modifiers...)
-	return _s
 }

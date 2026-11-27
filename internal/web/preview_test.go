@@ -88,30 +88,28 @@ func previewJobs() []Job {
 		{
 			ID: previewJobID, Runner: "arc-ubuntu-2xl-r7k2p", Set: "arc-ubuntu-2xl",
 			Repository: "WindKube/platform", Workflow: "ci.yml", Name: "build (ubuntu-2xl)",
-			RunID: 4_182_993, StartedAt: mins(42), Succeeded: false,
-			CPUSeconds: 2_940, MemGiBSecs: 5_880,
-			// The detail preview is rendered from this row. Memory is
-			// burstable and CPU has no limit, which is the ARC default and
-			// gives the chart one line on one axis and two on the other.
+			RunID: 4_182_993, StartedAt: mins(42), JobID: "29811",
+			WorkflowRef: "WindKube/platform/.github/workflows/ci.yml@refs/heads/main",
+			// Burstable memory and no CPU limit, the ARC default.
 			CPURequest: 2, MemRequest: 3 * fleet.GiB, MemLimit: 4 * fleet.GiB,
 		},
 		{
 			ID: 2, Runner: "arc-ubuntu-2xl-h9z1w", Set: "arc-ubuntu-2xl",
 			Repository: "WindKube/platform", Workflow: "ci.yml", Name: "test (integration)",
-			RunID: 4_182_993, StartedAt: mins(41), FinishedAt: mins(12), Succeeded: true,
-			CPUSeconds: 3_180, MemGiBSecs: 7_420,
+			RunID: 4_182_993, StartedAt: mins(41), FinishedAt: mins(12),
+			CPUSeconds: 3_180, MemPeakBytes: 3.4 * fleet.GiB,
 		},
 		{
 			ID: 3, Runner: "arc-arm64-graviton-b2k7d", Set: "arc-arm64-graviton",
 			Repository: "WindKube/actions-runner-controller-ui", Workflow: "release.yml",
 			Name: "publish", RunID: 4_182_871, StartedAt: mins(96), FinishedAt: mins(74),
-			Succeeded: false, CPUSeconds: 1_104, MemGiBSecs: 2_030,
+			RunnerFailed: true, FailureReason: "OOMKilled", CPUSeconds: 1_104, MemPeakBytes: 4 * fleet.GiB,
 		},
 		{
 			ID: 4, Runner: "arc-ubuntu-2xl-x7p3r", Set: "arc-ubuntu-2xl",
 			Repository: "WindKube/platform", Workflow: "nightly.yml", Name: "e2e",
-			StartedAt: mins(188), FinishedAt: mins(41), Succeeded: true,
-			CPUSeconds: 26_400, MemGiBSecs: 61_200,
+			StartedAt: mins(188), FinishedAt: mins(41),
+			CPUSeconds: 26_400, MemPeakBytes: 6.1 * fleet.GiB,
 		},
 	}
 }
@@ -141,17 +139,17 @@ func (previewHistory) Workflows(_ context.Context, _ JobFilter, _ Window) (Workf
 			{
 				Repository: "WindKube/platform", Workflow: "ci.yml", RunID: 4_182_993,
 				Jobs: 12, Running: 1, Failed: 0, StartedAt: mins(42),
-				CPUSeconds: 18_240, MemGiBSecs: 41_100,
+				CPUSeconds: 18_240, MemPeakBytes: 3.8 * fleet.GiB,
 			},
 			{
 				Repository: "WindKube/actions-runner-controller-ui", Workflow: "release.yml",
 				RunID: 4_182_871, Jobs: 3, Failed: 1, StartedAt: mins(96), FinishedAt: mins(74),
-				CPUSeconds: 3_312, MemGiBSecs: 6_090,
+				CPUSeconds: 3_312, MemPeakBytes: 4 * fleet.GiB,
 			},
 			{
 				Repository: "WindKube/platform", Workflow: "nightly.yml",
 				Jobs: 5, StartedAt: mins(188), FinishedAt: mins(41),
-				CPUSeconds: 44_800, MemGiBSecs: 98_300,
+				CPUSeconds: 44_800, MemPeakBytes: 6.1 * fleet.GiB,
 			},
 		},
 		Total: 187,
@@ -385,16 +383,11 @@ func (previewHistory) Failures(_ context.Context, _ Scope, _ Window, limit int) 
 // is nowhere near full, so the footer renders every row with realistic widths.
 func (previewHistory) Stats(context.Context) (StoreStats, error) {
 	return StoreStats{
-		Enabled:     true,
-		Path:        "/data/arc-ui.db",
-		SizeBytes:   47 * 1024 * 1024,
-		Samples:     3_214_887,
-		Jobs:        18_402,
-		JobSamples:  742_118,
-		ChurnEvents: 36_804,
-		Failures:    1_142,
-		Rows:        3_362_990,
-		Oldest:      previewNow.Add(-21 * 24 * time.Hour),
+		Enabled:   true,
+		Path:      "/data/arc-ui.db",
+		SizeBytes: 6 * 1024 * 1024,
+		Jobs:      18_402,
+		Oldest:    previewNow.Add(-21 * 24 * time.Hour),
 	}, nil
 }
 

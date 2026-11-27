@@ -25,7 +25,6 @@ type Rest interface {
 	Jobs(ctx context.Context, f web.JobFilter, w web.Window) (web.JobList, error)
 	Workflows(ctx context.Context, f web.JobFilter, w web.Window) (web.WorkflowList, error)
 	Job(ctx context.Context, id int) (web.Job, bool, error)
-	JobSeries(ctx context.Context, id int, w web.Window) (web.JobSeries, error)
 	Facets(ctx context.Context, w web.Window) (web.JobFacets, error)
 	Stats(ctx context.Context) (web.StoreStats, error)
 }
@@ -140,6 +139,45 @@ func (h History) Runner(ctx context.Context, name string, w web.Window) (web.Run
 		return web.RunnerSeries{}, err
 	}
 	return web.RunnerSeries{At: at, CPU: v[0], Mem: v[1]}, nil
+}
+
+// JobSeries is the job's runner pod over the job's own lifetime; the window
+// only supplies the resolution.
+func (h History) JobSeries(ctx context.Context, id int, w web.Window) (web.JobSeries, error) {
+	j, ok, err := h.Job(ctx, id)
+	if err != nil || !ok {
+		return web.JobSeries{}, err
+	}
+	end := j.FinishedAt
+	if end.IsZero() {
+		end = w.To
+	}
+	s, err := h.Runner(ctx, j.Runner, web.Window{From: j.StartedAt, To: end.Add(time.Minute), Points: w.Points})
+	if err != nil {
+		return web.JobSeries{}, err
+	}
+	return web.JobSeries{At: s.At, CPU: s.CPU, Mem: s.Mem}, nil
+}
+
+// JobUsage is a finished job's CPU core-seconds and peak working set, read
+// once when the job closes.
+func JobUsage(ctx context.Context, c Querier, q Queries, pod string, since time.Duration) (cpuSeconds, memPeak float64, err error) {
+	window := max(since, time.Minute)
+	cpu, err := c.Query(ctx, q.JobCPUSeconds(pod, window))
+	if err != nil {
+		return 0, 0, err
+	}
+	mem, err := c.Query(ctx, q.JobMemPeak(pod, window))
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(cpu) > 0 {
+		cpuSeconds = cpu[0].Value
+	}
+	if len(mem) > 0 {
+		memPeak = mem[0].Value
+	}
+	return cpuSeconds, memPeak, nil
 }
 
 // Throughput is jobs that finished per bucket, by the listener's job_result.

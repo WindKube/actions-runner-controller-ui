@@ -3,7 +3,7 @@
 package ent
 
 import (
-	"arc-ui/internal/store/ent/jobobservation"
+	"arc-ui/internal/store/ent/job"
 	"fmt"
 	"strings"
 
@@ -11,33 +11,43 @@ import (
 	"entgo.io/ent/dialect/sql"
 )
 
-// JobObservation is the model entity for the JobObservation schema.
-type JobObservation struct {
+// Job is the model entity for the Job schema.
+type Job struct {
 	config `json:"-"`
 	// ID of the ent.
 	ID int `json:"id,omitempty"`
-	// RunnerName holds the value of the "runner_name" field.
-	RunnerName string `json:"runner_name,omitempty"`
-	// SetName holds the value of the "set_name" field.
-	SetName string `json:"set_name,omitempty"`
+	// JobID holds the value of the "job_id" field.
+	JobID string `json:"job_id,omitempty"`
+	// WorkflowRunID holds the value of the "workflow_run_id" field.
+	WorkflowRunID int64 `json:"workflow_run_id,omitempty"`
 	// Repository holds the value of the "repository" field.
 	Repository string `json:"repository,omitempty"`
+	// WorkflowRef holds the value of the "workflow_ref" field.
+	WorkflowRef string `json:"workflow_ref,omitempty"`
 	// Workflow holds the value of the "workflow" field.
 	Workflow string `json:"workflow,omitempty"`
-	// JobName holds the value of the "job_name" field.
-	JobName string `json:"job_name,omitempty"`
-	// RunID holds the value of the "run_id" field.
-	RunID int64 `json:"run_id,omitempty"`
+	// Name holds the value of the "name" field.
+	Name string `json:"name,omitempty"`
+	// Runner holds the value of the "runner" field.
+	Runner string `json:"runner,omitempty"`
+	// Namespace holds the value of the "namespace" field.
+	Namespace string `json:"namespace,omitempty"`
+	// ScaleSet holds the value of the "scale_set" field.
+	ScaleSet string `json:"scale_set,omitempty"`
 	// StartedAt holds the value of the "started_at" field.
 	StartedAt int64 `json:"started_at,omitempty"`
 	// FinishedAt holds the value of the "finished_at" field.
 	FinishedAt int64 `json:"finished_at,omitempty"`
-	// Succeeded holds the value of the "succeeded" field.
-	Succeeded bool `json:"succeeded,omitempty"`
+	// LastSeenAt holds the value of the "last_seen_at" field.
+	LastSeenAt int64 `json:"last_seen_at,omitempty"`
+	// Outcome holds the value of the "outcome" field.
+	Outcome string `json:"outcome,omitempty"`
+	// FailureReason holds the value of the "failure_reason" field.
+	FailureReason string `json:"failure_reason,omitempty"`
 	// CPUSeconds holds the value of the "cpu_seconds" field.
 	CPUSeconds float64 `json:"cpu_seconds,omitempty"`
-	// MemByteSeconds holds the value of the "mem_byte_seconds" field.
-	MemByteSeconds float64 `json:"mem_byte_seconds,omitempty"`
+	// MemPeakBytes holds the value of the "mem_peak_bytes" field.
+	MemPeakBytes float64 `json:"mem_peak_bytes,omitempty"`
 	// CPURequest holds the value of the "cpu_request" field.
 	CPURequest float64 `json:"cpu_request,omitempty"`
 	// CPULimit holds the value of the "cpu_limit" field.
@@ -50,17 +60,15 @@ type JobObservation struct {
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
-func (*JobObservation) scanValues(columns []string) ([]any, error) {
+func (*Job) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case jobobservation.FieldSucceeded:
-			values[i] = new(sql.NullBool)
-		case jobobservation.FieldCPUSeconds, jobobservation.FieldMemByteSeconds, jobobservation.FieldCPURequest, jobobservation.FieldCPULimit, jobobservation.FieldMemRequest, jobobservation.FieldMemLimit:
+		case job.FieldCPUSeconds, job.FieldMemPeakBytes, job.FieldCPURequest, job.FieldCPULimit, job.FieldMemRequest, job.FieldMemLimit:
 			values[i] = new(sql.NullFloat64)
-		case jobobservation.FieldID, jobobservation.FieldRunID, jobobservation.FieldStartedAt, jobobservation.FieldFinishedAt:
+		case job.FieldID, job.FieldWorkflowRunID, job.FieldStartedAt, job.FieldFinishedAt, job.FieldLastSeenAt:
 			values[i] = new(sql.NullInt64)
-		case jobobservation.FieldRunnerName, jobobservation.FieldSetName, jobobservation.FieldRepository, jobobservation.FieldWorkflow, jobobservation.FieldJobName:
+		case job.FieldJobID, job.FieldRepository, job.FieldWorkflowRef, job.FieldWorkflow, job.FieldName, job.FieldRunner, job.FieldNamespace, job.FieldScaleSet, job.FieldOutcome, job.FieldFailureReason:
 			values[i] = new(sql.NullString)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -70,104 +78,134 @@ func (*JobObservation) scanValues(columns []string) ([]any, error) {
 }
 
 // assignValues assigns the values that were returned from sql.Rows (after scanning)
-// to the JobObservation fields.
-func (_m *JobObservation) assignValues(columns []string, values []any) error {
+// to the Job fields.
+func (_m *Job) assignValues(columns []string, values []any) error {
 	if m, n := len(values), len(columns); m < n {
 		return fmt.Errorf("mismatch number of scan values: %d != %d", m, n)
 	}
 	for i := range columns {
 		switch columns[i] {
-		case jobobservation.FieldID:
+		case job.FieldID:
 			value, ok := values[i].(*sql.NullInt64)
 			if !ok {
 				return fmt.Errorf("unexpected type %T for field id", value)
 			}
 			_m.ID = int(value.Int64)
-		case jobobservation.FieldRunnerName:
+		case job.FieldJobID:
 			if value, ok := values[i].(*sql.NullString); !ok {
-				return fmt.Errorf("unexpected type %T for field runner_name", values[i])
+				return fmt.Errorf("unexpected type %T for field job_id", values[i])
 			} else if value.Valid {
-				_m.RunnerName = value.String
+				_m.JobID = value.String
 			}
-		case jobobservation.FieldSetName:
-			if value, ok := values[i].(*sql.NullString); !ok {
-				return fmt.Errorf("unexpected type %T for field set_name", values[i])
+		case job.FieldWorkflowRunID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field workflow_run_id", values[i])
 			} else if value.Valid {
-				_m.SetName = value.String
+				_m.WorkflowRunID = value.Int64
 			}
-		case jobobservation.FieldRepository:
+		case job.FieldRepository:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field repository", values[i])
 			} else if value.Valid {
 				_m.Repository = value.String
 			}
-		case jobobservation.FieldWorkflow:
+		case job.FieldWorkflowRef:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field workflow_ref", values[i])
+			} else if value.Valid {
+				_m.WorkflowRef = value.String
+			}
+		case job.FieldWorkflow:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field workflow", values[i])
 			} else if value.Valid {
 				_m.Workflow = value.String
 			}
-		case jobobservation.FieldJobName:
+		case job.FieldName:
 			if value, ok := values[i].(*sql.NullString); !ok {
-				return fmt.Errorf("unexpected type %T for field job_name", values[i])
+				return fmt.Errorf("unexpected type %T for field name", values[i])
 			} else if value.Valid {
-				_m.JobName = value.String
+				_m.Name = value.String
 			}
-		case jobobservation.FieldRunID:
-			if value, ok := values[i].(*sql.NullInt64); !ok {
-				return fmt.Errorf("unexpected type %T for field run_id", values[i])
+		case job.FieldRunner:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field runner", values[i])
 			} else if value.Valid {
-				_m.RunID = value.Int64
+				_m.Runner = value.String
 			}
-		case jobobservation.FieldStartedAt:
+		case job.FieldNamespace:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field namespace", values[i])
+			} else if value.Valid {
+				_m.Namespace = value.String
+			}
+		case job.FieldScaleSet:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field scale_set", values[i])
+			} else if value.Valid {
+				_m.ScaleSet = value.String
+			}
+		case job.FieldStartedAt:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
 				return fmt.Errorf("unexpected type %T for field started_at", values[i])
 			} else if value.Valid {
 				_m.StartedAt = value.Int64
 			}
-		case jobobservation.FieldFinishedAt:
+		case job.FieldFinishedAt:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
 				return fmt.Errorf("unexpected type %T for field finished_at", values[i])
 			} else if value.Valid {
 				_m.FinishedAt = value.Int64
 			}
-		case jobobservation.FieldSucceeded:
-			if value, ok := values[i].(*sql.NullBool); !ok {
-				return fmt.Errorf("unexpected type %T for field succeeded", values[i])
+		case job.FieldLastSeenAt:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field last_seen_at", values[i])
 			} else if value.Valid {
-				_m.Succeeded = value.Bool
+				_m.LastSeenAt = value.Int64
 			}
-		case jobobservation.FieldCPUSeconds:
+		case job.FieldOutcome:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field outcome", values[i])
+			} else if value.Valid {
+				_m.Outcome = value.String
+			}
+		case job.FieldFailureReason:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field failure_reason", values[i])
+			} else if value.Valid {
+				_m.FailureReason = value.String
+			}
+		case job.FieldCPUSeconds:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
 				return fmt.Errorf("unexpected type %T for field cpu_seconds", values[i])
 			} else if value.Valid {
 				_m.CPUSeconds = value.Float64
 			}
-		case jobobservation.FieldMemByteSeconds:
+		case job.FieldMemPeakBytes:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
-				return fmt.Errorf("unexpected type %T for field mem_byte_seconds", values[i])
+				return fmt.Errorf("unexpected type %T for field mem_peak_bytes", values[i])
 			} else if value.Valid {
-				_m.MemByteSeconds = value.Float64
+				_m.MemPeakBytes = value.Float64
 			}
-		case jobobservation.FieldCPURequest:
+		case job.FieldCPURequest:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
 				return fmt.Errorf("unexpected type %T for field cpu_request", values[i])
 			} else if value.Valid {
 				_m.CPURequest = value.Float64
 			}
-		case jobobservation.FieldCPULimit:
+		case job.FieldCPULimit:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
 				return fmt.Errorf("unexpected type %T for field cpu_limit", values[i])
 			} else if value.Valid {
 				_m.CPULimit = value.Float64
 			}
-		case jobobservation.FieldMemRequest:
+		case job.FieldMemRequest:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
 				return fmt.Errorf("unexpected type %T for field mem_request", values[i])
 			} else if value.Valid {
 				_m.MemRequest = value.Float64
 			}
-		case jobobservation.FieldMemLimit:
+		case job.FieldMemLimit:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
 				return fmt.Errorf("unexpected type %T for field mem_limit", values[i])
 			} else if value.Valid {
@@ -180,52 +218,61 @@ func (_m *JobObservation) assignValues(columns []string, values []any) error {
 	return nil
 }
 
-// Value returns the ent.Value that was dynamically selected and assigned to the JobObservation.
+// Value returns the ent.Value that was dynamically selected and assigned to the Job.
 // This includes values selected through modifiers, order, etc.
-func (_m *JobObservation) Value(name string) (ent.Value, error) {
+func (_m *Job) Value(name string) (ent.Value, error) {
 	return _m.selectValues.Get(name)
 }
 
-// Update returns a builder for updating this JobObservation.
-// Note that you need to call JobObservation.Unwrap() before calling this method if this JobObservation
+// Update returns a builder for updating this Job.
+// Note that you need to call Job.Unwrap() before calling this method if this Job
 // was returned from a transaction, and the transaction was committed or rolled back.
-func (_m *JobObservation) Update() *JobObservationUpdateOne {
-	return NewJobObservationClient(_m.config).UpdateOne(_m)
+func (_m *Job) Update() *JobUpdateOne {
+	return NewJobClient(_m.config).UpdateOne(_m)
 }
 
-// Unwrap unwraps the JobObservation entity that was returned from a transaction after it was closed,
+// Unwrap unwraps the Job entity that was returned from a transaction after it was closed,
 // so that all future queries will be executed through the driver which created the transaction.
-func (_m *JobObservation) Unwrap() *JobObservation {
+func (_m *Job) Unwrap() *Job {
 	_tx, ok := _m.config.driver.(*txDriver)
 	if !ok {
-		panic("ent: JobObservation is not a transactional entity")
+		panic("ent: Job is not a transactional entity")
 	}
 	_m.config.driver = _tx.drv
 	return _m
 }
 
 // String implements the fmt.Stringer.
-func (_m *JobObservation) String() string {
+func (_m *Job) String() string {
 	var builder strings.Builder
-	builder.WriteString("JobObservation(")
+	builder.WriteString("Job(")
 	builder.WriteString(fmt.Sprintf("id=%v, ", _m.ID))
-	builder.WriteString("runner_name=")
-	builder.WriteString(_m.RunnerName)
+	builder.WriteString("job_id=")
+	builder.WriteString(_m.JobID)
 	builder.WriteString(", ")
-	builder.WriteString("set_name=")
-	builder.WriteString(_m.SetName)
+	builder.WriteString("workflow_run_id=")
+	builder.WriteString(fmt.Sprintf("%v", _m.WorkflowRunID))
 	builder.WriteString(", ")
 	builder.WriteString("repository=")
 	builder.WriteString(_m.Repository)
 	builder.WriteString(", ")
+	builder.WriteString("workflow_ref=")
+	builder.WriteString(_m.WorkflowRef)
+	builder.WriteString(", ")
 	builder.WriteString("workflow=")
 	builder.WriteString(_m.Workflow)
 	builder.WriteString(", ")
-	builder.WriteString("job_name=")
-	builder.WriteString(_m.JobName)
+	builder.WriteString("name=")
+	builder.WriteString(_m.Name)
 	builder.WriteString(", ")
-	builder.WriteString("run_id=")
-	builder.WriteString(fmt.Sprintf("%v", _m.RunID))
+	builder.WriteString("runner=")
+	builder.WriteString(_m.Runner)
+	builder.WriteString(", ")
+	builder.WriteString("namespace=")
+	builder.WriteString(_m.Namespace)
+	builder.WriteString(", ")
+	builder.WriteString("scale_set=")
+	builder.WriteString(_m.ScaleSet)
 	builder.WriteString(", ")
 	builder.WriteString("started_at=")
 	builder.WriteString(fmt.Sprintf("%v", _m.StartedAt))
@@ -233,14 +280,20 @@ func (_m *JobObservation) String() string {
 	builder.WriteString("finished_at=")
 	builder.WriteString(fmt.Sprintf("%v", _m.FinishedAt))
 	builder.WriteString(", ")
-	builder.WriteString("succeeded=")
-	builder.WriteString(fmt.Sprintf("%v", _m.Succeeded))
+	builder.WriteString("last_seen_at=")
+	builder.WriteString(fmt.Sprintf("%v", _m.LastSeenAt))
+	builder.WriteString(", ")
+	builder.WriteString("outcome=")
+	builder.WriteString(_m.Outcome)
+	builder.WriteString(", ")
+	builder.WriteString("failure_reason=")
+	builder.WriteString(_m.FailureReason)
 	builder.WriteString(", ")
 	builder.WriteString("cpu_seconds=")
 	builder.WriteString(fmt.Sprintf("%v", _m.CPUSeconds))
 	builder.WriteString(", ")
-	builder.WriteString("mem_byte_seconds=")
-	builder.WriteString(fmt.Sprintf("%v", _m.MemByteSeconds))
+	builder.WriteString("mem_peak_bytes=")
+	builder.WriteString(fmt.Sprintf("%v", _m.MemPeakBytes))
 	builder.WriteString(", ")
 	builder.WriteString("cpu_request=")
 	builder.WriteString(fmt.Sprintf("%v", _m.CPURequest))
@@ -257,5 +310,5 @@ func (_m *JobObservation) String() string {
 	return builder.String()
 }
 
-// JobObservations is a parsable slice of JobObservation.
-type JobObservations []*JobObservation
+// Jobs is a parsable slice of Job.
+type Jobs []*Job

@@ -3,7 +3,7 @@
 package ent
 
 import (
-	"arc-ui/internal/store/ent/jobsample"
+	"arc-ui/internal/store/ent/job"
 	"arc-ui/internal/store/ent/predicate"
 	"context"
 
@@ -12,26 +12,26 @@ import (
 	"entgo.io/ent/schema/field"
 )
 
-// JobSampleDelete is the builder for deleting a JobSample entity.
-type JobSampleDelete struct {
+// JobDelete is the builder for deleting a Job entity.
+type JobDelete struct {
 	config
 	hooks    []Hook
-	mutation *JobSampleMutation
+	mutation *JobMutation
 }
 
-// Where appends a list predicates to the JobSampleDelete builder.
-func (_d *JobSampleDelete) Where(ps ...predicate.JobSample) *JobSampleDelete {
+// Where appends a list predicates to the JobDelete builder.
+func (_d *JobDelete) Where(ps ...predicate.Job) *JobDelete {
 	_d.mutation.Where(ps...)
 	return _d
 }
 
 // Exec executes the deletion query and returns how many vertices were deleted.
-func (_d *JobSampleDelete) Exec(ctx context.Context) (int, error) {
+func (_d *JobDelete) Exec(ctx context.Context) (int, error) {
 	return withHooks(ctx, _d.sqlExec, _d.mutation, _d.hooks)
 }
 
 // ExecX is like Exec, but panics if an error occurs.
-func (_d *JobSampleDelete) ExecX(ctx context.Context) int {
+func (_d *JobDelete) ExecX(ctx context.Context) int {
 	n, err := _d.Exec(ctx)
 	if err != nil {
 		panic(err)
@@ -39,8 +39,8 @@ func (_d *JobSampleDelete) ExecX(ctx context.Context) int {
 	return n
 }
 
-func (_d *JobSampleDelete) sqlExec(ctx context.Context) (int, error) {
-	_spec := sqlgraph.NewDeleteSpec(jobsample.Table, sqlgraph.NewFieldSpec(jobsample.FieldID, field.TypeInt))
+func (_d *JobDelete) sqlExec(ctx context.Context) (int, error) {
+	_spec := sqlgraph.NewDeleteSpec(job.Table, sqlgraph.NewFieldSpec(job.FieldID, field.TypeInt))
 	if ps := _d.mutation.predicates; len(ps) > 0 {
 		_spec.Predicate = func(selector *sql.Selector) {
 			for i := range ps {
@@ -56,32 +56,32 @@ func (_d *JobSampleDelete) sqlExec(ctx context.Context) (int, error) {
 	return affected, err
 }
 
-// JobSampleDeleteOne is the builder for deleting a single JobSample entity.
-type JobSampleDeleteOne struct {
-	_d *JobSampleDelete
+// JobDeleteOne is the builder for deleting a single Job entity.
+type JobDeleteOne struct {
+	_d *JobDelete
 }
 
-// Where appends a list predicates to the JobSampleDelete builder.
-func (_d *JobSampleDeleteOne) Where(ps ...predicate.JobSample) *JobSampleDeleteOne {
+// Where appends a list predicates to the JobDelete builder.
+func (_d *JobDeleteOne) Where(ps ...predicate.Job) *JobDeleteOne {
 	_d._d.mutation.Where(ps...)
 	return _d
 }
 
 // Exec executes the deletion query.
-func (_d *JobSampleDeleteOne) Exec(ctx context.Context) error {
+func (_d *JobDeleteOne) Exec(ctx context.Context) error {
 	n, err := _d._d.Exec(ctx)
 	switch {
 	case err != nil:
 		return err
 	case n == 0:
-		return &NotFoundError{jobsample.Label}
+		return &NotFoundError{job.Label}
 	default:
 		return nil
 	}
 }
 
 // ExecX is like Exec, but panics if an error occurs.
-func (_d *JobSampleDeleteOne) ExecX(ctx context.Context) {
+func (_d *JobDeleteOne) ExecX(ctx context.Context) {
 	if err := _d.Exec(ctx); err != nil {
 		panic(err)
 	}

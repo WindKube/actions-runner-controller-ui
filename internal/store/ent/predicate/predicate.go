@@ -6,17 +6,5 @@ import (
 	"entgo.io/ent/dialect/sql"
 )
 
-// ChurnEvent is the predicate function for churnevent builders.
-type ChurnEvent func(*sql.Selector)
-
-// JobObservation is the predicate function for jobobservation builders.
-type JobObservation func(*sql.Selector)
-
-// JobSample is the predicate function for jobsample builders.
-type JobSample func(*sql.Selector)
-
-// RunnerFailure is the predicate function for runnerfailure builders.
-type RunnerFailure func(*sql.Selector)
-
-// Sample is the predicate function for sample builders.
-type Sample func(*sql.Selector)
+// Job is the predicate function for job builders.
+type Job func(*sql.Selector)

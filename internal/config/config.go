@@ -51,18 +51,15 @@ type Config struct {
 	// query answer is shared between browsers.
 	RefreshInterval time.Duration `env:"ARC_UI_REFRESH_INTERVAL" envDefault:"15s"`
 
-	DBPath string `env:"ARC_UI_DB_PATH" envDefault:"/data/arc-ui.db"`
-
-	RetentionRunnerRaw  time.Duration `env:"ARC_UI_RETENTION_RUNNER_RAW" envDefault:"15m"`
-	RetentionScopeRaw   time.Duration `env:"ARC_UI_RETENTION_SCOPE_RAW" envDefault:"6h"`
-	RetentionScope1m    time.Duration `env:"ARC_UI_RETENTION_SCOPE_1M" envDefault:"168h"`
-	RetentionScope5m    time.Duration `env:"ARC_UI_RETENTION_SCOPE_5M" envDefault:"720h"`
-	RetentionScope1h    time.Duration `env:"ARC_UI_RETENTION_SCOPE_1H" envDefault:"9600h"`
-	RetentionJobSamples time.Duration `env:"ARC_UI_RETENTION_JOB_SAMPLES" envDefault:"720h"`
-	JobSampleResolution time.Duration `env:"ARC_UI_JOB_SAMPLE_RESOLUTION" envDefault:"1m"`
+	DBPath       string        `env:"ARC_UI_DB_PATH" envDefault:"/data/arc-ui.db"`
+	JobRetention time.Duration `env:"ARC_UI_JOB_RETENTION" envDefault:"720h"`
 
 	// GitHubOrg labels the breadcrumb; empty derives it from githubConfigUrl.
 	GitHubOrg string `env:"ARC_UI_GITHUB_ORG"`
+	GitHubURL string `env:"ARC_UI_GITHUB_URL" envDefault:"https://github.com"`
+
+	GrafanaURL        string `env:"ARC_UI_GRAFANA_URL"`
+	GrafanaDatasource string `env:"ARC_UI_GRAFANA_DATASOURCE"`
 
 	ShutdownTimeout time.Duration `env:"ARC_UI_SHUTDOWN_TIMEOUT" envDefault:"20s"`
 	// PreStopDelay keeps serving after readiness flips; it must cover two
@@ -89,10 +86,16 @@ func Load() (Config, []Warning, error) {
 	if cfg.DBPath == "" {
 		return Config{}, warns, errors.New("ARC_UI_DB_PATH must not be empty")
 	}
-	// The bucket width is divided by; zero is a panic, not "keep forever".
-	if cfg.JobSampleResolution < time.Second {
-		return Config{}, warns, fmt.Errorf(
-			"ARC_UI_JOB_SAMPLE_RESOLUTION=%s must be at least 1s", cfg.JobSampleResolution)
+	if cfg.JobRetention < time.Hour {
+		return Config{}, warns, fmt.Errorf("ARC_UI_JOB_RETENTION=%s must be at least 1h", cfg.JobRetention)
+	}
+	if err := absoluteURL("ARC_UI_GITHUB_URL", cfg.GitHubURL); err != nil {
+		return Config{}, warns, err
+	}
+	if cfg.GrafanaURL != "" {
+		if err := absoluteURL("ARC_UI_GRAFANA_URL", cfg.GrafanaURL); err != nil {
+			return Config{}, warns, err
+		}
 	}
 	if cfg.KubeQPS <= 0 || cfg.KubeBurst <= 0 {
 		return Config{}, warns, errors.New("ARC_UI_KUBE_QPS and ARC_UI_KUBE_BURST must be positive")
@@ -101,8 +104,8 @@ func Load() (Config, []Warning, error) {
 	if cfg.PrometheusURL == "" {
 		return Config{}, warns, errors.New("ARC_UI_PROMETHEUS_URL is required: every chart and usage figure is a Prometheus query")
 	}
-	if u, err := url.Parse(cfg.PrometheusURL); err != nil || u.Scheme == "" || u.Host == "" {
-		return Config{}, warns, fmt.Errorf("ARC_UI_PROMETHEUS_URL=%q must be an absolute http(s) URL", cfg.PrometheusURL)
+	if err := absoluteURL("ARC_UI_PROMETHEUS_URL", cfg.PrometheusURL); err != nil {
+		return Config{}, warns, err
 	}
 	if cfg.PrometheusBearerToken != "" && cfg.PrometheusBearerTokenFile != "" {
 		return Config{}, warns, errors.New("set ARC_UI_PROMETHEUS_BEARER_TOKEN or ARC_UI_PROMETHEUS_BEARER_TOKEN_FILE, not both")
@@ -123,6 +126,13 @@ func Load() (Config, []Warning, error) {
 	cfg.Namespaces = normalizeNamespaces(cfg.Namespaces)
 
 	return cfg, warns, nil
+}
+
+func absoluteURL(name, v string) error {
+	if u, err := url.Parse(v); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("%s=%q must be an absolute http(s) URL", name, v)
+	}
+	return nil
 }
 
 // normalizeNamespaces drops blanks and duplicates; a single empty entry means

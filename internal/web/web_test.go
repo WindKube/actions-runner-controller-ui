@@ -978,28 +978,20 @@ func TestStoreFooterReportsSizeAndRowCounts(t *testing.T) {
 
 	b := testBuilder()
 	b.History = statsHistory{stats: StoreStats{
-		Enabled:     true,
-		Path:        "/data/arc-ui.db",
-		SizeBytes:   12 * 1024 * 1024,
-		Samples:     1234567,
-		Jobs:        42,
-		ChurnEvents: 99,
-		Failures:    8317,
-		Rows:        1243032,
-		Oldest:      now.Add(-72 * time.Hour),
+		Enabled:   true,
+		Path:      "/data/arc-ui.db",
+		SizeBytes: 12 * 1024 * 1024,
+		Jobs:      1234567,
+		Oldest:    now.Add(-72 * time.Hour),
 	}}
 
 	html := renderOverviewWith(t, b)
 
 	assert.Contains(t, html, `id="store"`, "the footer must be a patchable region")
 	assert.Contains(t, html, "12.0 MiB", "want the size on disk")
-	assert.Contains(t, html, "1,234,567", "want the sample count, separated")
+	assert.Contains(t, html, "1,234,567", "want the job count, separated")
 	assert.Contains(t, html, "/data/arc-ui.db", "want the file the numbers describe")
-	// Every table the retention sweep owns has to be here, or the components
-	// stop adding up to the total the same panel prints and the panel becomes
-	// unreadable as the retention readout it is meant to be. Failures were the
-	// one counted into Rows but missing from the rows on screen.
-	assert.Contains(t, html, "8,317", "want the persisted failure count")
+	assert.Contains(t, html, "oldest job")
 }
 
 // Running without a writable volume is a supported configuration, and the
@@ -1190,15 +1182,14 @@ func builderWith(h History) *Builder {
 	return b
 }
 
-// sampleJob is a finished job with enough cost recorded to exercise the tiles.
+// sampleJob is a finished job with usage recorded; no CPU limit, the usual ARC
+// configuration.
 func sampleJob() Job {
 	return Job{
-		ID: 7, Runner: "arc-ubuntu-2xl-r7k2p", Set: "arc-ubuntu-2xl",
+		ID: 7, JobID: "j-7", Runner: "arc-ubuntu-2xl-r7k2p", Namespace: "arc-runners", Set: "arc-ubuntu-2xl",
 		Repository: "WindKube/platform", Workflow: "ci.yml", Name: "build",
 		RunID: 991, StartedAt: now.Add(-10 * time.Minute), FinishedAt: now.Add(-4 * time.Minute),
-		Succeeded: true, CPUSeconds: 720, MemGiBSecs: 1440,
-		// No CPU limit, which is the usual ARC configuration and the case the
-		// chart has to draw nothing for.
+		CPUSeconds: 720, MemPeakBytes: 4 * fleet.GiB,
 		CPURequest: 4, MemRequest: 8 * fleet.GiB, MemLimit: 8 * fleet.GiB,
 	}
 }
@@ -1232,7 +1223,8 @@ func TestJobsTabRendersRowsAndTotal(t *testing.T) {
 	require.Len(t, v.Rows, 1, "one job")
 	row := v.Rows[0]
 	assert.Equal(t, "/jobs/7", row.Href, "the row links to the job's detail page")
-	assert.Equal(t, "ok", row.Badge)
+	assert.Equal(t, "runner ok", row.Badge, "the badge names the runner outcome, not GitHub's conclusion")
+	assert.Equal(t, "4Gi peak", row.Mem)
 	assert.Equal(t, "6m 0s", row.Duration, "duration runs start to finish")
 	assert.Contains(t, v.Summary, "4,312", "the window's total belongs beside the page")
 	assert.Contains(t, v.Summary, "1 of", "and so does how much of it is shown")
@@ -1322,7 +1314,8 @@ func TestJobWithNoSamplesSaysSoRatherThanDrawingZero(t *testing.T) {
 	assert.True(t, v.Mem.Empty, "and so does memory")
 
 	html := renderComponent(t, v.Page, JobPage(v))
-	assert.Contains(t, html, "no resource samples recorded for this job")
+	assert.Contains(t, html, "cAdvisor has no samples for this runner pod")
+	assert.Contains(t, html, "GitHub run ↗")
 }
 
 func TestJobWithSamplesDrawsThem(t *testing.T) {
@@ -1420,21 +1413,54 @@ func TestMissingJobIsNotFoundNotAnError(t *testing.T) {
 	assert.False(t, ok, "an unrecorded job should report not found")
 }
 
-// The averages are derived from the integrated cost rather than the samples,
-// because cost is a column on the job row and survives the samples being swept.
-func TestJobTilesDeriveAveragesFromCost(t *testing.T) {
+func TestJobTilesDeriveAveragesFromUsage(t *testing.T) {
 	t.Parallel()
 
 	j := sampleJob() // 720 core-seconds over 6 minutes = 2 cores.
-	tiles := jobTiles(j, now)
-
 	byLabel := map[string]Tile{}
-	for _, t := range tiles {
+	for _, t := range jobTiles(j, now) {
 		byLabel[t.Label] = t
 	}
 	assert.Equal(t, "2.0", byLabel["avg cpu"].Value, "720 core-s over 6m is 2 cores")
-	assert.Equal(t, "4Gi", byLabel["avg memory"].Value, "1440 GiB-s over 6m is 4 GiB")
-	assert.Equal(t, "ok", byLabel["outcome"].Value)
+	assert.Equal(t, "4Gi", byLabel["peak memory"].Value)
+	assert.Equal(t, "runner ok", byLabel["runner outcome"].Value)
+
+	j.RunnerFailed, j.FailureReason = true, "OOMKilled"
+	facts := map[string]string{}
+	for _, kv := range jobFacts(j, now) {
+		facts[kv.Label] = kv.Value
+	}
+	assert.Equal(t, "runner failed", facts["runner outcome"])
+	assert.Equal(t, "OOMKilled", facts["failure"])
+	assert.Equal(t, "j-7", facts["job id"])
+}
+
+func TestJobLinksGoToTheGitHubRunAndGrafanaExplore(t *testing.T) {
+	t.Parallel()
+
+	j := sampleJob()
+	b := testBuilder()
+	links := b.jobLinks(j, j.FinishedAt)
+	require.Len(t, links, 1, "no Grafana link without ARC_UI_GRAFANA_URL")
+	assert.Equal(t, "https://github.com/WindKube/platform/actions/runs/991", links[0].Href)
+
+	b.GitHubURL = "https://ghe.example.com/"
+	b.GrafanaURL, b.GrafanaDatasource = "https://grafana.example.com", "prom-uid"
+	links = b.jobLinks(j, j.FinishedAt)
+	require.Len(t, links, 2)
+	assert.Equal(t, "https://ghe.example.com/WindKube/platform/actions/runs/991", links[0].Href)
+
+	u, err := url.Parse(links[1].Href)
+	require.NoError(t, err)
+	assert.Equal(t, "/explore", u.Path)
+	panes := u.Query().Get("panes")
+	assert.Contains(t, panes, `pod=\"arc-ubuntu-2xl-r7k2p\"`)
+	assert.Contains(t, panes, `namespace=\"arc-runners\"`)
+	assert.Contains(t, panes, `"uid":"prom-uid"`)
+	assert.Contains(t, panes, strconv.FormatInt(j.StartedAt.Add(-time.Minute).UnixMilli(), 10))
+
+	j.RunID = 0
+	assert.Len(t, b.jobLinks(j, j.FinishedAt), 1, "no run id, no GitHub link")
 }
 
 func TestJobFilterSignalsRoundTrip(t *testing.T) {
@@ -1587,8 +1613,8 @@ func TestCostFormattingPromotesToHours(t *testing.T) {
 	assert.Equal(t, "—", CoreSeconds(0), "no cost recorded is not zero cost")
 	assert.Equal(t, "90 core-s", CoreSeconds(90))
 	assert.Equal(t, "2.0 core-h", CoreSeconds(7200))
-	assert.Equal(t, "—", GiBSeconds(0))
-	assert.Equal(t, "1.5 GiB-h", GiBSeconds(5400))
+	assert.Equal(t, "—", PeakBytes(0))
+	assert.Equal(t, "3Gi peak", PeakBytes(3*fleet.GiB))
 }
 
 func TestRunLabelSpellsOutAMissingRunID(t *testing.T) {
