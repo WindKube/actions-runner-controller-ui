@@ -14,37 +14,31 @@ Reach it:
 Watching:
   runner namespaces     {{ .Values.env.ARC_UI_NAMESPACES | default "(all)" }}
   controller namespace  {{ .Values.env.ARC_UI_CONTROLLER_NAMESPACE }}
+  prometheus            {{ include "arc-ui.prometheusURL" . }}
 
-Every data source is optional. If a panel says "unavailable", the footer names
-which source failed and why — that is the diagnosis, not an error to file:
+The footer names any source that is unavailable. What each one needs in the
+Prometheus at {{ include "arc-ui.prometheusURL" . }}:
 
-  * ARC CRDs missing        the controller is not installed, or is a version
-                            that does not serve actions.github.com/v1alpha1
-  * metrics.k8s.io 403      RBAC. The resources are named `pods` and `nodes` in
-                            that API group, NOT podmetrics/nodemetrics; the wrong
-                            spelling matches nothing and 403s exactly like a
-                            missing metrics-server.
-  * listener unavailable    the listener pods expose no metrics port, because
-                            ARC ships listener metrics disabled — uncomment the
-                            metrics: block in the gha-runner-scale-set-controller
-                            values and recreate the listener pods. Or
-                            ARC_UI_CONTROLLER_NAMESPACE points at the wrong
-                            namespace: the listener pods are NOT in the runner
-                            namespace, and discovery looks for them there.
-  * listeners partly scraped  some listeners answered and some did not; the strip
-                            names the ones that failed. The sets they serve show
-                            no queue depth rather than zero. Usually a listener
-                            restarting, or a NetworkPolicy in the controller
-                            namespace denying ingress to its metrics port.
-
+  * arc-metrics / controller-metrics
+      ARC ships metrics off. Enable the metrics: block in the
+      gha-runner-scale-set-controller values, then scrape the controller and
+      listener pods (port "metrics"){{ if not .Values.podMonitors.arc.enabled }}, e.g. with podMonitors.arc.enabled=true{{ end }}.
+  * cadvisor
+      container_cpu_usage_seconds_total and container_memory_working_set_bytes
+      for the runner pods, from the kubelet's /metrics/cadvisor.
+  * kube-state-metrics
+      kube_pod_labels with the scale set label. kube-state-metrics drops pod
+      labels unless allowlisted:
+        --metric-labels-allowlist=pods=[actions.github.com/scale-set-name]
+      (kube-prometheus-stack: kube-state-metrics.metricLabelsAllowlist).
 {{- if not .Values.persistence.enabled }}
 
-WARNING: persistence.enabled=false. History lives in the pod only; every chart
-starts empty again after a restart.
+WARNING: persistence.enabled=false. The job table lives in the pod and is
+empty again after a restart.
 {{- end }}
 {{- if .Values.persistence.enabled }}
 
 The PVC {{ include "arc-ui.pvcName" . }} carries helm.sh/resource-policy: keep, so
-`helm uninstall` leaves it (and your history) behind. Reinstalling under the same
-name then needs `helm install --take-ownership` — see chart/README.md.
+`helm uninstall` leaves it behind. Reinstalling under the same name then needs
+`helm install --take-ownership`; see chart/README.md.
 {{- end }}

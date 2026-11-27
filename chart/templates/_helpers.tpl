@@ -1,13 +1,7 @@
-{{/*
-Expand the name of the chart.
-*/}}
 {{- define "arc-ui.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/*
-Fully qualified app name, capped at 63 chars for the DNS label limit.
-*/}}
 {{- define "arc-ui.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
@@ -21,17 +15,10 @@ Fully qualified app name, capped at 63 chars for the DNS label limit.
 {{- end }}
 {{- end }}
 
-{{/*
-Chart name and version, as a label value (no "+" allowed).
-*/}}
 {{- define "arc-ui.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/*
-Common labels. These go on every object and MAY change between releases —
-app.kubernetes.io/version in particular changes on every upgrade.
-*/}}
 {{- define "arc-ui.labels" -}}
 helm.sh/chart: {{ include "arc-ui.chart" . }}
 {{ include "arc-ui.selectorLabels" . }}
@@ -46,25 +33,14 @@ app.kubernetes.io/part-of: arc-ui
 {{- end }}
 
 {{/*
-Selector labels.
-
-NOTHING VERSION-DEPENDENT MAY EVER GO IN HERE. Deployment.spec.selector is
-immutable after creation: add app.kubernetes.io/version (or the chart version,
-or an image tag) and the next `helm upgrade` fails with
-
-    field is immutable
-
-and the only fix is deleting the Deployment — which, with the Recreate strategy
-and a single PVC, means downtime. Keep this to identity, not to state.
+Nothing version-dependent may go here: Deployment.spec.selector is immutable,
+and a changing selector fails every upgrade.
 */}}
 {{- define "arc-ui.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "arc-ui.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
-{{/*
-The ServiceAccount name to use.
-*/}}
 {{- define "arc-ui.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
 {{- default (include "arc-ui.fullname" .) .Values.serviceAccount.name }}
@@ -73,9 +49,6 @@ The ServiceAccount name to use.
 {{- end }}
 {{- end }}
 
-{{/*
-The PVC name. Explicit, not a volumeClaimTemplate: see the comment in pvc.yaml.
-*/}}
 {{- define "arc-ui.pvcName" -}}
 {{- if .Values.persistence.existingClaim }}
 {{- .Values.persistence.existingClaim }}
@@ -84,33 +57,36 @@ The PVC name. Explicit, not a volumeClaimTemplate: see the comment in pvc.yaml.
 {{- end }}
 {{- end }}
 
-{{/*
-Guard rails, evaluated once from deployment.yaml. `fail` aborts the render, so
-these are caught by `helm template` in CI — not at 3am by a Deployment that can
-never roll.
-*/}}
+{{- define "arc-ui.prometheusURL" -}}
+{{- .Values.prometheus.url }}
+{{- end }}
+
+{{/* A map as k=v,k=v, sorted so the rendered pod spec is stable. */}}
+{{- define "arc-ui.headers" -}}
+{{- $pairs := list }}
+{{- range $k := keys . | sortAlpha }}
+{{- $pairs = append $pairs (printf "%s=%s" $k (get $ $k)) }}
+{{- end }}
+{{- join "," $pairs }}
+{{- end }}
+
 {{- define "arc-ui.validate" -}}
 {{- if ne (int .Values.replicaCount) 1 -}}
-{{- fail (printf "arc-ui: replicaCount=%v is not supported; this chart runs exactly one replica. It is a single-writer app: it owns one SQLite file on one ReadWriteOnce PVC, so two replicas either fail to schedule (the volume is already attached) or corrupt the database (if the volume is RWX) — and zero silently renders a Deployment with no dashboard at all. Scale the cluster, not the dashboard." .Values.replicaCount) -}}
+{{- fail (printf "arc-ui: replicaCount=%v is not supported; the app owns one SQLite file on one ReadWriteOnce volume, so it runs exactly one replica" .Values.replicaCount) -}}
+{{- end -}}
+{{- if not (include "arc-ui.prometheusURL" .) -}}
+{{- fail "arc-ui: prometheus.url is required; every chart and usage figure is a PromQL query" -}}
 {{- end -}}
 {{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) -}}
 {{- if not .Values.persistence.size -}}
 {{- fail "arc-ui: persistence.enabled is true but persistence.size is empty" -}}
 {{- end -}}
 {{- end -}}
-{{/*
-terminationGracePeriodSeconds must outlast the whole shutdown sequence:
-  preStopDelay (readiness flipped, still serving)  ARC_UI_PRESTOP_DELAY
-+ in-flight request drain + store close            ARC_UI_SHUTDOWN_TIMEOUT
-+ slack for a slow SQLite checkpoint
-Undershoot it and the kubelet SIGKILLs mid-checkpoint, which is exactly how a
-WAL ends up needing recovery on the next start.
-*/}}
 {{- if lt (int .Values.gracePeriod.preStopDelaySeconds) 0 -}}
-{{- fail (printf "arc-ui: gracePeriod.preStopDelaySeconds=%v must not be negative. The preStop sleep is what keeps the pod serving while endpoints controllers stop routing to it; a negative value skips that window and clients see 502s through the rollout." .Values.gracePeriod.preStopDelaySeconds) -}}
+{{- fail (printf "arc-ui: gracePeriod.preStopDelaySeconds=%v must not be negative" .Values.gracePeriod.preStopDelaySeconds) -}}
 {{- end -}}
 {{- if le (int .Values.gracePeriod.shutdownTimeoutSeconds) 0 -}}
-{{- fail (printf "arc-ui: gracePeriod.shutdownTimeoutSeconds=%v must be positive. It is the drain budget: at zero or below, in-flight requests and SSE streams are cut immediately and the store gets no time to checkpoint, which is what leaves a WAL to recover on the next start." .Values.gracePeriod.shutdownTimeoutSeconds) -}}
+{{- fail (printf "arc-ui: gracePeriod.shutdownTimeoutSeconds=%v must be positive" .Values.gracePeriod.shutdownTimeoutSeconds) -}}
 {{- end -}}
 {{- $needed := add (int .Values.gracePeriod.preStopDelaySeconds) (int .Values.gracePeriod.shutdownTimeoutSeconds) 5 -}}
 {{- if lt (int .Values.terminationGracePeriodSeconds) $needed -}}

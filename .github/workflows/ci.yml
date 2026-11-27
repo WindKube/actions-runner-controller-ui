@@ -141,7 +141,7 @@ jobs:
         run: helm plugin install https://github.com/helm-unittest/helm-unittest.git --version 33c48cac798e465deda9a66c8e6c07c0973cf53d --verify=false
 
       - name: Lint the chart
-        run: helm lint chart/
+        run: helm lint --strict chart/ --set prometheus.url=http://prometheus:9090
 
       - name: Run the chart unit tests
         run: helm unittest chart/

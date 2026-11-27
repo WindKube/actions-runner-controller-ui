@@ -21,7 +21,7 @@ tests:
           of: PersistentVolumeClaim
       - equal:
           path: spec.resources.requests.storage
-          value: 4Gi
+          value: 1Gi
       - contains:
           path: spec.accessModes
           content: ReadWriteOnce

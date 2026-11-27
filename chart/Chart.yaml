@@ -1,7 +1,4 @@
-# apiVersion v2 on purpose. Helm 4 introduced chart format v3, but it is
-# experimental and off unless the operator opts in; a v2 chart renders
-# identically under Helm 3 and Helm 4, so it is the only format that works
-# everywhere this chart might be installed from (CI, Argo CD, a laptop).
+# v2, not Helm 4's experimental v3, so Helm 3 and Argo CD can render it.
 apiVersion: v2
 name: arc-ui
 description: Read-only dashboard for GitHub Actions Runner Controller (ARC)
@@ -9,7 +6,7 @@ type: application
 
 # version  — the chart's own version, bumped on every template change.
 # appVersion — the arc-ui release the default image tag points at.
-version: 0.1.0
+version: 0.2.0
 appVersion: "0.1.0"
 
 keywords:
@@ -19,9 +16,9 @@ keywords:
   - dashboard
   - observability
 
-home: https://github.com/WindKube/monorepo/tree/main/arc-ui
+home: https://github.com/WindKube/actions-runner-controller-ui
 sources:
-  - https://github.com/WindKube/monorepo/tree/main/arc-ui
+  - https://github.com/WindKube/actions-runner-controller-ui
 
 maintainers:
   - name: SRE

@@ -46,7 +46,7 @@ shipped ClusterRole holds `get`, `list` and `watch` and nothing else — see
 [RBAC](#rbac) for what is deliberately withheld and why.
 
 **Every data source is optional.** The dashboard boots and serves with
-metrics-server absent, with the ARC CRDs not installed, and with RBAC missing.
+Prometheus unreachable, with the ARC CRDs not installed, and with RBAC missing.
 Each failure is reported as a named unavailable source in the footer, never as a
 page of confident zeros — a dashboard that renders 0% CPU because it cannot read
 metrics is worse than one that says so.
@@ -153,15 +153,17 @@ metrics.
   `actions.github.com` scale-set CRDs, not the legacy `actions.summerwind.net`
   ones).
 - Read access to the runner namespaces and to the controller namespace.
-- Optional: `metrics-server`, for CPU and memory. Optional: ARC's listener
-  metrics, for queue depth ([how to turn them on](#queue-depth)). Both absent is
-  a supported configuration.
+- A Prometheus-compatible query API holding ARC's metrics, the kubelet's
+  cAdvisor series and kube-state-metrics; see
+  [what it needs to hold](#what-prometheus-needs-to-hold). A missing group shows
+  as unavailable, not as zeros.
 
 ## Quick start
 
 ```bash
 helm install arc-ui ./chart \
   --namespace arc-systems --create-namespace \
+  --set prometheus.url=http://prometheus-operated.monitoring:9090 \
   --set env.ARC_UI_NAMESPACES=arc-runners \
   --set env.ARC_UI_CONTROLLER_NAMESPACE=arc-systems
 
@@ -198,7 +200,7 @@ authority; this table is it in prose.
 | `ARC_UI_PROMETHEUS_HEADERS` | — | extra headers, `k=v,k2=v2` (e.g. `X-Scope-OrgID=tenant`) |
 | `ARC_UI_PROMETHEUS_CA_FILE` / `_INSECURE_SKIP_VERIFY` | — | TLS trust |
 | `ARC_UI_PROMETHEUS_TIMEOUT` | `10s` | per-query timeout |
-| `ARC_UI_PROMETHEUS_SCALE_SET_LABEL` | `actions_github_com_scale_set_name` | label your scrape config maps the listener pod's `actions.github.com/scale-set-name` to |
+| `ARC_UI_PROMETHEUS_SCALE_SET_LABEL` | `name` | the label holding the scale set name on `gha_*` listener series; the listener exports it as `name` |
 | `ARC_UI_PROMETHEUS_KSM_SCALE_SET_LABEL` | `label_actions_github_com_scale_set_name` | the same label on `kube_pod_labels` (needs the kube-state-metrics label allowlist) |
 | `ARC_UI_PROMETHEUS_PROBE_INTERVAL` | `1m` | how often the expected series are re-checked for the health strip |
 | `ARC_UI_REFRESH_INTERVAL` | `15s` | live readings refresh and query cache lifetime |
@@ -226,15 +228,21 @@ authority; this table is it in prose.
 | `ARC_UI_SENTRY_SAMPLE_RATE` | `1.0` | |
 | `KUBE_API_URL` | — | override the API server address. **Unprefixed on purpose**: it names shared infrastructure, not this app's own setting |
 
-## Queue depth
+## What Prometheus needs to hold
 
-Queue depth — jobs GitHub has assigned to a scale set that have no runner yet —
-is the one number the cluster cannot tell you. It exists only on GitHub's side of
-the listener's connection, so it comes from the ARC listeners' Prometheus
-endpoints, and **ARC ships those disabled**. Everything else on the dashboard
-works without them.
+Every series is read from `ARC_UI_PROMETHEUS_URL`. Four groups of it, each
+reported separately in the footer:
 
-To turn them on, uncomment the `metrics:` block in the
+| Source | Series | Needed for |
+| --- | --- | --- |
+| ARC listeners | `gha_assigned_jobs`, `gha_running_jobs`, `gha_*_jobs_total`, `gha_job_*_duration_seconds` | queue depth, throughput, churn, runner time by repository, startup alert |
+| ARC controller | `gha_controller_*_ephemeral_runners` | pending runners, failed-runners alert |
+| cAdvisor (kubelet) | `container_cpu_usage_seconds_total`, `container_memory_working_set_bytes` | CPU and memory of runner pods and jobs |
+| kube-state-metrics | `kube_pod_labels`, `kube_pod_container_resource_requests` | attributing usage and requests to a scale set |
+
+### ARC metrics
+
+ARC ships its metrics off. Uncomment the `metrics:` block in the
 `gha-runner-scale-set-controller` chart values:
 
 ```yaml
@@ -262,51 +270,35 @@ kubectl -n arc-systems get pods \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].ports}{"\n"}{end}'
 ```
 
-Nothing else is needed: **the dashboard discovers the listeners itself**. It finds
-the AutoscalingListener pods in `ARC_UI_CONTROLLER_NAMESPACE`, reads each pod's IP
-and its port named `metrics`, and scrapes all of them, merging the answers per
-scale set. That matters because ARC runs **one listener per scale set** and each
-serves only its own series — so a fleet of twenty scale sets has twenty endpoints,
-and no single URL covers it.
+Then scrape the controller and every listener on that port. With the
+Prometheus Operator, `podMonitors.arc.enabled=true` in this chart renders the two
+PodMonitors. ARC runs one listener per scale set, so scrape the pods, not a
+Service in front of them.
 
-Which is also why `ARC_UI_LISTENER_METRICS_URL` is not the way to do this. It
-scrapes exactly one endpoint, and:
+### kube-state-metrics label allowlist
 
-- pointed at one listener, you get queue depth for that one scale set;
-- pointed at a Service in front of all of them, you get **one** of them — a
-  Service load-balances per connection and the scraper's keep-alive pins it to
-  whichever pod answered first, then silently jumps to another when the
-  connection is recycled.
-
-Set it only when something genuinely aggregates the listeners while preserving
-their `name` and `namespace` labels — a Prometheus federation endpoint, for
-instance, in which case scrape the listeners with a PodMonitor using
-`honorLabels: true` and point the dashboard at:
+kube-state-metrics drops pod labels unless they are allowlisted, and without
+`actions.github.com/scale-set-name` on `kube_pod_labels` the dashboard cannot
+tell which scale set a runner pod's usage belongs to:
 
 ```text
-http://prometheus-operated.monitoring.svc:9090/federate?match%5B%5D=%7B__name__%3D~%22gha_.%2A%22%7D
+--metric-labels-allowlist=pods=[actions.github.com/scale-set-name]
 ```
 
-Partial answers are published rather than discarded: if three of twenty listeners
-are unreachable, the other seventeen sets keep their queue depth, the three show
-no depth rather than zero, and the health strip names the listeners that failed.
-A NetworkPolicy in the controller namespace, or a service mesh requiring mTLS, is
-the usual reason for that.
+In kube-prometheus-stack that is:
 
-How large a listener's response is does not matter. Most of it is series the
-dashboard never reads — `gha_job_execution_duration_seconds` and
-`gha_job_startup_duration_seconds` carry a bucket per repository, workflow, job
-name and result, and the Go runtime families come along for free — so the
-exposition is filtered as it streams and only the ten gauge and counter families
-behind queue depth are held in memory. What is bounded is that kept subset, not
-the response, which is why a busy listener serving tens of megabytes is scraped
-like any other.
+```yaml
+kube-state-metrics:
+  metricLabelsAllowlist:
+    - pods=[actions.github.com/scale-set-name]
+```
 
 ## Kubernetes
 
 ```bash
 helm install arc-ui ./chart \
   --namespace arc-systems --create-namespace \
+  --set prometheus.url=http://prometheus-operated.monitoring:9090 \
   --set env.ARC_UI_NAMESPACES=arc-runners \
   --set env.ARC_UI_CONTROLLER_NAMESPACE=arc-systems
 ```
@@ -337,31 +329,17 @@ The ClusterRole is `get`/`list`/`watch` on:
 
 | API group | Resources |
 | --- | --- |
-| `actions.github.com` | `autoscalingrunnersets`, `ephemeralrunnersets`, `ephemeralrunners`, `autoscalinglisteners` (+ each `/status`) |
-| `""` (core) | `pods`, `events`, `nodes` |
-| `apps` | `deployments` (to report the controller version) |
-| `metrics.k8s.io` | `pods`, `nodes` |
+| `actions.github.com` | `autoscalingrunnersets`, `ephemeralrunnersets`, `ephemeralrunners`, `autoscalinglisteners` |
+| `""` (core) | `pods`, `events` |
 
 Withheld on purpose: `secrets` (ARC keeps the GitHub App credentials there),
 `pods/exec` and `pods/attach` (RCE inside a runner), `pods/log` (job logs contain
-masked-but-recoverable values), and every write verb.
+masked-but-recoverable values), every write verb, and nodes and `metrics.k8s.io`,
+since usage comes from Prometheus.
 
-Two failure modes account for nearly every "the dashboard is broken" report:
-
-1. **RBAC covers the runner namespace but not the controller namespace.** The
-   AutoscalingListener pods live in the controller namespace and carry queue depth
-   and listener health. The fleet renders perfectly; the listener panel is blank
-   forever.
-2. **The `metrics.k8s.io` resources are spelled `podmetrics`/`nodemetrics`.** They
-   are named **`pods` and `nodes`** in that API group — the Go kinds are
-   `PodMetrics`/`NodeMetrics`, which is where the wrong guess comes from. The
-   apiserver accepts the wrong name silently, it matches nothing, and every scrape
-   403s in a way that is indistinguishable from metrics-server being uninstalled.
-
-   ```bash
-   kubectl auth can-i list pods.metrics.k8s.io \
-     --as=system:serviceaccount:arc-systems:arc-ui
-   ```
+The usual misconfiguration is RBAC that covers the runner namespace but not the
+controller namespace, where the AutoscalingListeners live: the fleet renders and
+every listener shows as unknown.
 
 ## Docker
 
@@ -448,8 +426,8 @@ differ slightly.
 ## How it is built
 
 - Go 1.26, cobra (CLI), zerolog (logs), caarlos0/env (config), sentry-go
-- `k8s.io/client-go` informers over the ARC CRDs, pods, events and nodes;
-  `k8s.io/metrics` for `metrics.k8s.io`
+- `k8s.io/client-go` informers over the ARC CRDs and pods, events on demand
+- PromQL over the Prometheus HTTP API for every time series and usage figure
 - Hand-vendored ARC CRD types in `internal/arcapi/v1alpha1` — ARC does not publish
   an importable Go API module
 - gin (HTTP), [a-h/templ][templ] (server-rendered HTML), [Datastar][datastar] (SSE

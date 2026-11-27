@@ -1,14 +1,5 @@
 {{- if .Values.serviceMonitor.enabled }}
 {{- if or (not .Values.serviceMonitor.requireCapability) (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
-# Guarded on an explicit VALUES FLAG, not on the capability check alone.
-#
-# `.Capabilities.APIVersions` is populated from a live cluster. Under
-# `helm template` — which is what every GitOps pipeline runs, Argo CD included —
-# it is empty, so a resource guarded only by `.Capabilities.APIVersions.Has` is
-# quietly omitted from the manifest. Nothing fails; the metrics just never get
-# scraped, and the reason is invisible in the diff. The flag makes the intent
-# explicit and reviewable; serviceMonitor.requireCapability additionally skips it
-# on clusters without the CRD, for people installing straight from a laptop.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

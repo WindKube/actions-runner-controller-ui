@@ -1,0 +1,50 @@
+suite: deployment env
+templates:
+  - deployment.yaml
+set:
+  prometheus.url: http://mimir.monitoring/prometheus
+tests:
+  - it: passes the Prometheus settings through
+    set:
+      prometheus.headers:
+        X-Scope-OrgID: team-a
+        A-First: "1"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_PROMETHEUS_URL
+            value: http://mimir.monitoring/prometheus
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_PROMETHEUS_HEADERS
+            value: A-First=1,X-Scope-OrgID=team-a
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_PROMETHEUS_SCALE_SET_LABEL
+            value: name
+
+  - it: emits no headers variable without headers
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_PROMETHEUS_HEADERS
+          any: true
+
+  # The binary refuses to start on unknown retention tiers no more, but a
+  # stale variable is still a lie in the pod spec.
+  - it: sets no variable the binary no longer reads
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_SCRAPE_INTERVAL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_RETENTION_SCOPE_1H
+          any: true

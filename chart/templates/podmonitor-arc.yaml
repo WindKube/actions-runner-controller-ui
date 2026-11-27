@@ -1,0 +1,35 @@
+{{- with .Values.podMonitors.arc }}
+{{- if and .enabled (or (not .requireCapability) ($.Capabilities.APIVersions.Has "monitoring.coreos.com/v1")) }}
+{{- $ns := .namespace | default $.Values.rbac.controllerNamespace }}
+{{- $pm := . }}
+{{- range $role, $selector := dict "controller" .controllerSelector "listeners" .listenerSelector }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "arc-ui.fullname" $ }}-arc-{{ $role }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "arc-ui.labels" $ | nindent 4 }}
+    {{- with $pm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- toYaml $selector | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ $ns }}
+  podMetricsEndpoints:
+    - port: metrics
+      interval: {{ $pm.interval }}
+      scrapeTimeout: {{ $pm.scrapeTimeout }}
+      relabelings:
+        # actions.github.com/scale-set-name becomes actions_github_com_scale_set_name.
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_actions_github_com_(.+)
+          replacement: actions_github_com_$1
+{{- end }}
+{{- end }}
+{{- end }}

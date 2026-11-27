@@ -1,0 +1,48 @@
+suite: ARC pod monitors
+templates:
+  - podmonitor-arc.yaml
+tests:
+  - it: is off by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: scrapes the controller and the listeners on port metrics
+    set:
+      podMonitors.arc.enabled: true
+      podMonitors.arc.requireCapability: false
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: PodMonitor
+      - equal:
+          path: metadata.namespace
+          value: arc-systems
+      - equal:
+          path: spec.podMetricsEndpoints[0].port
+          value: metrics
+      - equal:
+          path: spec.podMetricsEndpoints[0].relabelings[0]
+          value:
+            action: labelmap
+            regex: __meta_kubernetes_pod_label_actions_github_com_(.+)
+            replacement: actions_github_com_$1
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/component: controller-manager
+            app.kubernetes.io/part-of: gha-rs-controller
+        documentIndex: 0
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/component: runner-scale-set-listener
+        documentIndex: 1
+
+  - it: skips without the Prometheus Operator CRD unless told not to
+    set:
+      podMonitors.arc.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0

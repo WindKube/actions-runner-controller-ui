@@ -232,7 +232,7 @@ tasks:
   helm:lint:
     desc: Lint the Helm chart
     cmds:
-      - helm lint chart/
+      - helm lint --strict chart/ --set prometheus.url=http://prometheus:9090
 
   helm:test:
     desc: Run the chart's unit tests (chart/tests/*_test.yaml)
@@ -247,7 +247,7 @@ tasks:
   helm:template:
     desc: Render the Helm chart to stdout
     cmds:
-      - helm template {{.BIN}} chart/
+      - helm template {{.BIN}} chart/ --set prometheus.url=http://prometheus:9090
 
   clean:
     desc: Remove build artefacts and generated files
