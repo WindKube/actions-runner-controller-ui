@@ -40,16 +40,15 @@ type Server struct {
 	readyChecks map[string]Checker
 }
 
-// Options configures a Server.
-//
-// There is deliberately no Version here. Nothing this package serves reports one,
-// and the version the dashboard displays comes from web.Builder.Version. A field
-// here would be a second place to set it that silently changes nothing.
+// Options configures a Server. The displayed version comes from
+// web.Builder.Version, so there is none here.
 type Options struct {
 	Config  config.Config
 	Log     zerolog.Logger
 	Handler *web.Handler
 	Assets  *web.Assets
+	// Metrics serves /metrics when set.
+	Metrics http.Handler
 
 	// Ready are the dependency checks /readyz aggregates, keyed by the name
 	// reported in the response body.
@@ -106,6 +105,9 @@ func (s *Server) engine(opts Options) *gin.Engine {
 	engine.GET("/healthz", s.healthz)
 	engine.GET("/livez", s.healthz)
 	engine.GET("/readyz", s.readyz)
+	if opts.Metrics != nil {
+		engine.GET("/metrics", gin.WrapH(opts.Metrics))
+	}
 
 	engine.GET("/", gin.WrapF(h.Index))
 	engine.GET("/runnersets/:name", param(h.SetDetail))
@@ -113,6 +115,7 @@ func (s *Server) engine(opts Options) *gin.Engine {
 	engine.GET("/workflows", gin.WrapF(h.Workflows))
 	engine.GET("/jobs", gin.WrapF(h.Jobs))
 	engine.GET("/jobs/:name", param(h.JobDetail))
+	engine.GET("/alerts", gin.WrapF(h.Alerts))
 
 	engine.GET("/stream", gin.WrapF(h.StreamOverview))
 	engine.GET("/stream/runnersets/:name", param(h.StreamSet))
@@ -120,6 +123,7 @@ func (s *Server) engine(opts Options) *gin.Engine {
 	engine.GET("/stream/workflows", gin.WrapF(h.StreamWorkflows))
 	engine.GET("/stream/jobs", gin.WrapF(h.StreamJobs))
 	engine.GET("/stream/jobs/:name", param(h.StreamJob))
+	engine.GET("/stream/alerts", gin.WrapF(h.StreamAlerts))
 
 	engine.Any(web.AssetPrefix+"*filepath", gin.WrapH(
 		http.StripPrefix(web.AssetPrefix, opts.Assets)))

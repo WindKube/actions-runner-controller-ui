@@ -98,6 +98,9 @@ type Builder struct {
 	GrafanaURL        string
 	GrafanaDatasource string
 
+	// Alerts is nil when alerting is off.
+	Alerts AlertSource
+
 	// CSS and JS are the content-hashed asset URLs. They are carried on the
 	// page rather than read from a package-level variable so a test can render
 	// the whole document without an embedded filesystem.
@@ -123,6 +126,7 @@ type Page struct {
 	Sources  []SourceRow
 	Warnings []string
 	Crumbs   []Crumb
+	Alerts   []AlertRow
 
 	// Tab is which of the top-level views is showing, so the tab strip can
 	// mark it. The zero value is the fleet overview, which is what a page
@@ -141,33 +145,28 @@ type Page struct {
 // Tab names one of the dashboard's top-level views.
 type Tab string
 
-// The three tabs. TabFleet is the zero value so a page that sets none is the
-// overview.
+// TabFleet is the zero value so a page that sets none is the overview.
 const (
 	TabFleet     Tab = ""
 	TabWorkflows Tab = "workflows"
 	TabJobs      Tab = "jobs"
+	TabAlerts    Tab = "alerts"
 )
 
-// TabLink is one entry in the top-level tab strip.
 type TabLink struct {
 	Tab   Tab
 	Label string
 	Href  string
 }
 
-// AllTabs lists the tabs in strip order.
-//
-// The hrefs carry no filter state on purpose. Switching tab is a change of
-// subject — from what the fleet is doing now to what it did — and the fleet
-// tab's filters are over runner state, which the history tabs have no column
-// for. Carrying them across would silently empty the table someone just
-// clicked into.
+// AllTabs lists the tabs in strip order. The hrefs carry no filters: the
+// fleet tab's filters are over runner state, which the other tabs lack.
 func AllTabs() []TabLink {
 	return []TabLink{
 		{Tab: TabFleet, Label: "fleet", Href: "/"},
 		{Tab: TabWorkflows, Label: "workflows", Href: "/workflows"},
 		{Tab: TabJobs, Label: "jobs", Href: "/jobs"},
+		{Tab: TabAlerts, Label: "alerts", Href: "/alerts"},
 	}
 }
 
@@ -410,6 +409,7 @@ func (b *Builder) page(title string, s fleet.Snapshot, sig Signals, now time.Tim
 		Stale:   s.At.IsZero() || lag > 2*b.interval(),
 		Sources: sourceRows(s, b.interval()),
 		Crumbs:  crumbs,
+		Alerts:  b.firingAlerts(now),
 		CSS:     b.CSS,
 		JS:      b.JS,
 	}

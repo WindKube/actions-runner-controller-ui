@@ -22,6 +22,7 @@ ago.**
 - [Why](#why)
 - [Screenshots](#screenshots)
 - [Workflows and Jobs](#workflows-and-jobs)
+- [Alerts](#alerts)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
@@ -123,6 +124,29 @@ job closes. Rows left open across a restart are closed at the time they were
 last seen. Rows are kept for `ARC_UI_JOB_RETENTION` (30 days); at a few hundred
 bytes a row the file stays small even for busy fleets.
 
+## Alerts
+
+The dashboard evaluates a few rules every refresh and shows what fires as a
+toast and on the **alerts** tab:
+
+| Rule | Source | Fires when |
+| --- | --- | --- |
+| jobs queued at max runners | listener queue depth, ARC CRDs | a set has queued jobs while at `maxRunners` for `ARC_UI_ALERT_QUEUED_AT_MAX_FOR` |
+| listener down | AutoscalingListener and its pod | a set's listener is not running for `ARC_UI_ALERT_LISTENER_DOWN_FOR` |
+| runners OOMKilled | live runners and the job store | any runner was OOMKilled in `ARC_UI_ALERT_OOM_WINDOW` |
+| failed runners rising | `gha_controller_failed_ephemeral_runners` | a set's failed runners grew by `ARC_UI_ALERT_FAILED_RUNNERS_RISE` in the window |
+| slow job startup | `gha_job_startup_duration_seconds` | a set's p95 startup is above `ARC_UI_ALERT_STARTUP_P95` |
+
+A rule whose source is down shows as **unavailable** and holds its alerts as
+they were; an outage is never reported as a recovery. State is in memory, so a
+restart forgets pending holds and the resolved list. These are not pages: for
+paging, write alerting rules in your own Prometheus.
+
+`/metrics` exposes the app itself: `arc_ui_prometheus_query_duration_seconds`,
+`arc_ui_prometheus_query_errors_total`, `arc_ui_sse_clients`,
+`arc_ui_alerts_firing` and `arc_ui_alert_rule_unavailable`, plus Go and process
+metrics.
+
 ## Requirements
 
 - A Kubernetes cluster running [Actions Runner Controller][arc] (the
@@ -183,6 +207,13 @@ authority; this table is it in prose.
 | `ARC_UI_GITHUB_URL` | `https://github.com` | base for the job page's GitHub run link (set it for GHES) |
 | `ARC_UI_GRAFANA_URL` | — | Grafana base URL; when set, job pages link to Explore on the runner pod's cAdvisor series |
 | `ARC_UI_GRAFANA_DATASOURCE` | — | Prometheus datasource UID for that link; empty uses Grafana's default |
+| `ARC_UI_ALERT_QUEUED_AT_MAX_FOR` | `15m` | how long a set must have queued jobs at its max runners before the alert fires |
+| `ARC_UI_ALERT_LISTENER_DOWN_FOR` | `2m` | how long a listener must be down before the alert fires |
+| `ARC_UI_ALERT_OOM_WINDOW` | `1h` | an OOMKilled runner in this window fires the alert |
+| `ARC_UI_ALERT_FAILED_RUNNERS_RISE` | `3` | fire when a set's failed EphemeralRunners grow by at least this many… |
+| `ARC_UI_ALERT_FAILED_RUNNERS_WINDOW` | `15m` | …within this window |
+| `ARC_UI_ALERT_STARTUP_P95` | `2m` | fire when a set's p95 job startup is above this… |
+| `ARC_UI_ALERT_STARTUP_WINDOW` | `30m` | …over this window |
 | `ARC_UI_GITHUB_ORG` | — | breadcrumb label. Empty derives it from the AutoscalingRunnerSet's `githubConfigUrl` |
 | `ARC_UI_KUBECONFIG` | — | kubeconfig path. Unset means in-cluster if possible, else the default lookup |
 | `ARC_UI_KUBE_CONTEXT` | — | context to select from that kubeconfig |

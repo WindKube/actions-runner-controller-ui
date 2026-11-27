@@ -32,6 +32,10 @@ func TestLoadRejects(t *testing.T) {
 		{"zero prometheus timeout", map[string]string{"ARC_UI_PROMETHEUS_TIMEOUT": "0s"}, "ARC_UI_PROMETHEUS_TIMEOUT"},
 		{"sub-second refresh", map[string]string{"ARC_UI_REFRESH_INTERVAL": "100ms"}, "ARC_UI_REFRESH_INTERVAL"},
 		{"bad log format", map[string]string{"ARC_UI_LOG_FORMAT": "xml"}, "ARC_UI_LOG_FORMAT"},
+		{"negative alert hold", map[string]string{"ARC_UI_ALERT_LISTENER_DOWN_FOR": "-1m"}, "ARC_UI_ALERT_LISTENER_DOWN_FOR"},
+		{"tiny alert window", map[string]string{"ARC_UI_ALERT_STARTUP_WINDOW": "30s"}, "ARC_UI_ALERT_STARTUP_WINDOW"},
+		{"zero failed rise", map[string]string{"ARC_UI_ALERT_FAILED_RUNNERS_RISE": "0"}, "ARC_UI_ALERT_FAILED_RUNNERS_RISE"},
+		{"zero startup threshold", map[string]string{"ARC_UI_ALERT_STARTUP_P95": "0s"}, "ARC_UI_ALERT_STARTUP_P95"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -100,6 +100,8 @@ func TestSetScopeJoinsKubeStateMetricsAndFleetScopeDoesNot(t *testing.T) {
 	assert.Contains(t, testQueries.Capacity(""), "< 2147483647", "an unbounded set must not become the ceiling")
 	assert.Contains(t, testQueries.Completed("", true, time.Minute), `job_result="succeeded"`)
 	assert.Contains(t, testQueries.Completed("", false, time.Minute), `job_result!="succeeded"`)
+	assert.Equal(t, `sum by (name) (delta(gha_controller_failed_ephemeral_runners[900s]))`, testQueries.FailedRunnersIncrease(15*time.Minute))
+	assert.Equal(t, `histogram_quantile(0.95, sum by (le, name) (rate(gha_job_startup_duration_seconds_bucket{name!=""}[1800s])))`, testQueries.StartupP95(30*time.Minute))
 }
 
 func TestJobCountersSpanTwoScrapesAtEveryRange(t *testing.T) {

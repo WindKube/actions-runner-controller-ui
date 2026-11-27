@@ -18,7 +18,9 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/types"
 
+	"arc-ui/internal/alert"
 	"arc-ui/internal/api"
+	"arc-ui/internal/appmetrics"
 	"arc-ui/internal/config"
 	"arc-ui/internal/fleet"
 	"arc-ui/internal/history"
@@ -197,6 +199,16 @@ func run(parent context.Context) error {
 		return err
 	}
 	queries := promql.Queries{Schema: promSchema(cfg)}
+	streams := web.NewStreamRegistry()
+	alerts := &alert.Engine{
+		Rules:    alertRules(cfg, collector, db, promClient, queries),
+		Interval: cfg.RefreshInterval,
+		OnChange: func() { events.Broadcast(time.Now()) },
+		Log:      log,
+	}
+	metrics := appmetrics.New(streams.Len, alerts.State)
+	promClient.Observe(metrics.ObservePrometheus)
+
 	prober := prom.NewProber(promClient, queries.Schema, cfg.PrometheusProbeInterval, collector, log)
 	go supervise(ctx, log, "prometheus probe", prober.Run)
 
@@ -222,6 +234,7 @@ func run(parent context.Context) error {
 	defer cancelWatch()
 
 	go runPruner(ctx, db, cfg.JobRetention, log)
+	go supervise(ctx, log, "alerts", alerts.Run)
 
 	assets, err := web.NewAssets()
 	if err != nil {
@@ -238,6 +251,7 @@ func run(parent context.Context) error {
 			GitHubURL:         cfg.GitHubURL,
 			GrafanaURL:        cfg.GrafanaURL,
 			GrafanaDatasource: cfg.GrafanaDatasource,
+			Alerts:            alerts,
 			CSS:               assets.CSS(),
 			JS:                assets.JS(),
 		},
@@ -245,7 +259,7 @@ func run(parent context.Context) error {
 		Log:       log,
 		Events:    eventSource{collector},
 		Heartbeat: cfg.RefreshInterval,
-		Streams:   web.NewStreamRegistry(),
+		Streams:   streams,
 	}
 
 	server := api.New(api.Options{
@@ -253,6 +267,7 @@ func run(parent context.Context) error {
 		Log:     log,
 		Handler: handler,
 		Assets:  assets,
+		Metrics: metrics.Handler(),
 		Ready: map[string]api.Checker{
 			// HasSynced, never WaitForCacheSync: the latter blocks, and a probe
 			// that blocks reads to the kubelet as a probe that failed.
@@ -493,6 +508,16 @@ func readUsage(ctx context.Context, db jobStore, c promql.InstantQuerier, q prom
 		}
 	}
 	return retry
+}
+
+func alertRules(cfg config.Config, f alert.Snapshotter, db alert.FailureStore, q alert.Querier, queries promql.Queries) []alert.Rule {
+	return []alert.Rule{
+		alert.QueuedAtMax(f, cfg.AlertQueuedAtMaxFor),
+		alert.ListenerDown(f, cfg.AlertListenerDownFor),
+		alert.OOMKilled(f, db, cfg.AlertOOMWindow),
+		alert.FailedRising(f, q, queries.FailedRunnersIncrease(cfg.AlertFailedRunnersWindow), cfg.AlertFailedRunnersRise, cfg.AlertFailedRunnersWindow),
+		alert.StartupP95(f, q, queries.StartupP95(cfg.AlertStartupWindow), queries.Schema.ScaleSetLabel, cfg.AlertStartupP95, cfg.AlertStartupWindow),
+	}
 }
 
 // runPruner applies job retention hourly until ctx ends.

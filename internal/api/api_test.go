@@ -61,6 +61,9 @@ func testServer(t *testing.T, ready map[string]Checker) (*Server, string) {
 		Handler: handler,
 		Assets:  assets,
 		Ready:   ready,
+		Metrics: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, "arc_ui_sse_clients 0\n")
+		}),
 	})
 
 	go func() {
@@ -222,6 +225,8 @@ func TestHistoryTabsAreMounted(t *testing.T) {
 	}{
 		{"/workflows", http.StatusOK},
 		{"/jobs", http.StatusOK},
+		{"/alerts", http.StatusOK},
+		{"/metrics", http.StatusOK},
 		// No history store here, so no job has been recorded under any id.
 		{"/jobs/1", http.StatusNotFound},
 		// The id is the store's row id, so a non-numeric one is a missing page
@@ -247,7 +252,7 @@ func TestHistoryStreamsAreMounted(t *testing.T) {
 	srv, base := testServer(t, nil)
 	defer func() { _ = srv.Shutdown(context.Background()) }()
 
-	for _, path := range []string{"/stream/workflows", "/stream/jobs"} {
+	for _, path := range []string{"/stream/workflows", "/stream/jobs", "/stream/alerts"} {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+path, nil)
 		require.NoError(t, err)
 

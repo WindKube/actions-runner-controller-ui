@@ -157,6 +157,18 @@ func (q Queries) JobMemPeak(pod string, window time.Duration) string {
 	return fmt.Sprintf(`max(max_over_time(container_memory_working_set_bytes{%s,pod=%s}[%s]))`, q.containers(), strconv.Quote(pod), promDuration(window))
 }
 
+// FailedRunnersIncrease is the growth of each set's failed EphemeralRunners
+// over the window, by the controller's name label.
+func (q Queries) FailedRunnersIncrease(window time.Duration) string {
+	return fmt.Sprintf(`sum by (name) (delta(gha_controller_failed_ephemeral_runners[%s]))`, promDuration(window))
+}
+
+// StartupP95 is each set's 95th percentile job startup latency in seconds.
+func (q Queries) StartupP95(window time.Duration) string {
+	return fmt.Sprintf(`histogram_quantile(0.95, sum by (le, %s) (rate(gha_job_startup_duration_seconds_bucket{%s}[%s])))`,
+		q.Schema.ScaleSetLabel, q.listener(""), promDuration(window))
+}
+
 // Queue is jobs assigned to a set but not yet running, per set.
 func (q Queries) Queue() string {
 	l := q.Schema.ScaleSetLabel

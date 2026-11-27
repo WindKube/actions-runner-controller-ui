@@ -163,12 +163,39 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, p Page, body te
 // regionSet is a page's patchable regions, keyed by DOM id.
 type regionSet map[string]templ.Component
 
+// chrome adds the regions every page shares.
+func chrome(p Page, r regionSet) regionSet {
+	r["health"] = HealthStrip(p)
+	r["tabs"] = TabStrip(p)
+	r["toasts"] = Toasts(p)
+	return r
+}
+
+// Alerts serves the alert list.
+func (h *Handler) Alerts(w http.ResponseWriter, r *http.Request) {
+	v := h.Builder.AlertsPage(r.Context(), SignalsFromQuery(r.URL.Query()), h.now())
+	v.Stream = "/stream/alerts"
+	h.render(w, r, v.Page, AlertsPage(v))
+}
+
+func (h *Handler) StreamAlerts(w http.ResponseWriter, r *http.Request) {
+	h.stream(w, r, "/stream/alerts", func(ctx context.Context, sig Signals, now time.Time) (regionSet, bool) {
+		v := h.Builder.AlertsPage(ctx, sig, now)
+		v.Stream = "/stream/alerts"
+		return chrome(v.Page, regionSet{
+			"alerts-firing":   AlertsFiring(v),
+			"alert-rules":     AlertRules(v),
+			"alerts-resolved": AlertsResolved(v),
+		}), true
+	})
+}
+
 // StreamOverview keeps the fleet overview live.
 func (h *Handler) StreamOverview(w http.ResponseWriter, r *http.Request) {
 	h.stream(w, r, "/stream", func(ctx context.Context, sig Signals, now time.Time) (regionSet, bool) {
 		o := h.Builder.Overview(ctx, sig, now)
 		o.Stream = "/stream"
-		return regionSet{
+		return chrome(o.Page, regionSet{
 			"rangepicker": RangePicker(o.Page),
 			"filterbar":   FilterBar(o),
 			"tiles":       Tiles(o),
@@ -182,8 +209,7 @@ func (h *Handler) StreamOverview(w http.ResponseWriter, r *http.Request) {
 			"repos":       ReposPanel(o),
 			"failures":    FailuresPanel(o),
 			"store":       StoreFooter(o),
-			"health":      HealthStrip(o.Page),
-		}, true
+		}), true
 	})
 }
 
@@ -192,11 +218,10 @@ func (h *Handler) StreamWorkflows(w http.ResponseWriter, r *http.Request) {
 	h.stream(w, r, "/stream/workflows", func(ctx context.Context, sig Signals, now time.Time) (regionSet, bool) {
 		v := h.Builder.Workflows(ctx, sig, now)
 		v.Stream = "/stream/workflows"
-		return regionSet{
+		return chrome(v.Page, regionSet{
 			"filterbar": HistoryFilterBar(v.Selects, v.Search, v.Summary, v.Stream),
 			"workflows": WorkflowsTable(v),
-			"health":    HealthStrip(v.Page),
-		}, true
+		}), true
 	})
 }
 
@@ -205,11 +230,10 @@ func (h *Handler) StreamJobs(w http.ResponseWriter, r *http.Request) {
 	h.stream(w, r, "/stream/jobs", func(ctx context.Context, sig Signals, now time.Time) (regionSet, bool) {
 		v := h.Builder.Jobs(ctx, sig, now)
 		v.Stream = "/stream/jobs"
-		return regionSet{
+		return chrome(v.Page, regionSet{
 			"filterbar": HistoryFilterBar(v.Selects, v.Search, v.Summary, v.Stream),
 			"jobs":      JobsTable(v),
-			"health":    HealthStrip(v.Page),
-		}, true
+		}), true
 	})
 }
 
@@ -232,12 +256,11 @@ func (h *Handler) StreamJob(w http.ResponseWriter, r *http.Request, id string) {
 			return nil, false
 		}
 		v.Stream = url
-		return regionSet{
+		return chrome(v.Page, regionSet{
 			"tiles":     JobTiles(v),
 			"resources": JobResources(v),
 			"facts":     JobFacts(v),
-			"health":    HealthStrip(v.Page),
-		}, true
+		}), true
 	})
 }
 
@@ -250,7 +273,7 @@ func (h *Handler) StreamSet(w http.ResponseWriter, r *http.Request, name string)
 			return nil, false
 		}
 		d.Stream = url
-		return regionSet{
+		return chrome(d.Page, regionSet{
 			"rangepicker": RangePicker(d.Page),
 			"tiles":       SetTiles(d),
 			"history":     SetHistory(d),
@@ -258,8 +281,7 @@ func (h *Handler) StreamSet(w http.ResponseWriter, r *http.Request, name string)
 			"config":      SetConfig(d),
 			"churn":       SetChurn(d),
 			"runners":     SetRunners(d),
-			"health":      HealthStrip(d.Page),
-		}, true
+		}), true
 	})
 }
 
@@ -272,14 +294,13 @@ func (h *Handler) StreamRunner(w http.ResponseWriter, r *http.Request, name stri
 			return nil, false
 		}
 		d.Stream = url
-		return regionSet{
+		return chrome(d.Page, regionSet{
 			"rangepicker": RangePicker(d.Page),
 			"resources":   RunnerResources(d),
 			"events":      RunnerEvents(d),
 			"setjobs":     SetJobsPanel(d),
 			"facts":       RunnerFacts(d),
-			"health":      HealthStrip(d.Page),
-		}, true
+		}), true
 	})
 }
 

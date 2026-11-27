@@ -61,6 +61,14 @@ type Config struct {
 	GrafanaURL        string `env:"ARC_UI_GRAFANA_URL"`
 	GrafanaDatasource string `env:"ARC_UI_GRAFANA_DATASOURCE"`
 
+	AlertQueuedAtMaxFor      time.Duration `env:"ARC_UI_ALERT_QUEUED_AT_MAX_FOR" envDefault:"15m"`
+	AlertListenerDownFor     time.Duration `env:"ARC_UI_ALERT_LISTENER_DOWN_FOR" envDefault:"2m"`
+	AlertOOMWindow           time.Duration `env:"ARC_UI_ALERT_OOM_WINDOW" envDefault:"1h"`
+	AlertFailedRunnersRise   int           `env:"ARC_UI_ALERT_FAILED_RUNNERS_RISE" envDefault:"3"`
+	AlertFailedRunnersWindow time.Duration `env:"ARC_UI_ALERT_FAILED_RUNNERS_WINDOW" envDefault:"15m"`
+	AlertStartupP95          time.Duration `env:"ARC_UI_ALERT_STARTUP_P95" envDefault:"2m"`
+	AlertStartupWindow       time.Duration `env:"ARC_UI_ALERT_STARTUP_WINDOW" envDefault:"30m"`
+
 	ShutdownTimeout time.Duration `env:"ARC_UI_SHUTDOWN_TIMEOUT" envDefault:"20s"`
 	// PreStopDelay keeps serving after readiness flips; it must cover two
 	// readiness periods or clients see 502s.
@@ -97,6 +105,9 @@ func Load() (Config, []Warning, error) {
 			return Config{}, warns, err
 		}
 	}
+	if err := validateAlerts(cfg); err != nil {
+		return Config{}, warns, err
+	}
 	if cfg.KubeQPS <= 0 || cfg.KubeBurst <= 0 {
 		return Config{}, warns, errors.New("ARC_UI_KUBE_QPS and ARC_UI_KUBE_BURST must be positive")
 	}
@@ -131,6 +142,33 @@ func Load() (Config, []Warning, error) {
 func absoluteURL(name, v string) error {
 	if u, err := url.Parse(v); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("%s=%q must be an absolute http(s) URL", name, v)
+	}
+	return nil
+}
+
+func validateAlerts(cfg Config) error {
+	for name, d := range map[string]time.Duration{
+		"ARC_UI_ALERT_QUEUED_AT_MAX_FOR": cfg.AlertQueuedAtMaxFor,
+		"ARC_UI_ALERT_LISTENER_DOWN_FOR": cfg.AlertListenerDownFor,
+	} {
+		if d < 0 {
+			return fmt.Errorf("%s=%s must not be negative", name, d)
+		}
+	}
+	for name, d := range map[string]time.Duration{
+		"ARC_UI_ALERT_OOM_WINDOW":            cfg.AlertOOMWindow,
+		"ARC_UI_ALERT_FAILED_RUNNERS_WINDOW": cfg.AlertFailedRunnersWindow,
+		"ARC_UI_ALERT_STARTUP_WINDOW":        cfg.AlertStartupWindow,
+	} {
+		if d < time.Minute {
+			return fmt.Errorf("%s=%s must be at least 1m", name, d)
+		}
+	}
+	if cfg.AlertFailedRunnersRise < 1 {
+		return fmt.Errorf("ARC_UI_ALERT_FAILED_RUNNERS_RISE=%d must be at least 1", cfg.AlertFailedRunnersRise)
+	}
+	if cfg.AlertStartupP95 <= 0 {
+		return fmt.Errorf("ARC_UI_ALERT_STARTUP_P95=%s must be positive", cfg.AlertStartupP95)
 	}
 	return nil
 }
