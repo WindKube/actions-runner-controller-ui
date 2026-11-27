@@ -15,8 +15,8 @@ import (
 // Schema names the labels the app filters on. They depend on how the
 // operator's scrape config relabels pod labels, so they are configurable.
 type Schema struct {
-	// ScaleSetLabel is the scale set name on gha_* listener series, mapped
-	// from the listener pod's actions.github.com/scale-set-name label.
+	// ScaleSetLabel is the scale set name on gha_* listener series; the
+	// listener exports it as "name".
 	ScaleSetLabel string
 	// KSMScaleSetLabel is the same pod label as kube-state-metrics exports it
 	// on kube_pod_labels.
@@ -58,7 +58,7 @@ func (s Schema) checks() []check {
 				if !exists(ctx, c, `count(gha_assigned_jobs)`) {
 					return "no gha_* listener series; enable listener metrics and scrape them (podMonitors.arc.enabled)"
 				}
-				return fmt.Sprintf("gha_* series carry no %s label; map the actions.github.com/scale-set-name pod label in the scrape config", s.ScaleSetLabel)
+				return fmt.Sprintf("gha_* series carry no %s label; set ARC_UI_PROMETHEUS_SCALE_SET_LABEL to the label holding the scale set name", s.ScaleSetLabel)
 			},
 		},
 		{

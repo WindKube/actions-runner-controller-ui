@@ -155,7 +155,7 @@ func TestLoadPrometheus(t *testing.T) {
 	cfg, _, err := Load()
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"X-Scope-OrgID": "team-a", "X-Extra": "1"}, cfg.PrometheusHeaders)
-	assert.Equal(t, "actions_github_com_scale_set_name", cfg.PrometheusScaleSetLabel)
+	assert.Equal(t, "name", cfg.PrometheusScaleSetLabel)
 	assert.Equal(t, "label_actions_github_com_scale_set_name", cfg.PrometheusKSMScaleSetLabel)
 	assert.Equal(t, 15*time.Second, cfg.RefreshInterval)
 }

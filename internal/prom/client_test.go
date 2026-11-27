@@ -107,6 +107,21 @@ func TestQueryRangeParsesAMatrixAndAlignsTheWindow(t *testing.T) {
 	assert.Equal(t, "60", f.lastReq.Form.Get("step"))
 }
 
+func TestSubSecondStepsDoNotShareACacheEntry(t *testing.T) {
+	t.Parallel()
+	f, srv := newFake(map[string]string{})
+	defer srv.Close()
+	c := newClient(t, srv.URL, nil)
+
+	start := time.Unix(30, 0)
+	for _, step := range []time.Duration{time.Second, 1500 * time.Millisecond} {
+		_, err := c.QueryRange(t.Context(), "x", Range{Start: start, End: start.Add(time.Minute), Step: step})
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 2, f.hitsFor("/api/v1/query_range", "x"))
+	assert.Equal(t, "1.5", f.lastReq.Form.Get("step"))
+}
+
 func TestInvalidRangeIsRejectedLocally(t *testing.T) {
 	t.Parallel()
 	c := newClient(t, "http://127.0.0.1:1", nil)
@@ -290,7 +305,7 @@ type sinkFunc func(fleet.Source)
 func (f sinkFunc) SetSource(s fleet.Source) { f(s) }
 
 var testSchema = Schema{
-	ScaleSetLabel:    "actions_github_com_scale_set_name",
+	ScaleSetLabel:    "name",
 	KSMScaleSetLabel: "label_actions_github_com_scale_set_name",
 	RunnerNamespaces: []string{"arc-runners", "arc.gpu"},
 }
@@ -343,7 +358,7 @@ func TestProbeDistinguishesAMissingLabelFromMissingSeries(t *testing.T) {
 	})
 	defer srv.Close()
 	got := probeBy(NewProber(newClient(t, srv.URL, nil), testSchema, time.Minute, nil, zerolog.Nop()).Probe(t.Context()))
-	assert.Contains(t, got[fleet.SourceARCMetrics].Reason, "carry no actions_github_com_scale_set_name label")
+	assert.Contains(t, got[fleet.SourceARCMetrics].Reason, "carry no name label")
 	assert.Contains(t, got[fleet.SourceKSM].Reason, "no kube-state-metrics series")
 }
 

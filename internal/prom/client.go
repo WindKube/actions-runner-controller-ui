@@ -157,12 +157,12 @@ func (c *Client) QueryRange(ctx context.Context, query string, r Range) ([]Serie
 	if r.Step <= 0 || !r.End.After(r.Start) {
 		return nil, fmt.Errorf("invalid range %s..%s step %s", r.Start, r.End, r.Step)
 	}
-	key := fmt.Sprintf("r|%s|%d|%d|%d", query, r.Start.Unix(), r.End.Unix(), int64(r.Step.Seconds()))
+	key := fmt.Sprintf("r|%s|%d|%d|%d", query, r.Start.UnixMilli(), r.End.UnixMilli(), r.Step.Milliseconds())
 	v, err := c.cache.do(key, func() (any, error) {
 		form := url.Values{
 			"query": {query},
-			"start": {strconv.FormatInt(r.Start.Unix(), 10)},
-			"end":   {strconv.FormatInt(r.End.Unix(), 10)},
+			"start": {strconv.FormatFloat(float64(r.Start.UnixMilli())/1e3, 'f', -1, 64)},
+			"end":   {strconv.FormatFloat(float64(r.End.UnixMilli())/1e3, 'f', -1, 64)},
 			"step":  {strconv.FormatFloat(r.Step.Seconds(), 'f', -1, 64)},
 		}
 		var out []Series

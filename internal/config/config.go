@@ -69,7 +69,7 @@ type Config struct {
 	PrometheusCAFile             string            `env:"ARC_UI_PROMETHEUS_CA_FILE"`
 	PrometheusInsecureSkipVerify bool              `env:"ARC_UI_PROMETHEUS_INSECURE_SKIP_VERIFY"`
 	PrometheusTimeout            time.Duration     `env:"ARC_UI_PROMETHEUS_TIMEOUT" envDefault:"10s"`
-	PrometheusScaleSetLabel      string            `env:"ARC_UI_PROMETHEUS_SCALE_SET_LABEL" envDefault:"actions_github_com_scale_set_name"`
+	PrometheusScaleSetLabel      string            `env:"ARC_UI_PROMETHEUS_SCALE_SET_LABEL" envDefault:"name"`
 	PrometheusKSMScaleSetLabel   string            `env:"ARC_UI_PROMETHEUS_KSM_SCALE_SET_LABEL" envDefault:"label_actions_github_com_scale_set_name"`
 	PrometheusProbeInterval      time.Duration     `env:"ARC_UI_PROMETHEUS_PROBE_INTERVAL" envDefault:"1m"`
 
