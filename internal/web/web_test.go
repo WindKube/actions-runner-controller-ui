@@ -1425,6 +1425,15 @@ func TestJobTilesDeriveAveragesFromUsage(t *testing.T) {
 	assert.Equal(t, "4Gi", byLabel["peak memory"].Value)
 	assert.Equal(t, "runner ok", byLabel["runner outcome"].Value)
 
+	running := sampleJob()
+	running.FinishedAt, running.CPUSeconds, running.MemPeakBytes = time.Time{}, 0, 0
+	for _, tile := range jobTiles(running, now) {
+		if tile.Label == "avg cpu" || tile.Label == "peak memory" || tile.Label == "cpu used" {
+			assert.Equal(t, "—", tile.Value, tile.Label)
+			assert.Equal(t, "read when the job ends", tile.Sub, "a running job has samples, just not read yet")
+		}
+	}
+
 	j.RunnerFailed, j.FailureReason = true, "OOMKilled"
 	facts := map[string]string{}
 	for _, kv := range jobFacts(j, now) {

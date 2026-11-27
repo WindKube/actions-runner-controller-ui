@@ -1650,16 +1650,25 @@ func jobTiles(j Job, now time.Time) []Tile {
 	d := j.Duration(now)
 	secs := d.Seconds()
 
-	cpu := Tile{Label: "avg cpu", Value: "—", Sub: "no cAdvisor samples", Tone: ToneMuted}
+	missing := "no cAdvisor samples"
+	if j.Running() {
+		missing = "read when the job ends"
+	}
+	cpu := Tile{Label: "avg cpu", Value: "—", Sub: missing, Tone: ToneMuted}
 	if secs > 0 && j.CPUSeconds > 0 {
 		cpu = Tile{
 			Label: "avg cpu", Value: fleet.FormatCores(j.CPUSeconds / secs),
 			Sub: "cores over " + fleet.FormatAge(d), Tone: ToneCPU,
 		}
 	}
-	mem := Tile{Label: "peak memory", Value: "—", Sub: "no cAdvisor samples", Tone: ToneMuted}
+	mem := Tile{Label: "peak memory", Value: "—", Sub: missing, Tone: ToneMuted}
 	if j.MemPeakBytes > 0 {
 		mem = Tile{Label: "peak memory", Value: fleet.FormatGiB(j.MemPeakBytes), Sub: "working set", Tone: ToneMemory}
+	}
+
+	used := Tile{Label: "cpu used", Value: CoreSeconds(j.CPUSeconds), Sub: "over the job", Tone: ToneCPU}
+	if j.CPUSeconds <= 0 {
+		used = Tile{Label: "cpu used", Value: "—", Sub: missing, Tone: ToneMuted}
 	}
 
 	return []Tile{
@@ -1667,7 +1676,7 @@ func jobTiles(j Job, now time.Time) []Tile {
 		{Label: "duration", Value: fleet.FormatAge(d), Sub: "since " + fleet.FormatRelative(j.StartedAt, now), Tone: ToneAccent},
 		cpu,
 		mem,
-		{Label: "cpu used", Value: CoreSeconds(j.CPUSeconds), Sub: "over the job", Tone: ToneCPU},
+		used,
 	}
 }
 
