@@ -400,12 +400,17 @@ func TestRunnerDetailWindowFollowsTheRunnerNotThePageRange(t *testing.T) {
 
 	young := runnerWindow(fleet.Runner{CreatedAt: now.Add(-2 * time.Minute)}, now)
 	assert.Equal(t, 15*time.Minute, young.To.Sub(young.From), "a new runner still gets a readable window")
+	assert.Equal(t, "last 15m", runnerWindowLabel(fleet.Runner{CreatedAt: now.Add(-2 * time.Minute)}, young))
 
-	mid := runnerWindow(fleet.Runner{CreatedAt: now.Add(-40 * time.Minute)}, now)
+	midRunner := fleet.Runner{CreatedAt: now.Add(-40 * time.Minute)}
+	mid := runnerWindow(midRunner, now)
 	assert.Equal(t, 40*time.Minute, mid.To.Sub(mid.From), "the window starts at the runner's creation")
+	assert.Equal(t, "since the pod started", runnerWindowLabel(midRunner, mid))
 
-	old := runnerWindow(fleet.Runner{CreatedAt: now.Add(-72 * time.Hour)}, now)
+	oldRunner := fleet.Runner{CreatedAt: now.Add(-72 * time.Hour)}
+	old := runnerWindow(oldRunner, now)
 	assert.Equal(t, maxRunnerWindow, old.To.Sub(old.From))
+	assert.Equal(t, "last 6h", runnerWindowLabel(oldRunner, old))
 
 	assert.Equal(t, []string{"-40m", "-30m", "-20m", "-10m", "now"}, spanTicks(40*time.Minute))
 	assert.Equal(t, []string{"-6h", "-4.5h", "-3h", "-1.5h", "now"}, spanTicks(6*time.Hour))

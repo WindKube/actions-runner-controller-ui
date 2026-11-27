@@ -252,6 +252,7 @@ type RunnerDetail struct {
 	Facts  []KV
 	CPU    LineChart
 	Mem    LineChart
+	Window string
 	Events []fleet.Event
 
 	// SetJobs is recent job activity across the whole RunnerSet rather than
@@ -572,6 +573,7 @@ func (b *Builder) Runner(ctx context.Context, name string, sig Signals, now time
 		Facts:   runnerFacts(r, now),
 		CPU:     unavailableLine(runnerLine("CPU", raw.CPU, r.CPU, ticks, strokeCPU, fillCPU, ToneCPU, fleet.FormatCores), rawErr),
 		Mem:     unavailableLine(runnerLine("Memory", raw.Mem, r.Mem, ticks, strokeMem, fillMem, ToneMemory, fleet.FormatGiB), rawErr),
+		Window:  runnerWindowLabel(r, win),
 		Events:  events,
 		SetJobs: setJobs(snap, r, now),
 	}, true
@@ -592,6 +594,13 @@ func runnerWindow(r fleet.Runner, now time.Time) Window {
 		from = limit
 	}
 	return Window{From: from, To: now, Points: 60}
+}
+
+func runnerWindowLabel(r fleet.Runner, win Window) string {
+	if win.From.Equal(r.CreatedAt) {
+		return "since the pod started"
+	}
+	return "last " + strings.TrimSuffix(strings.TrimSuffix(win.To.Sub(win.From).String(), "0s"), "0m")
 }
 
 // spanTicks labels five evenly spaced points back from now.
