@@ -101,7 +101,7 @@ type fakeJobStore struct {
 	mu     sync.Mutex
 	closed []store.JobRecord
 	usage  map[int][2]float64
-	done   chan struct{}
+	stored chan int
 }
 
 func (f *fakeJobStore) Observe(context.Context, fleet.Snapshot) ([]store.JobRecord, error) {
@@ -110,46 +110,74 @@ func (f *fakeJobStore) Observe(context.Context, fleet.Snapshot) ([]store.JobReco
 
 func (f *fakeJobStore) SetUsage(_ context.Context, id int, cpu, mem float64) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.usage[id] = [2]float64{cpu, mem}
-	if len(f.usage) == len(f.closed) {
-		close(f.done)
-	}
+	f.mu.Unlock()
+	f.stored <- id
 	return nil
 }
 
-type fixedQuerier struct{}
+// laggingQuerier has no samples for r1 until its third read, and never for r2.
+type laggingQuerier struct {
+	mu    sync.Mutex
+	reads int
+	at    []time.Time
+}
 
-func (fixedQuerier) Query(_ context.Context, q string) ([]prom.Sample, error) {
+func (l *laggingQuerier) QueryAt(_ context.Context, q string, at time.Time) ([]prom.Sample, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.at = append(l.at, at)
+	if !strings.Contains(q, `pod="r1"`) {
+		return nil, nil
+	}
+	l.reads++
+	if l.reads <= 4 {
+		return nil, nil
+	}
 	if strings.Contains(q, "cpu") {
 		return []prom.Sample{{Value: 42}}, nil
 	}
 	return []prom.Sample{{Value: 1 << 30}}, nil
 }
 
-func (fixedQuerier) QueryRange(context.Context, string, prom.Range) ([]prom.Series, error) {
-	return nil, nil
-}
-
-func TestJobObserverStoresUsageOfClosedJobs(t *testing.T) {
+func TestJobObserverRetriesUntilPrometheusHasTheJob(t *testing.T) {
 	t.Parallel()
 
+	finished := time.Now().Add(-10 * time.Minute)
 	db := &fakeJobStore{
-		closed: []store.JobRecord{{ID: 7, Runner: "r1", StartedAt: time.Now().Add(-time.Minute)}},
+		closed: []store.JobRecord{
+			{ID: 7, Runner: "r1", StartedAt: finished.Add(-time.Minute), FinishedAt: finished},
+			{ID: 8, Runner: "r2", StartedAt: finished.Add(-time.Minute), FinishedAt: finished},
+		},
 		usage:  map[int][2]float64{},
-		done:   make(chan struct{}),
+		stored: make(chan int, 2),
 	}
-	observe := jobObserver(t.Context(), db, fixedQuerier{}, promql.Queries{}, time.Second, zerolog.Nop())
+	q := &laggingQuerier{}
+	delays := []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	observe := jobObserver(t.Context(), db, q, promql.Queries{}, time.Second, delays, zerolog.Nop())
 	require.NoError(t, observe(t.Context(), fleet.Snapshot{At: time.Now()}))
 
 	select {
-	case <-db.done:
+	case id := <-db.stored:
+		assert.Equal(t, 7, id)
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "usage was never stored")
 	}
 	db.mu.Lock()
-	defer db.mu.Unlock()
 	assert.Equal(t, [2]float64{42, 1 << 30}, db.usage[7])
+	db.mu.Unlock()
+
+	select {
+	case id := <-db.stored:
+		assert.Failf(t, "an empty answer was stored", "job %d", id)
+	case <-time.After(50 * time.Millisecond):
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, at := range q.at {
+		assert.True(t, at.After(finished), "usage is read at the job's end, not now: %s", at)
+		assert.True(t, at.Before(finished.Add(2*time.Minute)))
+	}
 }
 
 func TestSuperviseReportsOnlyUnexpectedStops(t *testing.T) {

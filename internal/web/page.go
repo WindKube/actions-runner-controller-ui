@@ -1394,7 +1394,7 @@ func (b *Builder) Job(ctx context.Context, id int, sig Signals, now time.Time) (
 		end = now
 	}
 	win := Window{From: j.StartedAt, To: end.Add(time.Second), Points: 90}
-	series, seriesErr := b.History.JobSeries(ctx, id, win)
+	series, seriesErr := b.History.JobSeries(ctx, j, win)
 
 	view := JobView{
 		Page:        page,

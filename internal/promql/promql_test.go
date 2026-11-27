@@ -61,6 +61,10 @@ func (f *fakeQuerier) Query(_ context.Context, q string) ([]prom.Sample, error) 
 	return f.instant[k], err
 }
 
+func (f *fakeQuerier) QueryAt(ctx context.Context, q string, _ time.Time) ([]prom.Sample, error) {
+	return f.Query(ctx, q)
+}
+
 func (f *fakeQuerier) QueryRange(_ context.Context, q string, _ prom.Range) ([]prom.Series, error) {
 	k, err := f.match(q)
 	return f.ranged[k], err
@@ -242,6 +246,21 @@ func TestRunnerLeavesBucketsBeforeThePodExistedEmpty(t *testing.T) {
 	assert.True(t, math.IsNaN(s.CPU[0]) && math.IsNaN(s.CPU[1]), "the pod did not exist yet: %v", s.CPU)
 	assert.Equal(t, []float64{0.5, 0.75, 0.5}, s.CPU[2:])
 	assert.Nil(t, s.Mem, "no memory series at all stays nil")
+}
+
+func TestJobUsageTellsNoSamplesFromNoUse(t *testing.T) {
+	t.Parallel()
+	started, finished := t0, t0.Add(10*time.Minute)
+
+	_, _, err := JobUsage(context.Background(), &fakeQuerier{}, testQueries, "r1", started, finished)
+	require.ErrorIs(t, err, ErrNoUsage)
+
+	q := &fakeQuerier{instant: map[string][]prom.Sample{"container_cpu_usage_seconds_total": {{Value: 0}}}}
+	cpu, mem, err := JobUsage(context.Background(), q, testQueries, "r1", started, finished)
+	require.NoError(t, err, "a zero that Prometheus answered is a real zero")
+	assert.Zero(t, cpu)
+	assert.Zero(t, mem)
+	assert.Contains(t, q.seen[0], "[720s]", "the window is the job's lifetime plus a scrape either side")
 }
 
 func TestRangeIsAlignedSoCallersShareACacheEntry(t *testing.T) {

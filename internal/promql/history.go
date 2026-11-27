@@ -3,6 +3,7 @@ package promql
 import (
 	"cmp"
 	"context"
+	"errors"
 	"math"
 	"slices"
 	"time"
@@ -141,35 +142,44 @@ func (h History) Runner(ctx context.Context, name string, w web.Window) (web.Run
 	return web.RunnerSeries{At: at, CPU: v[0], Mem: v[1]}, nil
 }
 
-// JobSeries is the job's runner pod over the job's own lifetime; the window
-// only supplies the resolution.
-func (h History) JobSeries(ctx context.Context, id int, w web.Window) (web.JobSeries, error) {
-	j, ok, err := h.Job(ctx, id)
-	if err != nil || !ok {
-		return web.JobSeries{}, err
-	}
-	end := j.FinishedAt
-	if end.IsZero() {
-		end = w.To
-	}
-	s, err := h.Runner(ctx, j.Runner, web.Window{From: j.StartedAt, To: end.Add(time.Minute), Points: w.Points})
+// JobSeries is the job's runner pod over w, which the caller sets to the job's
+// lifetime.
+func (h History) JobSeries(ctx context.Context, j web.Job, w web.Window) (web.JobSeries, error) {
+	s, err := h.Runner(ctx, j.Runner, w)
 	if err != nil {
 		return web.JobSeries{}, err
 	}
 	return web.JobSeries{At: s.At, CPU: s.CPU, Mem: s.Mem}, nil
 }
 
-// JobUsage is a finished job's CPU core-seconds and peak working set, read
-// once when the job closes.
-func JobUsage(ctx context.Context, c Querier, q Queries, pod string, since time.Duration) (cpuSeconds, memPeak float64, err error) {
-	window := max(since, time.Minute)
-	cpu, err := c.Query(ctx, q.JobCPUSeconds(pod, window))
+// InstantQuerier evaluates an instant query at a fixed time.
+type InstantQuerier interface {
+	QueryAt(ctx context.Context, query string, at time.Time) ([]prom.Sample, error)
+}
+
+// ErrNoUsage means Prometheus has no samples for the job's pod (yet), as
+// opposed to the job having used nothing.
+var ErrNoUsage = errors.New("no cAdvisor samples for the job's pod")
+
+// usagePad widens the read past the job's edges so the scrapes just before
+// start and just after finish are inside the window.
+const usagePad = time.Minute
+
+// JobUsage is a finished job's CPU core-seconds and peak working set, evaluated
+// at the job's end over its own lifetime so a late read sees the same window.
+func JobUsage(ctx context.Context, c InstantQuerier, q Queries, pod string, started, finished time.Time) (cpuSeconds, memPeak float64, err error) {
+	at := finished.Add(usagePad)
+	window := max(finished.Sub(started)+2*usagePad, 2*usagePad)
+	cpu, err := c.QueryAt(ctx, q.JobCPUSeconds(pod, window), at)
 	if err != nil {
 		return 0, 0, err
 	}
-	mem, err := c.Query(ctx, q.JobMemPeak(pod, window))
+	mem, err := c.QueryAt(ctx, q.JobMemPeak(pod, window), at)
 	if err != nil {
 		return 0, 0, err
+	}
+	if len(cpu) == 0 && len(mem) == 0 {
+		return 0, 0, ErrNoUsage
 	}
 	if len(cpu) > 0 {
 		cpuSeconds = cpu[0].Value

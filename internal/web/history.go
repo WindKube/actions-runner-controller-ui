@@ -321,7 +321,7 @@ type History interface {
 	Workflows(ctx context.Context, f JobFilter, w Window) (WorkflowList, error)
 	// Job reports false when there is no such row; the handler 404s.
 	Job(ctx context.Context, id int) (Job, bool, error)
-	JobSeries(ctx context.Context, id int, w Window) (JobSeries, error)
+	JobSeries(ctx context.Context, j Job, w Window) (JobSeries, error)
 	Facets(ctx context.Context, w Window) (JobFacets, error)
 	Stats(ctx context.Context) (StoreStats, error)
 }
@@ -374,7 +374,7 @@ func (NoHistory) Workflows(context.Context, JobFilter, Window) (WorkflowList, er
 
 func (NoHistory) Job(context.Context, int) (Job, bool, error) { return Job{}, false, nil }
 
-func (NoHistory) JobSeries(context.Context, int, Window) (JobSeries, error) {
+func (NoHistory) JobSeries(context.Context, Job, Window) (JobSeries, error) {
 	return JobSeries{}, nil
 }
 

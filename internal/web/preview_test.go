@@ -169,8 +169,8 @@ func (h previewHistory) Job(_ context.Context, id int) (Job, bool, error) {
 // JobSeries is a job ramping up and then holding, which is the shape a build
 // actually makes and the one that shows whether the chart's peak scaling is
 // right.
-func (previewHistory) JobSeries(_ context.Context, id int, _ Window) (JobSeries, error) {
-	if id != previewJobID {
+func (previewHistory) JobSeries(_ context.Context, j Job, _ Window) (JobSeries, error) {
+	if j.ID != previewJobID {
 		return JobSeries{}, nil
 	}
 	const n = 42

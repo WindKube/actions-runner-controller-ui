@@ -87,6 +87,22 @@ func TestQueryParsesAVector(t *testing.T) {
 	assert.InDelta(t, 3.0, rows[0].Value, 0)
 }
 
+func TestQueryAtSendsTheEvaluationTime(t *testing.T) {
+	t.Parallel()
+	f, srv := newFake(map[string]string{"up": vector("1")})
+	defer srv.Close()
+	c := newClient(t, srv.URL, nil)
+
+	_, err := c.QueryAt(t.Context(), "up", time.UnixMilli(1_700_000_000_500))
+	require.NoError(t, err)
+	assert.Equal(t, "1700000000.5", f.lastReq.Form.Get("time"))
+
+	_, err = c.Query(t.Context(), "up")
+	require.NoError(t, err)
+	assert.Empty(t, f.lastReq.Form.Get("time"))
+	assert.Equal(t, 2, f.hitsFor("/api/v1/query", "up"), "a pinned time and now are separate cache entries")
+}
+
 func TestQueryRangeParsesAMatrixAndAlignsTheWindow(t *testing.T) {
 	t.Parallel()
 	f, srv := newFake(map[string]string{

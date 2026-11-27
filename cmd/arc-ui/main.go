@@ -208,7 +208,7 @@ func run(parent context.Context) error {
 	// dropped for its successor; the tick goes out even when the write failed,
 	// so a broken store never freezes the dashboard.
 	recorder := startSnapshotRecorder(ctx,
-		jobObserver(ctx, db, promClient, queries, cfg.PrometheusTimeout, log),
+		jobObserver(ctx, db, promClient, queries, cfg.PrometheusTimeout, usageDelays, log),
 		events.Broadcast,
 		func(err error) {
 			if err != nil {
@@ -445,28 +445,54 @@ type jobStore interface {
 
 // jobObserver records each snapshot's jobs, then reads closed jobs' usage from
 // cAdvisor off the recorder's path so a slow Prometheus never delays a render.
-func jobObserver(ctx context.Context, db jobStore, c promql.Querier, q promql.Queries, timeout time.Duration, log zerolog.Logger) func(context.Context, fleet.Snapshot) error {
+// usageDelays are the waits before each read of a closed job's usage. The
+// first gives remote-write and ingestion a few scrapes to catch up.
+var usageDelays = []time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute}
+
+func jobObserver(ctx context.Context, db jobStore, c promql.InstantQuerier, q promql.Queries, timeout time.Duration, delays []time.Duration, log zerolog.Logger) func(context.Context, fleet.Snapshot) error {
 	return func(octx context.Context, snap fleet.Snapshot) error {
 		closed, err := db.Observe(octx, snap)
 		if err != nil || len(closed) == 0 {
 			return err
 		}
 		go func() {
-			for _, j := range closed {
-				qctx, cancel := context.WithTimeout(ctx, timeout)
-				cpu, mem, err := promql.JobUsage(qctx, c, q, j.Runner, time.Since(j.StartedAt))
-				cancel()
-				if err != nil {
-					log.Debug().Err(err).Str("job", j.JobID).Msg("job usage unavailable")
-					continue
+			pending := closed
+			for _, d := range delays {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(d):
 				}
-				if err := db.SetUsage(ctx, j.ID, cpu, mem); err != nil {
-					log.Warn().Err(err).Str("job", j.JobID).Msg("store job usage")
+				pending = readUsage(ctx, db, c, q, timeout, pending, log)
+				if len(pending) == 0 {
+					return
 				}
+			}
+			for _, j := range pending {
+				log.Debug().Str("job", j.JobID).Msg("job usage unavailable; leaving it unset")
 			}
 		}()
 		return nil
 	}
+}
+
+// readUsage stores the usage of each job Prometheus can answer for and returns
+// the rest.
+func readUsage(ctx context.Context, db jobStore, c promql.InstantQuerier, q promql.Queries, timeout time.Duration, jobs []store.JobRecord, log zerolog.Logger) []store.JobRecord {
+	var retry []store.JobRecord
+	for _, j := range jobs {
+		qctx, cancel := context.WithTimeout(ctx, timeout)
+		cpu, mem, err := promql.JobUsage(qctx, c, q, j.Runner, j.StartedAt, j.FinishedAt)
+		cancel()
+		if err != nil {
+			retry = append(retry, j)
+			continue
+		}
+		if err := db.SetUsage(ctx, j.ID, cpu, mem); err != nil {
+			log.Warn().Err(err).Str("job", j.JobID).Msg("store job usage")
+		}
+	}
+	return retry
 }
 
 // runPruner applies job retention hourly until ctx ends.

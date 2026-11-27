@@ -1165,7 +1165,7 @@ func (h *stubHistory) Job(context.Context, int) (Job, bool, error) {
 	return h.job, h.jobFound, nil
 }
 
-func (h *stubHistory) JobSeries(_ context.Context, _ int, w Window) (JobSeries, error) {
+func (h *stubHistory) JobSeries(_ context.Context, _ Job, w Window) (JobSeries, error) {
 	h.gotWindow = w
 	return h.series, nil
 }

@@ -122,8 +122,18 @@ func (r Range) Aligned() Range {
 // cancelled caller because other callers may be waiting on the same answer;
 // the client timeout still bounds it.
 func (c *Client) Query(ctx context.Context, query string) ([]Sample, error) {
-	v, err := c.cache.do("q|"+query, func() (any, error) {
-		form := url.Values{"query": {query}}
+	return c.QueryAt(ctx, query, time.Time{})
+}
+
+// QueryAt runs an instant query evaluated at at; the zero time means now.
+func (c *Client) QueryAt(ctx context.Context, query string, at time.Time) ([]Sample, error) {
+	key := "q|" + query
+	form := url.Values{"query": {query}}
+	if !at.IsZero() {
+		key = fmt.Sprintf("q|%s|%d", query, at.UnixMilli())
+		form.Set("time", strconv.FormatFloat(float64(at.UnixMilli())/1e3, 'f', -1, 64))
+	}
+	v, err := c.cache.do(key, func() (any, error) {
 		var out []Sample
 		err := c.post(context.WithoutCancel(ctx), "/api/v1/query", form, "vector", func(raw json.RawMessage) error {
 			var rows []struct {
