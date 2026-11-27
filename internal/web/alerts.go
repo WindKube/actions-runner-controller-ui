@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"net/url"
+	"strconv"
 	"time"
 
 	"arc-ui/internal/alert"
@@ -54,7 +55,7 @@ func severityTone(s alert.Severity) Tone {
 
 func alertRow(a alert.Alert, now time.Time) AlertRow {
 	h := fnv.New64a()
-	_, _ = h.Write([]byte(a.Key()))
+	_, _ = h.Write([]byte(a.Key() + "@" + strconv.FormatInt(a.FiredAt.UnixNano(), 10)))
 	row := AlertRow{
 		Alert:  a,
 		Tone:   severityTone(a.Severity),

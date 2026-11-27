@@ -67,6 +67,17 @@ func TestAlertsPageWithoutAnEngineSaysSo(t *testing.T) {
 	assert.Contains(t, renderComponent(t, v.Page, AlertsPage(v)), "alerting is not configured")
 }
 
+func TestARefiredAlertGetsAFreshDismissSignal(t *testing.T) {
+	t.Parallel()
+	first := alert.Alert{Rule: "listener-down", Set: "arc-ubuntu", FiredAt: now.Add(-50 * time.Minute)}
+	again := first
+	again.FiredAt = now.Add(-time.Minute)
+	assert.NotEqual(t, alertRow(first, now).Signal, alertRow(again, now).Signal,
+		"a dismissed toast must not hide the next firing of the same rule and set")
+	assert.Equal(t, alertRow(again, now).Signal, alertRow(again, now.Add(time.Minute)).Signal,
+		"the same firing keeps its signal across refreshes")
+}
+
 func TestEveryPageCountsFiringAlertsAndToastsOnlyRecentOnes(t *testing.T) {
 	t.Parallel()
 	html := renderOverviewWith(t, alertBuilder())
