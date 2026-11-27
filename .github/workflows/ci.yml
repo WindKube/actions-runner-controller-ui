@@ -140,6 +140,12 @@ jobs:
       - name: Install helm-unittest
         run: helm plugin install https://github.com/helm-unittest/helm-unittest.git --version 33c48cac798e465deda9a66c8e6c07c0973cf53d --verify=false
 
+      - name: Fetch the pinned subcharts
+        run: |
+          helm repo add vm https://victoriametrics.github.io/helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm dependency build chart/
+
       - name: Lint the chart
         run: helm lint --strict chart/ --set prometheus.url=http://prometheus:9090
 

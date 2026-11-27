@@ -293,6 +293,16 @@ kube-state-metrics:
     - pods=[actions.github.com/scale-set-name]
 ```
 
+### No Prometheus
+
+The chart can bring its own: `victoria-metrics-single.enabled=true` installs a
+VictoriaMetrics store (30d, 16Gi) that scrapes ARC, cAdvisor and
+kube-state-metrics and is wired in as `ARC_UI_PROMETHEUS_URL`.
+`collector.enabled=true` adds an Alloy collector that remote-writes into it, or
+into any store named by `collection.remoteWrite.url`. Both are off by default,
+and kube-state-metrics with the allowlist above still has to exist. Details in
+[`chart/README.md`](chart/README.md#no-prometheus-the-bundled-store-and-collector).
+
 ## Kubernetes
 
 ```bash
@@ -335,7 +345,8 @@ The ClusterRole is `get`/`list`/`watch` on:
 Withheld on purpose: `secrets` (ARC keeps the GitHub App credentials there),
 `pods/exec` and `pods/attach` (RCE inside a runner), `pods/log` (job logs contain
 masked-but-recoverable values), every write verb, and nodes and `metrics.k8s.io`,
-since usage comes from Prometheus.
+since usage comes from Prometheus. The bundled scraper, when enabled, gets its own
+ClusterRole with `nodes/metrics` for cAdvisor, never `nodes/proxy`.
 
 The usual misconfiguration is RBAC that covers the runner namespace but not the
 controller namespace, where the AutoscalingListeners live: the fleet renders and

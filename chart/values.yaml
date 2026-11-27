@@ -224,6 +224,70 @@ podMonitors:
     listenerSelector:
       app.kubernetes.io/component: runner-scale-set-listener
 
+# What the bundled store or collector scrapes. Namespaces come from
+# env.ARC_UI_NAMESPACES and env.ARC_UI_CONTROLLER_NAMESPACE. kube-state-metrics
+# is not bundled: it must already run in the cluster, with the label allowlist
+# described in NOTES.
+collection:
+  interval: 30s
+  # Kubelet serving certificates are rarely signed by the cluster CA.
+  kubeletInsecureSkipVerify: true
+  kubeStateMetrics:
+    # app.kubernetes.io/name of the kube-state-metrics pods, and their port.
+    name: kube-state-metrics
+    port: http
+  # Where the collector sends samples. Empty means the bundled store.
+  remoteWrite:
+    url: ""
+    headers: {}
+
+# Bundled VictoriaMetrics, for clusters without a Prometheus. It scrapes the
+# ARC listeners and controller, the kubelets' cAdvisor and kube-state-metrics,
+# and prometheus.url defaults to it. The names below are what the parent wires
+# to; change them together.
+victoria-metrics-single:
+  enabled: false
+  rbac:
+    # The parent grants only what the scrape needs; see scrape-rbac.yaml.
+    create: false
+  serviceAccount:
+    create: true
+    name: arc-ui-vm
+  server:
+    fullnameOverride: arc-ui-vm
+    retentionPeriod: 30d
+    persistentVolume:
+      enabled: true
+      size: 16Gi
+    scrape:
+      enabled: true
+      # Rendered by the parent from collection.*.
+      configMap: arc-ui-vm-scrape
+
+# Grafana Alloy as a scrape-and-remote_write collector, for clusters with a
+# store but nothing scraping ARC into it. Its config is rendered by the parent
+# into the ConfigMap named below.
+collector:
+  enabled: false
+  fullnameOverride: arc-ui-collector
+  crds:
+    create: false
+  rbac:
+    create: false
+  serviceAccount:
+    create: true
+    name: arc-ui-collector
+  controller:
+    type: deployment
+    replicas: 1
+  alloy:
+    clustering:
+      enabled: false
+    configMap:
+      create: false
+      name: arc-ui-collector-config
+      key: config.alloy
+
 nodeSelector: {}
 tolerations: []
 affinity: {}

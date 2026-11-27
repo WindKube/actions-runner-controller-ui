@@ -1,0 +1,9 @@
+dependencies:
+- name: victoria-metrics-single
+  repository: https://victoriametrics.github.io/helm-charts
+  version: 0.52.0
+- name: alloy
+  repository: https://grafana.github.io/helm-charts
+  version: 1.16.0
+digest: sha256:92b366220cdf600dac5675e70fcd4e74a25f7b31d2531d1053125204ec292f29
+generated: "2026-11-27T14:14:45.958029324+01:00"

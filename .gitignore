@@ -15,6 +15,9 @@
 *_templ.go
 internal/web/static/app.css
 
+# Subchart archives; Chart.lock is committed and `helm dependency build` fetches them.
+/chart/charts/
+
 # SQLite history database (ARC_UI_DB_PATH), plus its WAL sidecars.
 *.db
 *.db-wal

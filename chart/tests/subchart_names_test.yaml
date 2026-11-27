@@ -1,0 +1,63 @@
+# The parent wires the app URL, the scrape ConfigMaps and the RBAC subjects to
+# names the subcharts render. A subchart upgrade that renames any of them
+# fails here instead of leaving the app pointed at nothing.
+suite: subchart names
+set:
+  victoria-metrics-single.enabled: true
+  collector.enabled: true
+  collection.remoteWrite.url: http://mimir/api/v1/push
+tests:
+  - it: serves VictoriaMetrics at arc-ui-vm:8428
+    template: charts/victoria-metrics-single/templates/service.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: arc-ui-vm
+      - equal:
+          path: spec.ports[0].port
+          value: 8428
+
+  - it: runs VictoriaMetrics as arc-ui-vm with the parent's scrape config
+    template: charts/victoria-metrics-single/templates/server.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: arc-ui-vm
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: config-out
+            configMap:
+              name: arc-ui-vm-scrape
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --retentionPeriod=30d
+
+  - it: runs Alloy as one arc-ui-collector replica on the parent's config
+    template: charts/collector/templates/controllers/deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: arc-ui-collector
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: config
+            configMap:
+              name: arc-ui-collector-config
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: /etc/alloy/config.alloy
+
+  - it: leaves RBAC to the parent
+    templates:
+      - charts/victoria-metrics-single/templates/rbac.yaml
+      - charts/collector/templates/rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

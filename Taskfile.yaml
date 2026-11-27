@@ -229,23 +229,32 @@ tasks:
         helm plugin list 2>/dev/null |
           awk -v want="${want#v}" '$1 == "unittest" && $2 == want { found = 1 } END { exit !found }'
 
+  helm:deps:
+    desc: Fetch the subcharts pinned in chart/Chart.lock
+    cmds:
+      - helm repo add vm https://victoriametrics.github.io/helm-charts --force-update
+      - helm repo add grafana https://grafana.github.io/helm-charts --force-update
+      - helm dependency build chart/
+    sources:
+      - chart/Chart.lock
+    generates:
+      - chart/charts/*.tgz
+
   helm:lint:
     desc: Lint the Helm chart
+    deps: [helm:deps]
     cmds:
       - helm lint --strict chart/ --set prometheus.url=http://prometheus:9090
 
   helm:test:
     desc: Run the chart's unit tests (chart/tests/*_test.yaml)
-    deps: [install:helm-unittest]
+    deps: [install:helm-unittest, helm:deps]
     cmds:
-      # `helm lint` only checks that the chart renders. These assert what it
-      # renders — and, for the guard rails in arc-ui.validate, that the render
-      # refuses. A `fail` that stopped firing would otherwise be invisible until
-      # a bad values file reached a cluster.
       - helm unittest chart/
 
   helm:template:
     desc: Render the Helm chart to stdout
+    deps: [helm:deps]
     cmds:
       - helm template {{.BIN}} chart/ --set prometheus.url=http://prometheus:9090
 

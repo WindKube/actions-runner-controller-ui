@@ -23,6 +23,19 @@ sources:
 maintainers:
   - name: SRE
 
+# Both off by default. Renovate bumps the pins; Chart.lock is committed and CI
+# runs `helm dependency build`.
+dependencies:
+  - name: victoria-metrics-single
+    version: 0.52.0
+    repository: https://victoriametrics.github.io/helm-charts
+    condition: victoria-metrics-single.enabled
+  - name: alloy
+    alias: collector
+    version: 1.16.0
+    repository: https://grafana.github.io/helm-charts
+    condition: collector.enabled
+
 annotations:
   # The dashboard never writes to the cluster; the shipped ClusterRole holds
   # get/list/watch and nothing else.

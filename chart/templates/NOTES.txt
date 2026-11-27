@@ -31,6 +31,21 @@ Prometheus at {{ include "arc-ui.prometheusURL" . }}:
       labels unless allowlisted:
         --metric-labels-allowlist=pods=[actions.github.com/scale-set-name]
       (kube-prometheus-stack: kube-state-metrics.metricLabelsAllowlist).
+{{- $vm := index .Values "victoria-metrics-single" }}
+{{- if or $vm.enabled .Values.collector.enabled }}
+
+Bundled collection:
+{{- if $vm.enabled }}
+  store      {{ $vm.server.fullnameOverride }} (VictoriaMetrics, {{ $vm.server.retentionPeriod }} retention)
+{{- end }}
+{{- if .Values.collector.enabled }}
+  collector  {{ .Values.collector.fullnameOverride }} (Alloy) writing to {{ include "arc-ui.remoteWriteURL" . }}
+{{- end }}
+  Both scrape the ARC pods, the kubelet's cAdvisor and kube-state-metrics.
+  kube-state-metrics itself is not bundled: it must already run in the
+  cluster with the allowlist above, labelled
+  app.kubernetes.io/name={{ .Values.collection.kubeStateMetrics.name }} and exposing port "{{ .Values.collection.kubeStateMetrics.port }}".
+{{- end }}
 {{- if not .Values.persistence.enabled }}
 
 WARNING: persistence.enabled=false. The job table lives in the pod and is

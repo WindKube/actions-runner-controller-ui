@@ -57,8 +57,37 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end }}
 
+{{- define "arc-ui.vmURL" -}}
+{{- $vm := index .Values "victoria-metrics-single" }}
+{{- if $vm.enabled }}
+{{- printf "http://%s.%s.svc:%v" $vm.server.fullnameOverride .Release.Namespace ($vm.server.service.servicePort | default 8428) }}
+{{- end }}
+{{- end }}
+
+{{/* An explicit prometheus.url wins; otherwise the bundled store, if on. */}}
 {{- define "arc-ui.prometheusURL" -}}
-{{- .Values.prometheus.url }}
+{{- .Values.prometheus.url | default (include "arc-ui.vmURL" .) }}
+{{- end }}
+
+{{- define "arc-ui.remoteWriteURL" -}}
+{{- with .Values.collection.remoteWrite.url }}
+{{- . }}
+{{- else }}
+{{- with include "arc-ui.vmURL" . }}{{ . }}/api/v1/write{{ end }}
+{{- end }}
+{{- end }}
+
+{{/* Runner namespaces as an anchored-by-Prometheus regex; empty means all. */}}
+{{- define "arc-ui.runnerNamespaceRegex" -}}
+{{- $ns := list }}
+{{- range splitList "," (.Values.env.ARC_UI_NAMESPACES | default "") }}
+{{- with trim . }}{{ $ns = append $ns (regexQuoteMeta .) }}{{ end }}
+{{- end }}
+{{- if $ns }}{{ join "|" $ns }}{{ else }}.+{{ end }}
+{{- end }}
+
+{{- define "arc-ui.controllerNamespace" -}}
+{{- .Values.env.ARC_UI_CONTROLLER_NAMESPACE | default "arc-systems" }}
 {{- end }}
 
 {{/* A map as k=v,k=v, sorted so the rendered pod spec is stable. */}}
@@ -75,7 +104,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail (printf "arc-ui: replicaCount=%v is not supported; the app owns one SQLite file on one ReadWriteOnce volume, so it runs exactly one replica" .Values.replicaCount) -}}
 {{- end -}}
 {{- if not (include "arc-ui.prometheusURL" .) -}}
-{{- fail "arc-ui: prometheus.url is required; every chart and usage figure is a PromQL query" -}}
+{{- fail "arc-ui: prometheus.url is required unless victoria-metrics-single.enabled; every chart and usage figure is a PromQL query" -}}
+{{- end -}}
+{{- if and .Values.collector.enabled (not (include "arc-ui.remoteWriteURL" .)) -}}
+{{- fail "arc-ui: collector.enabled needs collection.remoteWrite.url or victoria-metrics-single.enabled to send samples to" -}}
 {{- end -}}
 {{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) -}}
 {{- if not .Values.persistence.size -}}

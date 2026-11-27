@@ -33,6 +33,43 @@ otherwise bite you.
 
   In kube-prometheus-stack: `kube-state-metrics.metricLabelsAllowlist`.
 
+## No Prometheus: the bundled store and collector
+
+Two opt-in subcharts, both off by default, pinned in `Chart.lock`:
+
+| Subchart | Values key | Renders | Use it when |
+| --- | --- | --- | --- |
+| VictoriaMetrics single 0.52.0 | `victoria-metrics-single` | StatefulSet + Service `arc-ui-vm:8428`, 30d retention, 16Gi PVC | there is no Prometheus to point at |
+| Alloy 1.16.0 | `collector` | one-replica Deployment `arc-ui-collector` | there is a store, but nothing scrapes ARC into it |
+
+```bash
+helm dependency build chart/   # after helm repo add for both repos, see Taskfile.yaml helm:deps
+helm install arc-ui ./chart -n arc-systems --set victoria-metrics-single.enabled=true
+```
+
+- With the store on and no `prometheus.url`, the app is pointed at it.
+- Only the store: VictoriaMetrics scrapes the ARC pods, cAdvisor and
+  kube-state-metrics itself, from the `arc-ui-vm-scrape` ConfigMap.
+- Store and collector: Alloy scrapes and remote-writes into the store, and the
+  store's own scrape list is emptied so nothing is counted twice.
+- Only the collector: set `collection.remoteWrite.url` (and `headers`, e.g.
+  `X-Scope-OrgID`) to an existing store; the render fails without it.
+
+Both scrape configs are rendered by this chart, not the subcharts, and are
+covered by `tests/collection_test.yaml`. `tests/subchart_names_test.yaml` pins the
+service, ServiceAccount and ConfigMap names they are wired to, so a subchart
+upgrade that renames one fails the tests.
+
+kube-state-metrics is **not** bundled. It must already run, with the allowlist
+above, matched by `collection.kubeStateMetrics.name` and `.port`.
+
+The scraper's ClusterRole `<release>-scrape` is `get`/`list`/`watch` on nodes and
+pods plus `get` on `nodes/metrics`, which is what the kubelet checks for
+`/metrics/cadvisor`. `nodes/proxy` is never granted: it also opens exec through
+the kubelet. `collection.kubeletInsecureSkipVerify` defaults to `true`, as in
+kube-prometheus-stack, because most kubelet serving certs are self-signed; turn
+it off where kubelet certs are signed by the cluster CA.
+
 ## Why a Deployment with an explicit PVC
 
 A StatefulSet is the reflex for "pod with a disk", and it is wrong here:
@@ -114,7 +151,8 @@ To actually drop the history, delete the PVC explicitly after uninstalling.
 withheld: `secrets` (ARC keeps the GitHub App credentials there), `pods/exec`
 and `pods/attach` (remote code execution in a runner), `pods/log` (job logs
 regularly contain masked-but-recoverable values), every write verb, and nodes
-and `metrics.k8s.io`, since usage comes from Prometheus.
+and `metrics.k8s.io`, since usage comes from Prometheus. The only node access in
+the chart belongs to the bundled scraper, not the app (see above).
 
 Runners live in `ARC_UI_NAMESPACES` (default `arc-runners`); the controller and
 the AutoscalingListeners live in `ARC_UI_CONTROLLER_NAMESPACE` (default
@@ -207,7 +245,10 @@ scraped, and the reason is invisible in the diff. Set
 | --- | --- | --- |
 | `replicaCount` | `1` | anything else fails the render |
 | `image.repository` / `image.tag` | `ghcr.io/windkube/actions-runner-controller-ui` / chart appVersion | |
-| `prometheus.url` | — | **required**; the render fails without it |
+| `prometheus.url` | — | **required** unless `victoria-metrics-single.enabled` |
+| `victoria-metrics-single.enabled` | `false` | bundled store, see above |
+| `collector.enabled` | `false` | bundled Alloy collector, see above |
+| `collection.remoteWrite.url` | `""` | the collector's target; defaults to the bundled store |
 | `prometheus.headers` | `{}` | e.g. `X-Scope-OrgID` for Mimir |
 | `prometheus.scaleSetLabel` | `name` | the scale set label on `gha_*` series |
 | `prometheus.ksmScaleSetLabel` | `label_actions_github_com_scale_set_name` | needs the kube-state-metrics allowlist above |
