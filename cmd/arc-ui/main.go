@@ -27,6 +27,7 @@ import (
 	"arc-ui/internal/listener"
 	"arc-ui/internal/logging"
 	"arc-ui/internal/metrics"
+	"arc-ui/internal/prom"
 	"arc-ui/internal/store"
 	"arc-ui/internal/telemetry"
 	"arc-ui/internal/web"
@@ -192,6 +193,17 @@ func run(parent context.Context) error {
 	}
 
 	events := hub.New()
+
+	if cfg.PrometheusURL == "" {
+		collector.SetSource(fleet.Source{Name: fleet.SourcePrometheus, Reason: "ARC_UI_PROMETHEUS_URL is not set"})
+	} else {
+		promClient, err := prom.New(promConfig(cfg))
+		if err != nil {
+			return err
+		}
+		prober := prom.NewProber(promClient, promSchema(cfg), cfg.PrometheusProbeInterval, collector, log)
+		go supervise(ctx, log, "prometheus probe", prober.Run)
+	}
 
 	poller := metrics.NewPoller(clients.Metrics, cfg.Namespaces, cfg.ScrapeInterval, log, collector)
 	go supervise(ctx, log, "metrics poller", poller.Run)
@@ -480,6 +492,29 @@ func retentionFrom(cfg config.Config) store.Retention {
 		Scope5m:    cfg.RetentionScope5m,
 		Scope1h:    cfg.RetentionScope1h,
 		JobSamples: cfg.RetentionJobSamples,
+	}
+}
+
+func promConfig(cfg config.Config) prom.Config {
+	return prom.Config{
+		URL:                cfg.PrometheusURL,
+		BearerToken:        cfg.PrometheusBearerToken,
+		BearerTokenFile:    cfg.PrometheusBearerTokenFile,
+		Username:           cfg.PrometheusUsername,
+		Password:           cfg.PrometheusPassword,
+		Headers:            cfg.PrometheusHeaders,
+		CAFile:             cfg.PrometheusCAFile,
+		InsecureSkipVerify: cfg.PrometheusInsecureSkipVerify,
+		Timeout:            cfg.PrometheusTimeout,
+		CacheTTL:           cfg.RefreshInterval,
+	}
+}
+
+func promSchema(cfg config.Config) prom.Schema {
+	return prom.Schema{
+		ScaleSetLabel:    cfg.PrometheusScaleSetLabel,
+		KSMScaleSetLabel: cfg.PrometheusKSMScaleSetLabel,
+		RunnerNamespaces: cfg.Namespaces,
 	}
 }
 

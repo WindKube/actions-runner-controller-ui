@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -58,6 +59,23 @@ type Config struct {
 	// mirrors the controller chart's metrics.listenerEndpoint, which is
 	// configurable and which the pod does not advertise anywhere.
 	ListenerMetricsPath string `env:"ARC_UI_LISTENER_METRICS_PATH" envDefault:"/metrics"`
+
+	PrometheusURL                string            `env:"ARC_UI_PROMETHEUS_URL"`
+	PrometheusBearerToken        string            `env:"ARC_UI_PROMETHEUS_BEARER_TOKEN"`
+	PrometheusBearerTokenFile    string            `env:"ARC_UI_PROMETHEUS_BEARER_TOKEN_FILE"`
+	PrometheusUsername           string            `env:"ARC_UI_PROMETHEUS_USERNAME"`
+	PrometheusPassword           string            `env:"ARC_UI_PROMETHEUS_PASSWORD"`
+	PrometheusHeaders            map[string]string `env:"ARC_UI_PROMETHEUS_HEADERS" envSeparator:"," envKeyValSeparator:"="`
+	PrometheusCAFile             string            `env:"ARC_UI_PROMETHEUS_CA_FILE"`
+	PrometheusInsecureSkipVerify bool              `env:"ARC_UI_PROMETHEUS_INSECURE_SKIP_VERIFY"`
+	PrometheusTimeout            time.Duration     `env:"ARC_UI_PROMETHEUS_TIMEOUT" envDefault:"10s"`
+	PrometheusScaleSetLabel      string            `env:"ARC_UI_PROMETHEUS_SCALE_SET_LABEL" envDefault:"actions_github_com_scale_set_name"`
+	PrometheusKSMScaleSetLabel   string            `env:"ARC_UI_PROMETHEUS_KSM_SCALE_SET_LABEL" envDefault:"label_actions_github_com_scale_set_name"`
+	PrometheusProbeInterval      time.Duration     `env:"ARC_UI_PROMETHEUS_PROBE_INTERVAL" envDefault:"1m"`
+
+	// RefreshInterval is how often the UI re-queries Prometheus, and how long a
+	// query answer is shared between browsers.
+	RefreshInterval time.Duration `env:"ARC_UI_REFRESH_INTERVAL" envDefault:"15s"`
 
 	DBPath string `env:"ARC_UI_DB_PATH" envDefault:"/data/arc-ui.db"`
 
@@ -162,6 +180,21 @@ func Load() (Config, []Warning, error) {
 	}
 	if cfg.ShutdownTimeout <= 0 {
 		return Config{}, warns, fmt.Errorf("ARC_UI_SHUTDOWN_TIMEOUT=%s must be positive", cfg.ShutdownTimeout)
+	}
+
+	if cfg.PrometheusURL != "" {
+		if u, err := url.Parse(cfg.PrometheusURL); err != nil || u.Scheme == "" || u.Host == "" {
+			return Config{}, warns, fmt.Errorf("ARC_UI_PROMETHEUS_URL=%q must be an absolute http(s) URL", cfg.PrometheusURL)
+		}
+	}
+	if cfg.PrometheusBearerToken != "" && cfg.PrometheusBearerTokenFile != "" {
+		return Config{}, warns, fmt.Errorf("set ARC_UI_PROMETHEUS_BEARER_TOKEN or ARC_UI_PROMETHEUS_BEARER_TOKEN_FILE, not both")
+	}
+	if cfg.PrometheusTimeout <= 0 || cfg.RefreshInterval < time.Second || cfg.PrometheusProbeInterval < time.Second {
+		return Config{}, warns, fmt.Errorf("ARC_UI_PROMETHEUS_TIMEOUT must be positive and ARC_UI_REFRESH_INTERVAL and ARC_UI_PROMETHEUS_PROBE_INTERVAL at least 1s")
+	}
+	if cfg.PrometheusScaleSetLabel == "" || cfg.PrometheusKSMScaleSetLabel == "" {
+		return Config{}, warns, fmt.Errorf("ARC_UI_PROMETHEUS_SCALE_SET_LABEL and ARC_UI_PROMETHEUS_KSM_SCALE_SET_LABEL must not be empty")
 	}
 
 	cfg.Namespaces = normalizeNamespaces(cfg.Namespaces)

@@ -238,25 +238,26 @@ func unavailable(name, reason string, now time.Time) fleet.Source {
 	return fleet.Source{Name: name, Available: false, Reason: reason, CheckedAt: now}
 }
 
-// sourceOrder is the order the control-plane strip renders sources in: the
-// closer to the cluster, the further left.
+// sourceOrder: the closer to the cluster, the further left.
 var sourceOrder = map[string]int{
-	fleet.SourceKubernetes: 0,
-	fleet.SourceARCCRDs:    1,
-	fleet.SourceMetrics:    2,
-	fleet.SourceListener:   3,
-	fleet.SourceStore:      4,
+	fleet.SourceKubernetes:        0,
+	fleet.SourceARCCRDs:           1,
+	fleet.SourceMetrics:           2,
+	fleet.SourceListener:          3,
+	fleet.SourcePrometheus:        4,
+	fleet.SourceARCMetrics:        5,
+	fleet.SourceControllerMetrics: 6,
+	fleet.SourceCAdvisor:          7,
+	fleet.SourceKSM:               8,
+	fleet.SourceStore:             9,
 }
 
-// sortSources gives the strip a stable order regardless of which probe finished
-// first or which subsystem pushed an update last.
 func sortSources(sources []fleet.Source) {
 	slices.SortStableFunc(sources, func(a, b fleet.Source) int {
 		ra, oka := sourceOrder[a.Name]
 		rb, okb := sourceOrder[b.Name]
 		return cmp.Or(
-			// A source the strip does not know about sorts after every one it
-			// does, rather than into rank 0 alongside kubernetes.
+			// Unknown sources sort last, not into rank 0.
 			cmp.Compare(boolRank(!oka), boolRank(!okb)),
 			cmp.Compare(ra, rb),
 			cmp.Compare(a.Name, b.Name),

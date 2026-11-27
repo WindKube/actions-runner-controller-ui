@@ -964,6 +964,11 @@ func sourceRows(s fleet.Snapshot, interval time.Duration) []SourceRow {
 		{fleet.SourceARCCRDs, "arc crds"},
 		{fleet.SourceMetrics, "metrics-server"},
 		{fleet.SourceListener, "listener metrics"},
+		{fleet.SourcePrometheus, "prometheus"},
+		{fleet.SourceARCMetrics, "arc metrics"},
+		{fleet.SourceControllerMetrics, "controller metrics"},
+		{fleet.SourceCAdvisor, "cadvisor"},
+		{fleet.SourceKSM, "kube-state-metrics"},
 		{fleet.SourceStore, "history store"},
 	}
 

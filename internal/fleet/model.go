@@ -197,6 +197,12 @@ const (
 	SourceMetrics    = "metrics-server"
 	SourceListener   = "listener-metrics"
 	SourceStore      = "store"
+
+	SourcePrometheus        = "prometheus"
+	SourceARCMetrics        = "arc-metrics"
+	SourceControllerMetrics = "controller-metrics"
+	SourceCAdvisor          = "cadvisor"
+	SourceKSM               = "kube-state-metrics"
 )
 
 type Snapshot struct {

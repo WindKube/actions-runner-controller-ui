@@ -147,3 +147,32 @@ func TestLoadWarnsWhenJobSamplesAreFinerThanTheScrape(t *testing.T) {
 	}
 	assert.True(t, found, "expected a warning, got %v", warns)
 }
+
+func TestLoadPrometheus(t *testing.T) {
+	t.Setenv("ARC_UI_PROMETHEUS_URL", "https://mimir.example.com/prometheus")
+	t.Setenv("ARC_UI_PROMETHEUS_HEADERS", "X-Scope-OrgID=team-a,X-Extra=1")
+
+	cfg, _, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"X-Scope-OrgID": "team-a", "X-Extra": "1"}, cfg.PrometheusHeaders)
+	assert.Equal(t, "actions_github_com_scale_set_name", cfg.PrometheusScaleSetLabel)
+	assert.Equal(t, "label_actions_github_com_scale_set_name", cfg.PrometheusKSMScaleSetLabel)
+	assert.Equal(t, 15*time.Second, cfg.RefreshInterval)
+}
+
+func TestLoadPrometheusRejects(t *testing.T) {
+	cases := map[string]map[string]string{
+		"relative url":     {"ARC_UI_PROMETHEUS_URL": "prometheus:9090"},
+		"two token inputs": {"ARC_UI_PROMETHEUS_BEARER_TOKEN": "a", "ARC_UI_PROMETHEUS_BEARER_TOKEN_FILE": "/t"},
+		"zero timeout":     {"ARC_UI_PROMETHEUS_TIMEOUT": "0s"},
+	}
+	for name, env := range cases {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			_, _, err := Load()
+			require.Error(t, err)
+		})
+	}
+}
