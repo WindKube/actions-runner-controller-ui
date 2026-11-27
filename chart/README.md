@@ -8,6 +8,7 @@ ClusterRole with `get`/`list`/`watch` and nothing else.
 # and helm refuses to install without them even when they are disabled.
 helm repo add vm https://victoriametrics.github.io/helm-charts
 helm repo add grafana https://grafana.github.io/helm-charts
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm dependency build chart/        # or: task helm:deps
 
 helm install arc-ui ./chart \
@@ -18,7 +19,7 @@ helm install arc-ui ./chart \
 ```
 
 Every install from source needs the dependency build first; `--dependency-update`
-alone is not enough, because helm still needs the two repos added.
+alone is not enough, because helm still needs the three repos added.
 `prometheus.url` is required unless the bundled store is on. This file covers
 only the parts that will otherwise bite you.
 
@@ -32,23 +33,25 @@ only the parts that will otherwise bite you.
   are created there too, unless `podMonitors.arc.namespace` names the namespace
   your Prometheus selects monitors from.
 - **cAdvisor.** The kubelet's `/metrics/cadvisor`, for runner pod CPU and memory.
-- **kube-state-metrics with the scale set label allowlisted.** It drops pod
-  labels unless told otherwise:
+- **kube-state-metrics with the ARC pod labels allowlisted.** It drops pod
+  labels unless told otherwise. Add this to the cluster's own, or use the
+  bundled one (`kubeStateMetrics.enabled`, below), which has it preset:
 
   ```text
-  --metric-labels-allowlist=pods=[actions.github.com/scale-set-name]
+  --metric-labels-allowlist=pods=[actions-ephemeral-runner,actions.github.com/scale-set-name,actions.github.com/scale-set-namespace]
   ```
 
   In kube-prometheus-stack: `kube-state-metrics.metricLabelsAllowlist`.
 
 ## No Prometheus: the bundled store and collector
 
-Two opt-in subcharts, both off by default, pinned in `Chart.lock`:
+Three opt-in subcharts, all off by default, pinned in `Chart.lock`:
 
 | Subchart | Values key | Renders | Use it when |
 | --- | --- | --- | --- |
 | VictoriaMetrics single 0.52.0 | `victoria-metrics-single` | StatefulSet + Service `arc-ui-vm:8428`, 30d retention, 16Gi PVC | there is no Prometheus to point at |
 | Alloy 1.16.0 | `collector` | one-replica Deployment `arc-ui-collector` | there is a store, but nothing scrapes ARC into it |
+| kube-state-metrics 9.0.1 | `kubeStateMetrics` | Deployment + Service `arc-ui-ksm:8080`, pods only | the cluster runs no kube-state-metrics |
 
 ```bash
 helm install arc-ui ./chart -n arc-systems --set victoria-metrics-single.enabled=true
@@ -67,8 +70,20 @@ covered by `tests/collection_test.yaml`. `tests/subchart_names_test.yaml` pins t
 service, ServiceAccount and ConfigMap names they are wired to, so a subchart
 upgrade that renames one fails the tests.
 
-kube-state-metrics is **not** bundled. It must already run, with the allowlist
-above, matched by `collection.kubeStateMetrics.name` and `.port`.
+kube-state-metrics comes from the cluster by default, matched by
+`collection.kubeStateMetrics.name` and `.port`, and needs the allowlist above. If
+the cluster already runs one, add the allowlist there rather than enabling a
+second. If it runs none, `kubeStateMetrics.enabled=true` installs `arc-ui-ksm`,
+which both scrape configs then target directly:
+
+- only the `pods` collector, and only `kube_pod_labels` and the container
+  resource requests and limits;
+- the pod labels `actions-ephemeral-runner`, `actions.github.com/scale-set-name`
+  and `actions.github.com/scale-set-namespace` allowlisted;
+- `kubeStateMetrics.namespaces` (default `arc-runners`), with a namespaced Role
+  that can only list and watch pods. It must name the same namespaces as
+  `env.ARC_UI_NAMESPACES`, and the render fails if it doesn't. For every
+  namespace, set both to `""` and `kubeStateMetrics.rbac.useClusterRole=true`.
 
 The scraper's ClusterRole `<release>-scrape` is `get`/`list`/`watch` on nodes and
 pods plus `get` on `nodes/metrics`, which is what the kubelet checks for
@@ -256,6 +271,8 @@ scraped, and the reason is invisible in the diff. Set
 | `victoria-metrics-single.enabled` | `false` | bundled store, see above |
 | `collector.enabled` | `false` | bundled Alloy collector, see above |
 | `collection.remoteWrite.url` | `""` | the collector's target; defaults to the bundled store |
+| `kubeStateMetrics.enabled` | `false` | bundled kube-state-metrics, see above; with your own, add the allowlist there instead |
+| `kubeStateMetrics.namespaces` | `arc-runners` | must match `env.ARC_UI_NAMESPACES` |
 | `prometheus.headers` | `{}` | e.g. `X-Scope-OrgID` for Mimir |
 | `prometheus.scaleSetLabel` | `name` | the scale set label on `gha_*` series |
 | `prometheus.ksmScaleSetLabel` | `label_actions_github_com_scale_set_name` | needs the kube-state-metrics allowlist above |

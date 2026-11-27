@@ -5,8 +5,52 @@ suite: subchart names
 set:
   victoria-metrics-single.enabled: true
   collector.enabled: true
+  kubeStateMetrics.enabled: true
   collection.remoteWrite.url: http://mimir/api/v1/push
 tests:
+  - it: serves kube-state-metrics at arc-ui-ksm:8080
+    template: charts/kubeStateMetrics/templates/service.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: arc-ui-ksm
+      - equal:
+          path: spec.ports[0].port
+          value: 8080
+
+  - it: runs kube-state-metrics on pods only, with the ARC labels
+    template: charts/kubeStateMetrics/templates/deployment.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].name
+          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --resources=pods
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metric-labels-allowlist=pods=[actions-ephemeral-runner,actions.github.com/scale-set-name,actions.github.com/scale-set-namespace]
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metric-allowlist=kube_pod_labels,kube_pod_container_resource_requests,kube_pod_container_resource_limits
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --namespaces=arc-runners
+
+  - it: gives kube-state-metrics read-only pods in the runner namespace
+    template: charts/kubeStateMetrics/templates/role.yaml
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: arc-runners
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: [pods]
+              verbs: [list, watch]
+
+
   - it: serves VictoriaMetrics at arc-ui-vm:8428
     template: charts/victoria-metrics-single/templates/service.yaml
     asserts:

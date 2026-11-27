@@ -243,6 +243,77 @@ tests:
           path: data["scrape.yml"]
           pattern: 'regex: "\.\+"'
 
+  - it: discovers the cluster's own kube-state-metrics by default
+    set:
+      victoria-metrics-single.enabled: true
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["scrape.yml"]
+          pattern: arc-ui-ksm
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: 'regex: "kube-state-metrics"'
+
+  - it: scrapes the bundled kube-state-metrics from the store
+    set:
+      victoria-metrics-single.enabled: true
+      kubeStateMetrics.enabled: true
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: 'job_name: kube-state-metrics\n\s+honor_labels: true\n\s+static_configs:\n\s+- targets: \["arc-ui-ksm.NAMESPACE.svc:8080"\]'
+      - notMatchRegex:
+          path: data["scrape.yml"]
+          pattern: __meta_kubernetes_pod_label_app_kubernetes_io_name
+
+  - it: scrapes the bundled kube-state-metrics from the collector
+    set:
+      collector.enabled: true
+      kubeStateMetrics.enabled: true
+      prometheus.url: http://mimir/prometheus
+      collection.remoteWrite.url: http://mimir/api/v1/push
+    template: collector-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["config.alloy"]
+          pattern: 'targets += \[\{"__address__" = "arc-ui-ksm.NAMESPACE.svc:8080"\}\]'
+      - notMatchRegex:
+          path: data["config.alloy"]
+          pattern: 'discovery.kubernetes "ksm"'
+
+  - it: refuses kube-state-metrics watching other namespaces than the app
+    set:
+      prometheus.url: http://prometheus:9090
+      kubeStateMetrics.enabled: true
+      env.ARC_UI_NAMESPACES: "arc-runners,gpu-runners"
+    template: deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: 'kubeStateMetrics.namespaces \("arc-runners"\) must list the same namespaces as env.ARC_UI_NAMESPACES \("arc-runners,gpu-runners"\)'
+
+  - it: accepts the same namespaces in any order and form
+    set:
+      prometheus.url: http://prometheus:9090
+      kubeStateMetrics.enabled: true
+      env.ARC_UI_NAMESPACES: "gpu-runners, arc-runners"
+      kubeStateMetrics.namespaces: [arc-runners, gpu-runners]
+    template: deployment.yaml
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: needs a ClusterRole for kube-state-metrics across every namespace
+    set:
+      prometheus.url: http://prometheus:9090
+      kubeStateMetrics.enabled: true
+      env.ARC_UI_NAMESPACES: ""
+      kubeStateMetrics.namespaces: ""
+    template: deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "needs kubeStateMetrics.rbac.useClusterRole=true"
+
   - it: refuses a collector with nowhere to write
     set:
       prometheus.url: http://prometheus:9090

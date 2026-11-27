@@ -88,14 +88,39 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end }}
 
-{{/* Runner namespaces as an anchored-by-Prometheus regex. Unset is the app's default, arc-runners; "" means all. */}}
-{{- define "arc-ui.runnerNamespaceRegex" -}}
+{{/* Runner namespaces, sorted and comma-joined. Unset is the app's default, arc-runners; "" means all. */}}
+{{- define "arc-ui.runnerNamespaces" -}}
 {{- $raw := "arc-runners" }}
 {{- if and (hasKey .Values.env "ARC_UI_NAMESPACES") (not (kindIs "invalid" .Values.env.ARC_UI_NAMESPACES)) }}
 {{- $raw = .Values.env.ARC_UI_NAMESPACES }}
 {{- end }}
+{{- include "arc-ui.sortedList" $raw }}
+{{- end }}
+
+{{/* A comma string or a list, trimmed, sorted and comma-joined. */}}
+{{- define "arc-ui.sortedList" -}}
+{{- $in := . }}
+{{- if kindIs "slice" $in }}{{ $in = join "," $in }}{{ end }}
+{{- $out := list }}
+{{- range splitList "," ($in | default "") }}
+{{- with trim . }}{{ $out = append $out . }}{{ end }}
+{{- end }}
+{{- $out | sortAlpha | join "," }}
+{{- end }}
+
+{{/* host:port of the bundled kube-state-metrics, when it is on. */}}
+{{- define "arc-ui.ksmTarget" -}}
+{{- with .Values.kubeStateMetrics }}
+{{- if .enabled }}
+{{- printf "%s.%s.svc:%v" .fullnameOverride $.Release.Namespace (.service.port | default 8080) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/* Runner namespaces as an anchored-by-Prometheus regex; empty means all. */}}
+{{- define "arc-ui.runnerNamespaceRegex" -}}
 {{- $ns := list }}
-{{- range splitList "," $raw }}
+{{- range splitList "," (include "arc-ui.runnerNamespaces" .) }}
 {{- with trim . }}{{ $ns = append $ns (regexQuoteMeta .) }}{{ end }}
 {{- end }}
 {{- if $ns }}{{ join "|" $ns }}{{ else }}.+{{ end }}
@@ -123,6 +148,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- if and .Values.collector.enabled (not (include "arc-ui.remoteWriteURL" .)) -}}
 {{- fail "arc-ui: collector.enabled needs collection.remoteWrite.url or victoria-metrics-single.enabled to send samples to" -}}
+{{- end -}}
+{{- with .Values.kubeStateMetrics -}}
+{{- if .enabled -}}
+{{- $ksm := include "arc-ui.sortedList" .namespaces -}}
+{{- $app := include "arc-ui.runnerNamespaces" $ -}}
+{{- if ne $ksm $app -}}
+{{- fail (printf "arc-ui: kubeStateMetrics.namespaces (%q) must list the same namespaces as env.ARC_UI_NAMESPACES (%q), or the runner pods have no kube_pod_labels" $ksm $app) -}}
+{{- end -}}
+{{- if and (not $ksm) (not .rbac.useClusterRole) -}}
+{{- fail "arc-ui: kubeStateMetrics.namespaces is empty (every namespace), which needs kubeStateMetrics.rbac.useClusterRole=true" -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) -}}
 {{- if not .Values.persistence.size -}}

@@ -80,6 +80,8 @@ data:
       }
     }
 
+    {{- $ksmTarget := include "arc-ui.ksmTarget" . }}
+    {{- if not $ksmTarget }}
     discovery.kubernetes "ksm" {
       role = "pod"
     }
@@ -97,10 +99,15 @@ data:
         action        = "keep"
       }
     }
+    {{- end }}
 
     prometheus.scrape "ksm" {
       job_name        = "kube-state-metrics"
+      {{- if $ksmTarget }}
+      targets         = [{"__address__" = {{ $ksmTarget | quote }}}]
+      {{- else }}
       targets         = discovery.relabel.ksm.output
+      {{- end }}
       honor_labels    = true
       scrape_interval = {{ $c.interval | quote }}
       scrape_timeout  = {{ $c.interval | quote }}
