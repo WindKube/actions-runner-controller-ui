@@ -245,6 +245,8 @@ func buildRunner(er *arcapi.EphemeralRunner, pod *corev1.Pod, setName string, ar
 	if r.FailedAt.IsZero() && r.FailureReason != "" {
 		r.FailedAt = er.CreationTimestamp.Time
 	}
+	r.PodFailures = len(er.Status.Failures)
+	r.ControllerStatus = strings.Join(lo.Compact([]string{er.Status.Reason, er.Status.Message}), ": ")
 	return r
 }
 

@@ -20,7 +20,6 @@ type Querier interface {
 
 // Rest is the part of web.History that is not answered from Prometheus.
 type Rest interface {
-	Runner(ctx context.Context, name string, w web.Window) (web.RunnerSeries, error)
 	Failures(ctx context.Context, scope web.Scope, w web.Window, limit int) (web.FailureWindow, error)
 	Jobs(ctx context.Context, f web.JobFilter, w web.Window) (web.JobList, error)
 	Workflows(ctx context.Context, f web.JobFilter, w web.Window) (web.WorkflowList, error)
@@ -121,6 +120,16 @@ func (h History) Scope(ctx context.Context, scope web.Scope, w web.Window) (web.
 		At: at, Busy: v[0], Idle: v[1], Pending: v[2], Capacity: v[3],
 		CPUUsed: v[4], CPURequest: v[5], MemUsed: v[6], MemRequest: v[7],
 	}, nil
+}
+
+// Runner is one runner pod's cAdvisor usage; the pod shares the runner's name.
+func (h History) Runner(ctx context.Context, name string, w web.Window) (web.RunnerSeries, error) {
+	r := rangeOf(w)
+	v, at, err := h.rangeQueries(ctx, r, h.Queries.RunnerCPU(name, r.Step), h.Queries.RunnerMem(name))
+	if err != nil {
+		return web.RunnerSeries{}, err
+	}
+	return web.RunnerSeries{At: at, CPU: v[0], Mem: v[1]}, nil
 }
 
 // Throughput is jobs that finished per bucket, by the listener's job_result.

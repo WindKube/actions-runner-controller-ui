@@ -90,6 +90,11 @@ type Runner struct {
 
 	FailureReason string
 	FailedAt      time.Time
+
+	// PodFailures is how many pods ARC has already replaced for this runner;
+	// ControllerStatus is the EphemeralRunner's own reason and message.
+	PodFailures      int
+	ControllerStatus string
 }
 
 func (r Runner) Age(now time.Time) time.Duration {

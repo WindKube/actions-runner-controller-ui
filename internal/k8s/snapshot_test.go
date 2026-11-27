@@ -542,6 +542,32 @@ func TestFailureReason(t *testing.T) {
 	}
 }
 
+func TestRunnerCarriesTheEphemeralRunnerFailureDetail(t *testing.T) {
+	t.Parallel()
+
+	er := &arcapi.EphemeralRunner{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "arc", Name: "r1", CreationTimestamp: metav1.Time{Time: testNow.Add(-time.Hour)}},
+		Status: arcapi.EphemeralRunnerStatus{
+			Phase:  arcapi.EphemeralRunnerPhaseFailed,
+			Reason: "TooManyPodFailures", Message: "pod has failed to start more than 5 times",
+			Failures: map[string]metav1.Time{"a": {}, "b": {}, "c": {}},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "arc", Name: "r1"},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name:  arcapi.RunnerContainerName,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137}},
+		}}},
+	}
+
+	r := buildRunner(er, pod, "ubuntu", nil, SnapshotInput{}, testNow)
+
+	assert.Equal(t, "OOMKilled", r.FailureReason, "the pod's own cause outranks the controller's summary")
+	assert.Equal(t, "TooManyPodFailures: pod has failed to start more than 5 times", r.ControllerStatus)
+	assert.Equal(t, 3, r.PodFailures)
+}
+
 func TestListenerHealthCorrelatesAcrossNamespaces(t *testing.T) {
 	t.Parallel()
 

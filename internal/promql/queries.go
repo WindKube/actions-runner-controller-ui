@@ -141,6 +141,14 @@ func (q Queries) PodMem() string {
 	return fmt.Sprintf(`sum by (namespace, pod) (container_memory_working_set_bytes{%s})`, q.containers())
 }
 
+func (q Queries) RunnerCPU(pod string, step time.Duration) string {
+	return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%s,pod=%s}[%s]))`, q.containers(), strconv.Quote(pod), rateWindow(step))
+}
+
+func (q Queries) RunnerMem(pod string) string {
+	return fmt.Sprintf(`sum(container_memory_working_set_bytes{%s,pod=%s})`, q.containers(), strconv.Quote(pod))
+}
+
 // Queue is jobs assigned to a set but not yet running, per set.
 func (q Queries) Queue() string {
 	l := q.Schema.ScaleSetLabel

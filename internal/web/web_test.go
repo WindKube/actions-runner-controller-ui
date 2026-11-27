@@ -386,19 +386,46 @@ func TestQueryOmitsDefaults(t *testing.T) {
 	assert.Empty(t, (Signals{}).Normalize().Query().Encode(), "defaults leaked into the URL")
 }
 
-func TestRunnerDetailUsesAFixedShortWindow(t *testing.T) {
+func TestRunnerDetailWindowFollowsTheRunnerNotThePageRange(t *testing.T) {
 	t.Parallel()
 
-	// The runner charts must ignore the page range: raw per-runner samples are
-	// retained for minutes, so honouring "30d" would render four points at the
-	// far right of an empty chart.
 	var got Window
 	b := testBuilder()
 	b.History = windowSpy{got: &got}
 
 	_, ok := b.Runner(context.Background(), "arc-ubuntu-abc", Signals{Range: "30d"}, now, nil)
 	require.True(t, ok, "runner not found")
-	assert.Equal(t, 4*time.Minute, got.To.Sub(got.From), "want a 4m runner window regardless of the page range")
+	assert.LessOrEqual(t, got.To.Sub(got.From), maxRunnerWindow, "a 30d page range must not reach the runner charts")
+
+	young := runnerWindow(fleet.Runner{CreatedAt: now.Add(-2 * time.Minute)}, now)
+	assert.Equal(t, 15*time.Minute, young.To.Sub(young.From), "a new runner still gets a readable window")
+
+	mid := runnerWindow(fleet.Runner{CreatedAt: now.Add(-40 * time.Minute)}, now)
+	assert.Equal(t, 40*time.Minute, mid.To.Sub(mid.From), "the window starts at the runner's creation")
+
+	old := runnerWindow(fleet.Runner{CreatedAt: now.Add(-72 * time.Hour)}, now)
+	assert.Equal(t, maxRunnerWindow, old.To.Sub(old.From))
+
+	assert.Equal(t, []string{"-40m", "-30m", "-20m", "-10m", "now"}, spanTicks(40*time.Minute))
+	assert.Equal(t, []string{"-6h", "-4.5h", "-3h", "-1.5h", "now"}, spanTicks(6*time.Hour))
+}
+
+func TestRunnerFactsCarryTheControllerStatus(t *testing.T) {
+	t.Parallel()
+
+	r := fleet.Runner{
+		State: fleet.StateFailed, FailureReason: "OOMKilled",
+		ControllerStatus: "Failed: Pod has failed to start more than 5 times", PodFailures: 5,
+	}
+	facts := runnerFacts(r, now)
+
+	values := map[string]string{}
+	for _, f := range facts {
+		values[f.Label] = f.Value
+	}
+	assert.Equal(t, "OOMKilled", values["failure"])
+	assert.Equal(t, "Failed: Pod has failed to start more than 5 times", values["arc status"])
+	assert.Equal(t, "5 replaced by ARC", values["failed pods"])
 }
 
 // windowSpy records the window a runner query was made with.

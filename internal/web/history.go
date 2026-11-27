@@ -122,9 +122,7 @@ func PeakOf(series ...[]float64) float64 {
 	return peak
 }
 
-// RunnerSeries is the raw per-runner history behind the runner detail charts.
-// This is the only place raw per-runner samples are read, which is why they
-// are retained for minutes rather than days.
+// RunnerSeries is one runner pod's usage behind the runner detail charts.
 type RunnerSeries struct {
 	At   []time.Time
 	CPU  []float64 // cores

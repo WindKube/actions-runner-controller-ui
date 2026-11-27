@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -553,11 +554,9 @@ func (b *Builder) Runner(ctx context.Context, name string, sig Signals, now time
 	}
 	set, _ := snap.Set(r.SetName)
 
-	// Runner charts are always the short window: raw per-runner samples are
-	// retained for minutes, so honouring a 30d range here would render a line
-	// with five points at the far right and nothing else.
-	win := Window{From: now.Add(-4 * time.Minute), To: now, Points: 48}
-	raw, _ := b.History.Runner(ctx, name, win)
+	win := runnerWindow(r, now)
+	raw, rawErr := b.History.Runner(ctx, name, win)
+	ticks := spanTicks(win.To.Sub(win.From))
 
 	page := b.page(name, snap, sig, now, []Crumb{
 		{Label: snap.Org},
@@ -571,11 +570,43 @@ func (b *Builder) Runner(ctx context.Context, name string, sig Signals, now time
 		Runner:  r,
 		Set:     set,
 		Facts:   runnerFacts(r, now),
-		CPU:     runnerLine("CPU", raw.At, raw.CPU, r.CPU.Request, r.CPU.Limit, strokeCPU, fillCPU, fleet.FormatCores),
-		Mem:     runnerLine("Memory", raw.At, raw.Mem, r.Mem.Request, r.Mem.Limit, strokeMem, fillMem, fleet.FormatGiB),
+		CPU:     unavailableLine(runnerLine("CPU", raw.CPU, r.CPU, ticks, strokeCPU, fillCPU, ToneCPU, fleet.FormatCores), rawErr),
+		Mem:     unavailableLine(runnerLine("Memory", raw.Mem, r.Mem, ticks, strokeMem, fillMem, ToneMemory, fleet.FormatGiB), rawErr),
 		Events:  events,
 		SetJobs: setJobs(snap, r, now),
 	}, true
+}
+
+// maxRunnerWindow bounds the runner charts; a long-lived idle runner would
+// otherwise ask for days of one pod at a useless resolution.
+const maxRunnerWindow = 6 * time.Hour
+
+// runnerWindow covers the runner's whole life, so a job's usage is on screen
+// from the pod's first sample.
+func runnerWindow(r fleet.Runner, now time.Time) Window {
+	from := now.Add(-15 * time.Minute)
+	if !r.CreatedAt.IsZero() && r.CreatedAt.Before(from) {
+		from = r.CreatedAt
+	}
+	if limit := now.Add(-maxRunnerWindow); from.Before(limit) {
+		from = limit
+	}
+	return Window{From: from, To: now, Points: 60}
+}
+
+// spanTicks labels five evenly spaced points back from now.
+func spanTicks(span time.Duration) []string {
+	const n = 5
+	out := make([]string, 0, n)
+	for i := n - 1; i > 0; i-- {
+		d := span * time.Duration(i) / (n - 1)
+		if d < time.Hour {
+			out = append(out, fmt.Sprintf("-%dm", int(d.Round(time.Minute).Minutes())))
+		} else {
+			out = append(out, fmt.Sprintf("-%.3gh", d.Hours()))
+		}
+	}
+	return append(out, "now")
 }
 
 func overviewTiles(t fleet.Totals) []Tile {
@@ -789,21 +820,23 @@ func churnChart(c Counts, r TimeRange) ChurnChart {
 	}
 }
 
-// runnerLine draws one raw per-runner series with its request and limit.
-func runnerLine(title string, at []time.Time, vals []float64, request, limit float64, stroke, fill string, format func(float64) string) LineChart {
+// runnerLine draws one pod's usage against its request and limit.
+func runnerLine(title string, vals []float64, res fleet.Resources, ticks []string, stroke, fill string, tone Tone, format func(float64) string) LineChart {
 	if len(vals) == 0 {
-		return LineChart{Title: title, Empty: true, Ticks: []string{"-4m", "-3m", "-2m", "-1m", "now"}}
+		return LineChart{Title: title, Empty: true, Ticks: ticks}
 	}
 
+	request, limit := res.Request, res.Limit
 	peak := PeakOf(vals, []float64{request, limit})
 	c := LineChart{
 		Width: chartW,
 		Title: title,
 		Line:  chart.Plot(vals, chartW, lineH, peak, fill, stroke),
 		Grid:  chart.Grid(2, chartW, lineH, 6, peak, lineH, format),
-		Ticks: []string{"-4m", "-3m", "-2m", "-1m", "now"},
+		Ticks: ticks,
 		Legend: []LegendItem{
-			{Label: "used", Tone: ToneCPU, Value: format(lastOf(vals))},
+			{Label: "used", Tone: tone, Value: format(lastOf(vals))},
+			{Label: "peak", Tone: tone, Value: format(slices.Max(vals))},
 		},
 	}
 	if request > 0 {
@@ -944,6 +977,16 @@ func runnerFacts(r fleet.Runner, now time.Time) []KV {
 	}
 	if r.FailureReason != "" {
 		facts = append(facts, KV{Label: "failure", Value: r.FailureReason, Tone: ToneDanger, Mono: true})
+	}
+	if r.ControllerStatus != "" && r.ControllerStatus != r.FailureReason {
+		facts = append(facts, KV{Label: "arc status", Value: r.ControllerStatus, Tone: ToneAttention, Mono: true})
+	}
+	if r.PodFailures > 0 {
+		facts = append(facts, KV{
+			Label: "failed pods",
+			Value: fmt.Sprintf("%d replaced by ARC", r.PodFailures),
+			Tone:  ToneAttention, Mono: true,
+		})
 	}
 	return facts
 }

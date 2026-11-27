@@ -204,6 +204,27 @@ func TestReposRankByRunnerTimeAsOwnerSlashRepo(t *testing.T) {
 	assert.Equal(t, web.RepoHistory{Repository: "WindKube/web-api", Seconds: 3600, Jobs: 12}, got[0])
 }
 
+func TestRunnerIsOnePodsCAdvisorUsage(t *testing.T) {
+	t.Parallel()
+
+	q := &fakeQuerier{ranged: map[string][]prom.Series{
+		"container_cpu_usage_seconds_total":  flat(0.25),
+		"container_memory_working_set_bytes": flat(512 << 20),
+	}}
+	h := History{Client: q, Queries: testQueries}
+
+	s, err := h.Runner(context.Background(), "linux-x64-abc", window())
+	require.NoError(t, err)
+	assert.Equal(t, 0.25, s.CPU[0])
+	assert.Equal(t, float64(512<<20), s.Mem[4])
+	for _, seen := range q.seen {
+		assert.Contains(t, seen, `pod="linux-x64-abc"`)
+	}
+
+	_, err = History{Client: &fakeQuerier{fail: "container_"}, Queries: testQueries}.Runner(context.Background(), "x", window())
+	require.Error(t, err)
+}
+
 func TestRangeIsAlignedSoCallersShareACacheEntry(t *testing.T) {
 	t.Parallel()
 
