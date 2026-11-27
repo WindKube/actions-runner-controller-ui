@@ -32,6 +32,9 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --retentionPeriod=30d
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --promscrape.configCheckInterval=30s
 
   - it: runs Alloy as one arc-ui-collector replica on the parent's config
     template: charts/collector/templates/controllers/deployment.yaml

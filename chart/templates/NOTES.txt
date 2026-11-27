@@ -41,7 +41,7 @@ Bundled collection:
 {{- if .Values.collector.enabled }}
   collector  {{ .Values.collector.fullnameOverride }} (Alloy) writing to {{ include "arc-ui.remoteWriteURL" . }}
 {{- end }}
-  Both scrape the ARC pods, the kubelet's cAdvisor and kube-state-metrics.
+  {{ if include "arc-ui.vmScrapes" . }}The store{{ else }}The collector{{ end }} scrapes the ARC pods, the kubelet's cAdvisor and kube-state-metrics.
   kube-state-metrics itself is not bundled: it must already run in the
   cluster with the allowlist above, labelled
   app.kubernetes.io/name={{ .Values.collection.kubeStateMetrics.name }} and exposing port "{{ .Values.collection.kubeStateMetrics.port }}".

@@ -256,6 +256,10 @@ victoria-metrics-single:
   server:
     fullnameOverride: arc-ui-vm
     retentionPeriod: 30d
+    extraArgs:
+      # Picks up the scrape ConfigMap when the collector is toggled; the pod
+      # is not restarted for a ConfigMap change.
+      promscrape.configCheckInterval: 30s
     persistentVolume:
       enabled: true
       size: 16Gi

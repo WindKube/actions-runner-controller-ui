@@ -143,6 +143,73 @@ tests:
           path: data["config.alloy"]
           pattern: "nodes/proxy"
 
+  - it: never lets a scrape timeout exceed a short interval
+    set:
+      victoria-metrics-single.enabled: true
+      collector.enabled: true
+      collection.interval: 5s
+      collection.remoteWrite.url: http://mimir/api/v1/push
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "scrape_timeout: 5s"
+        template: vm-scrape-configmap.yaml
+      - matchRegex:
+          path: data["config.alloy"]
+          pattern: 'scrape_timeout += "5s"'
+        template: collector-configmap.yaml
+
+  - it: treats an explicit URL of the bundled store as writing into it
+    set:
+      victoria-metrics-single.enabled: true
+      collector.enabled: true
+      collection.remoteWrite.url: http://arc-ui-vm.NAMESPACE.svc:8428/api/v1/write
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: "scrape_configs: \\[\\]"
+        template: vm-scrape-configmap.yaml
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: arc-ui-collector
+              namespace: NAMESPACE
+        documentIndex: 1
+        template: scrape-rbac.yaml
+
+  - it: follows the store's http port override
+    set:
+      victoria-metrics-single.enabled: true
+      victoria-metrics-single.server.service.portOverrides.http.port: 9000
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ARC_UI_PROMETHEUS_URL
+            value: http://arc-ui-vm.NAMESPACE.svc:9000
+        template: deployment.yaml
+
+  - it: filters to the app's default namespace when ARC_UI_NAMESPACES is unset
+    set:
+      victoria-metrics-single.enabled: true
+      env.ARC_UI_NAMESPACES: null
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: 'regex: "arc-runners"'
+
+  - it: keeps every namespace when ARC_UI_NAMESPACES is empty
+    set:
+      victoria-metrics-single.enabled: true
+      env.ARC_UI_NAMESPACES: ""
+    template: vm-scrape-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["scrape.yml"]
+          pattern: 'regex: "\.\+"'
+
   - it: refuses a collector with nowhere to write
     set:
       prometheus.url: http://prometheus:9090

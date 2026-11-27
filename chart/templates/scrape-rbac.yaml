@@ -1,5 +1,5 @@
 {{- $vm := index .Values "victoria-metrics-single" }}
-{{- $vmScrapes := and $vm.enabled (not (and .Values.collector.enabled (not .Values.collection.remoteWrite.url))) }}
+{{- $vmScrapes := include "arc-ui.vmScrapes" . }}
 {{- if or $vmScrapes .Values.collector.enabled }}
 # For the bundled scraper only. The kubelet authorizes /metrics/cadvisor as
 # nodes/metrics; nodes/proxy, which would also open exec through the kubelet,

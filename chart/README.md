@@ -4,6 +4,12 @@ Read-only dashboard for GitHub Actions Runner Controller. One replica, one PVC, 
 ClusterRole with `get`/`list`/`watch` and nothing else.
 
 ```bash
+# Once per checkout: the subcharts are pinned in Chart.lock but not committed,
+# and helm refuses to install without them even when they are disabled.
+helm repo add vm https://victoriametrics.github.io/helm-charts
+helm repo add grafana https://grafana.github.io/helm-charts
+helm dependency build chart/        # or: task helm:deps
+
 helm install arc-ui ./chart \
   --namespace arc-systems --create-namespace \
   --set prometheus.url=http://prometheus-operated.monitoring:9090 \
@@ -11,8 +17,10 @@ helm install arc-ui ./chart \
   --set env.ARC_UI_CONTROLLER_NAMESPACE=arc-systems
 ```
 
-`prometheus.url` is required. This file covers only the parts that will
-otherwise bite you.
+Every install from source needs the dependency build first; `--dependency-update`
+alone is not enough, because helm still needs the two repos added.
+`prometheus.url` is required unless the bundled store is on. This file covers
+only the parts that will otherwise bite you.
 
 ## What the Prometheus needs
 
@@ -43,7 +51,6 @@ Two opt-in subcharts, both off by default, pinned in `Chart.lock`:
 | Alloy 1.16.0 | `collector` | one-replica Deployment `arc-ui-collector` | there is a store, but nothing scrapes ARC into it |
 
 ```bash
-helm dependency build chart/   # after helm repo add for both repos, see Taskfile.yaml helm:deps
 helm install arc-ui ./chart -n arc-systems --set victoria-metrics-single.enabled=true
 ```
 

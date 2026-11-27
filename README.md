@@ -161,6 +161,12 @@ metrics.
 ## Quick start
 
 ```bash
+# Once per checkout: fetch the subcharts pinned in chart/Chart.lock. helm
+# refuses to install without them, even with both disabled.
+helm repo add vm https://victoriametrics.github.io/helm-charts
+helm repo add grafana https://grafana.github.io/helm-charts
+helm dependency build chart/        # or: task helm:deps
+
 helm install arc-ui ./chart \
   --namespace arc-systems --create-namespace \
   --set prometheus.url=http://prometheus-operated.monitoring:9090 \
@@ -304,6 +310,8 @@ and kube-state-metrics with the allowlist above still has to exist. Details in
 [`chart/README.md`](chart/README.md#no-prometheus-the-bundled-store-and-collector).
 
 ## Kubernetes
+
+After the one-time `helm dependency build chart/` from the [Quick start](#quick-start):
 
 ```bash
 helm install arc-ui ./chart \

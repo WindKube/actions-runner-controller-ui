@@ -60,8 +60,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "arc-ui.vmURL" -}}
 {{- $vm := index .Values "victoria-metrics-single" }}
 {{- if $vm.enabled }}
-{{- printf "http://%s.%s.svc:%v" $vm.server.fullnameOverride .Release.Namespace ($vm.server.service.servicePort | default 8428) }}
+{{- $svc := $vm.server.service | default dict }}
+{{- $port := dig "portOverrides" "http" "port" "" $svc | default $svc.servicePort | default 8428 }}
+{{- printf "http://%s.%s.svc:%v" $vm.server.fullnameOverride .Release.Namespace $port }}
 {{- end }}
+{{- end }}
+
+{{/* The store scrapes unless the collector writes into it, which would count everything twice. */}}
+{{- define "arc-ui.vmScrapes" -}}
+{{- $vm := index .Values "victoria-metrics-single" }}
+{{- $url := .Values.collection.remoteWrite.url }}
+{{- $intoVM := or (not $url) (regexMatch (printf "^https?://%s([.:/]|$)" (regexQuoteMeta $vm.server.fullnameOverride)) $url) }}
+{{- if and $vm.enabled (not (and .Values.collector.enabled $intoVM)) }}true{{ end }}
 {{- end }}
 
 {{/* An explicit prometheus.url wins; otherwise the bundled store, if on. */}}
@@ -77,10 +87,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end }}
 
-{{/* Runner namespaces as an anchored-by-Prometheus regex; empty means all. */}}
+{{/* Runner namespaces as an anchored-by-Prometheus regex. Unset is the app's default, arc-runners; "" means all. */}}
 {{- define "arc-ui.runnerNamespaceRegex" -}}
+{{- $raw := "arc-runners" }}
+{{- if and (hasKey .Values.env "ARC_UI_NAMESPACES") (not (kindIs "invalid" .Values.env.ARC_UI_NAMESPACES)) }}
+{{- $raw = .Values.env.ARC_UI_NAMESPACES }}
+{{- end }}
 {{- $ns := list }}
-{{- range splitList "," (.Values.env.ARC_UI_NAMESPACES | default "") }}
+{{- range splitList "," $raw }}
 {{- with trim . }}{{ $ns = append $ns (regexQuoteMeta .) }}{{ end }}
 {{- end }}
 {{- if $ns }}{{ join "|" $ns }}{{ else }}.+{{ end }}

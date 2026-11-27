@@ -43,6 +43,7 @@ data:
       job_name        = "arc"
       targets         = discovery.relabel.arc.output
       scrape_interval = {{ $c.interval | quote }}
+      scrape_timeout  = {{ $c.interval | quote }}
       forward_to      = [prometheus.remote_write.default.receiver]
     }
 
@@ -57,6 +58,7 @@ data:
       metrics_path      = "/metrics/cadvisor"
       bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
       scrape_interval   = {{ $c.interval | quote }}
+      scrape_timeout    = {{ $c.interval | quote }}
       tls_config {
         ca_file              = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
         insecure_skip_verify = {{ $c.kubeletInsecureSkipVerify }}
@@ -101,6 +103,7 @@ data:
       targets         = discovery.relabel.ksm.output
       honor_labels    = true
       scrape_interval = {{ $c.interval | quote }}
+      scrape_timeout  = {{ $c.interval | quote }}
       forward_to      = [prometheus.relabel.ksm.receiver]
     }
 

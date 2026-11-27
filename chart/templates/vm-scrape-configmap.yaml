@@ -1,8 +1,7 @@
 {{- $vm := index .Values "victoria-metrics-single" }}
 {{- if $vm.enabled }}
 {{- $c := .Values.collection }}
-{{- /* The collector writing into this store already scrapes; scraping twice would double every counter. */}}
-{{- $scrape := not (and .Values.collector.enabled (not $c.remoteWrite.url)) }}
+{{- $scrape := include "arc-ui.vmScrapes" . }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -13,6 +12,7 @@ data:
   scrape.yml: |
     global:
       scrape_interval: {{ $c.interval }}
+      scrape_timeout: {{ $c.interval }}
     {{- if not $scrape }}
     scrape_configs: []
     {{- else }}
